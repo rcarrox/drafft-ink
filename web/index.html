@@ -96,6 +96,54 @@
             }
         }, { passive: false });
 
+        // Local Font Access API (Chrome/Edge on localhost/secure contexts).
+        // This is permission-gated by the browser; no font bytes leave the local machine.
+        window.drafftinkQueryLocalFonts = async function() {
+            if (!window.queryLocalFonts) {
+                console.warn('Local Font Access API is unavailable in this browser.');
+                return [];
+            }
+            try {
+                const fonts = await window.queryLocalFonts();
+                return fonts.map(font => ({
+                    family: font.family || '',
+                    fullName: font.fullName || '',
+                    postscriptName: font.postscriptName || '',
+                    style: font.style || ''
+                }));
+            } catch (error) {
+                console.warn('Unable to enumerate local fonts:', error);
+                return [];
+            }
+        };
+
+        window.drafftinkReadLocalFont = async function(postscriptName) {
+            if (!window.queryLocalFonts) {
+                throw new Error('Local Font Access API unavailable');
+            }
+
+            let fonts;
+            try {
+                fonts = await window.queryLocalFonts({ postscriptNames: [postscriptName] });
+            } catch (_) {
+                // Some Chromium versions ignore/filter the options object.
+                fonts = await window.queryLocalFonts();
+            }
+
+            const font = fonts.find(item => item.postscriptName === postscriptName) || fonts[0];
+            if (!font) {
+                throw new Error('Font not found: ' + postscriptName);
+            }
+
+            const blob = await font.blob();
+            const bytes = new Uint8Array(await blob.arrayBuffer());
+            return {
+                family: font.family || '',
+                postscriptName: font.postscriptName || postscriptName,
+                bytes
+            };
+        };
+
         // Persistent export folder using the File System Access API (Chrome/Edge).
         // Directory handles are structured-cloneable and are kept in IndexedDB.
         const DRAFFTINK_FS_DB = 'drafftink-file-handles';

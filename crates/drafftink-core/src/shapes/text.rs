@@ -18,6 +18,8 @@ pub enum FontFamily {
     GelPenSerif,
     /// Vanilla Extract handwritten font.
     VanillaExtract,
+    /// XITS Math: broad mathematical/symbol coverage for plain text.
+    XitsMath,
 }
 
 impl FontFamily {
@@ -28,6 +30,7 @@ impl FontFamily {
             FontFamily::NotoSans => "Noto Sans",
             FontFamily::GelPenSerif => "GelPen Serif",
             FontFamily::VanillaExtract => "Vanilla Extract",
+            FontFamily::XitsMath => "XITS Math",
         }
     }
 
@@ -38,6 +41,7 @@ impl FontFamily {
             FontFamily::NotoSans => "Noto",
             FontFamily::GelPenSerif => "GelPen Serif",
             FontFamily::VanillaExtract => "Vanilla",
+            FontFamily::XitsMath => "XITS Symbols",
         }
     }
 
@@ -48,6 +52,7 @@ impl FontFamily {
             FontFamily::NotoSans,
             FontFamily::GelPenSerif,
             FontFamily::VanillaExtract,
+            FontFamily::XitsMath,
         ]
     }
 }
@@ -94,6 +99,9 @@ pub struct Text {
     pub font_family: FontFamily,
     /// Font weight.
     pub font_weight: FontWeight,
+    /// Optional local/system font family loaded from the user's computer.
+    #[serde(default)]
+    pub custom_font: Option<String>,
     /// Rotation angle in radians (around center).
     #[serde(default)]
     pub rotation: f64,
@@ -119,6 +127,7 @@ impl Clone for Text {
             font_size: self.font_size,
             font_family: self.font_family,
             font_weight: self.font_weight,
+            custom_font: self.custom_font.clone(),
             rotation: self.rotation,
             style: self.style.clone(),
             char_colors: self.char_colors.clone(),
@@ -142,6 +151,7 @@ impl Text {
             font_size: Self::DEFAULT_FONT_SIZE,
             font_family: FontFamily::default(),
             font_weight: FontWeight::default(),
+            custom_font: None,
             rotation: 0.0,
             style: ShapeStyle::default(),
             char_colors: vec![None; char_count],
@@ -240,6 +250,7 @@ impl Text {
             font_size,
             font_family,
             font_weight,
+            custom_font: None,
             rotation,
             style,
             char_colors,
@@ -304,6 +315,7 @@ impl Text {
             (FontFamily::GelPenSerif, FontWeight::Heavy) => 0.60,
             // Vanilla Extract is a handwritten font
             (FontFamily::VanillaExtract, _) => 0.50,
+            (FontFamily::XitsMath, _) => 0.55,
         };
 
         max_line_len as f64 * self.font_size * char_width_factor

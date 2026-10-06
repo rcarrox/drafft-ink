@@ -11,7 +11,7 @@ use egui::{
 
 #[cfg(target_arch = "wasm32")]
 use crate::app::file_ops;
-use crate::math_input::friendly_math_to_latex;
+use crate::math_input::{friendly_math_to_latex, normalize_friendly_math_input, open_structured_depth};
 use crate::settings::UserSettings;
 
 // Re-export from widgets crate for consistent styling
@@ -49,6 +49,8 @@ pub struct SelectedShapeProps {
     pub font_family: FontFamily,
     /// Font weight (for text shapes).
     pub font_weight: FontWeight,
+    /// Local/system font family, if one is active.
+    pub custom_font: Option<String>,
     /// Corner radius (for rectangle shapes).
     pub corner_radius: f32,
     /// Path style for lines/arrows (0 = Direct, 1 = Flowing, 2 = Angular).
@@ -94,6 +96,7 @@ impl SelectedShapeProps {
                 font_size: text.font_size as f32,
                 font_family: text.font_family,
                 font_weight: text.font_weight,
+                custom_font: text.custom_font.clone(),
                 sloppiness,
                 fill_pattern,
                 has_fill,
@@ -321,6 +324,10 @@ pub struct UiState {
     pub math_editor: Option<MathEditorState>,
     /// Screen position of the math object currently being edited.
     pub math_editor_screen_pos: Option<Pos2>,
+    /// Local fonts exposed by Chrome/Edge: (family, PostScript name).
+    pub local_fonts: Vec<(String, String)>,
+    /// Whether a system-font scan is currently in progress.
+    pub local_fonts_loading: bool,
     /// Names of the open tabs, in order (synced from the app each frame).
     pub tab_names: Vec<String>,
     /// Index of the active tab within `tab_names`.
@@ -374,6 +381,8 @@ impl Default for UiState {
             last_picked_fill: None,
             math_editor: None,
             math_editor_screen_pos: None,
+            local_fonts: Vec::new(),
+            local_fonts_loading: false,
             tab_names: Vec::new(),
             active_tab: 0,
         }
@@ -480,8 +489,12 @@ pub enum UiAction {
     SetFontSize(f32),
     /// Set font size for math shapes.
     SetMathFontSize(f32),
-    /// Set font family for text shapes.
-    SetFontFamily(u8), // 0 = GelPen, 1 = NotoSans, 2 = GelPenSerif, 3 = VanillaExtract
+    /// Set built-in font family for text shapes.
+    SetFontFamily(u8), // 0=GelPen, 1=NotoSans, 2=GelPenSerif, 3=VanillaExtract, 4=XITS
+    /// Ask Chrome/Edge for the list of installed local fonts.
+    ScanLocalFonts,
+    /// Load and apply a local font: (family, PostScript name).
+    SetLocalFont(String, String),
     /// Set font weight for text shapes.
     SetFontWeight(u8), // 0 = Light, 1 = Regular, 2 = Heavy
     /// Set corner radius for rectangle shapes.
@@ -661,7 +674,7 @@ pub fn render_ui(
     let properties_action = render_properties_panel(ctx, ui_state);
     let file_action = render_file_menu(ctx, ui_state);
     let bottom_action = render_bottom_toolbar(ctx, ui_state);
-    let right_panel_action = render_right_panel(ctx, selected_props);
+    let right_panel_action = render_right_panel(ctx, ui_state, selected_props);
     let math_action = render_math_editor(ctx, ui_state);
     let settings_action = render_settings_dialog(ctx, ui_state);
     let tab_action = render_tab_bar(ctx, ui_state);
@@ -1377,9 +1390,16 @@ fn grid_style_button(ui: &mut egui::Ui, style: GridStyle, tooltip: &str) -> bool
 }
 
 /// Render the right-side properties panel for selected shapes.
-fn render_right_panel(ctx: &Context, props: &SelectedShapeProps) -> Option<UiAction> {
-    // Show panel if shape is selected OR if a drawing tool is active
-    if !props.has_selection && !props.is_drawing_tool {
+fn render_right_panel(
+    ctx: &Context,
+    ui_state: &mut UiState,
+    props: &SelectedShapeProps,
+) -> Option<UiAction> {
+    // Selection properties are always available. Tool properties can be hidden
+    // from Settings for a cleaner teaching/whiteboard interface.
+    if !props.has_selection
+        && (!props.is_drawing_tool || !ui_state.settings.show_properties_for_tools)
+    {
         return None;
     }
 
@@ -1426,34 +1446,86 @@ fn render_right_panel(ctx: &Context, props: &SelectedShapeProps) -> Option<UiAct
                                     .size(11.0)
                                     .color(Color32::from_gray(100)),
                             );
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing = Vec2::new(4.0, 0.0);
 
-                                let is_gelpen = props.font_family == FontFamily::GelPen;
-                                if ToggleButton::new("GelPen", is_gelpen).show(ui) && !is_gelpen {
-                                    action = Some(UiAction::SetFontFamily(0));
-                                }
+                            let current_font = props
+                                .custom_font
+                                .clone()
+                                .unwrap_or_else(|| props.font_family.display_name().to_string());
 
-                                let is_gelpen_serif = props.font_family == FontFamily::GelPenSerif;
-                                if ToggleButton::new("GelPen Serif", is_gelpen_serif).show(ui)
-                                    && !is_gelpen_serif
+                            egui::ComboBox::from_id_salt("text_builtin_font")
+                                .selected_text(current_font)
+                                .width(165.0)
+                                .show_ui(ui, |ui| {
+                                    if ui.selectable_label(
+                                        props.custom_font.is_none() && props.font_family == FontFamily::GelPen,
+                                        "GelPen",
+                                    ).clicked() {
+                                        action = Some(UiAction::SetFontFamily(0));
+                                    }
+                                    if ui.selectable_label(
+                                        props.custom_font.is_none() && props.font_family == FontFamily::NotoSans,
+                                        "Noto Sans",
+                                    ).clicked() {
+                                        action = Some(UiAction::SetFontFamily(1));
+                                    }
+                                    if ui.selectable_label(
+                                        props.custom_font.is_none() && props.font_family == FontFamily::GelPenSerif,
+                                        "GelPen Serif",
+                                    ).clicked() {
+                                        action = Some(UiAction::SetFontFamily(2));
+                                    }
+                                    if ui.selectable_label(
+                                        props.custom_font.is_none() && props.font_family == FontFamily::VanillaExtract,
+                                        "Vanilla",
+                                    ).clicked() {
+                                        action = Some(UiAction::SetFontFamily(3));
+                                    }
+                                    if ui.selectable_label(
+                                        props.custom_font.is_none() && props.font_family == FontFamily::XitsMath,
+                                        "XITS Symbols",
+                                    ).clicked() {
+                                        action = Some(UiAction::SetFontFamily(4));
+                                    }
+
+                                    if !ui_state.local_fonts.is_empty() {
+                                        ui.separator();
+                                        let mut seen = std::collections::HashSet::new();
+                                        for (family, postscript) in &ui_state.local_fonts {
+                                            if !seen.insert(family.clone()) {
+                                                continue;
+                                            }
+                                            let selected = props.custom_font.as_deref() == Some(family.as_str());
+                                            if ui.selectable_label(selected, family).clicked() {
+                                                action = Some(UiAction::SetLocalFont(
+                                                    family.clone(),
+                                                    postscript.clone(),
+                                                ));
+                                            }
+                                        }
+                                    }
+                                });
+
+                            if ui_state.local_fonts.is_empty() {
+                                if ui
+                                    .small_button(if ui_state.local_fonts_loading {
+                                        "Recherche…"
+                                    } else {
+                                        "Polices installées sur le PC…"
+                                    })
+                                    .clicked()
+                                    && !ui_state.local_fonts_loading
                                 {
-                                    action = Some(UiAction::SetFontFamily(2));
+                                    ui_state.local_fonts_loading = true;
+                                    action = Some(UiAction::ScanLocalFonts);
                                 }
-
-                                // TODO: Re-enable Noto Sans once font rendering is finalized
-                                // let is_noto = props.font_family == FontFamily::NotoSans;
-                                // if ToggleButton::new("Noto", is_noto).show(ui) && !is_noto
-                                // {
-                                //     action = Some(UiAction::SetFontFamily(1));
-                                // }
-
-                                let is_vanilla = props.font_family == FontFamily::VanillaExtract;
-                                if ToggleButton::new("Vanilla", is_vanilla).show(ui) && !is_vanilla
-                                {
-                                    action = Some(UiAction::SetFontFamily(3));
-                                }
-                            });
+                                ui.label(
+                                    egui::RichText::new(
+                                        "Chrome/Edge demandera l'autorisation d'accéder aux polices locales.",
+                                    )
+                                    .size(10.0)
+                                    .color(Color32::from_gray(120)),
+                                );
+                            }
 
                             ui.add_space(4.0);
 
@@ -3052,6 +3124,12 @@ fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAct
                                 }
                             });
 
+                        ui.add_space(14.0);
+                        ui.checkbox(
+                            &mut ui_state.settings.show_properties_for_tools,
+                            "Afficher le panneau Properties lors de la sélection d'un outil",
+                        );
+
                         ui.add_space(16.0);
                         ui.separator();
                         ui.add_space(10.0);
@@ -3191,16 +3269,38 @@ fn render_math_editor(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction>
                                 ui.add(
                                     egui::TextEdit::singleline(&mut editor.input)
                                         .desired_width(350.0)
-                                        .font(egui::TextStyle::Monospace)
+                                        .font(egui::TextStyle::Body)
                                         .text_color(Color32::BLACK)
                                         .frame(false)
-                                        .hint_text("ex. sqrt(x), (a+b)/(c+d), int(x^2,x,0,1)"),
+                                        .hint_text("ex. 1/2 +3, x^2 +1, sqrt(x), int(x^2,x,0,1)"),
                                 )
                             })
                             .inner;
                         response.request_focus();
 
                         if response.changed() {
+                            // Text expanders often inject Unicode superscripts/subscripts.
+                            // Normalize them immediately so unsupported UI glyphs never remain
+                            // in the editable source (e.g. x⁴ becomes x^4 + a block-exit space).
+                            let normalized = normalize_friendly_math_input(&editor.input);
+                            if normalized != editor.input {
+                                editor.input = normalized;
+                            }
+                            let latex = friendly_math_to_latex(&editor.input);
+                            action = Some(UiAction::PreviewMath(
+                                shape_id,
+                                editor.input.clone(),
+                                latex,
+                            ));
+                        }
+
+                        // Right Arrow behaves like Space at the end of structured input:
+                        // leave exactly one fraction/exponent/subscript block.
+                        if response.has_focus()
+                            && ui.input(|i| i.key_pressed(egui::Key::ArrowRight))
+                            && open_structured_depth(&editor.input) > 0
+                        {
+                            editor.input.push(' ');
                             let latex = friendly_math_to_latex(&editor.input);
                             action = Some(UiAction::PreviewMath(
                                 shape_id,
