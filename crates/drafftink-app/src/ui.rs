@@ -3516,7 +3516,7 @@ mod math_editor_regressions {
         let ctx = Context::default();
         let mut state = UiState::default();
         state.math_editor = Some(MathEditorState {
-            shape_id: uuid::Uuid::new_v4(),
+            shape_id: ShapeId::new_v4(),
             input: text.into(),
             original_source: text.into(),
             original_latex: friendly_math_to_latex(text),
