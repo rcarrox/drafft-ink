@@ -4785,7 +4785,13 @@ impl ApplicationHandler for App {
                                 );
                                 if let Some(math_id) = state.event_handler.pending_math_edit.take() {
                                     if let Some(Shape::Math(math)) = state.canvas.document.get_shape(math_id) {
-                                        state.ui_state.math_editor = Some((math_id, math.latex.clone()));
+                                        state.ui_state.math_editor = Some(MathEditorState {
+                                            shape_id: math_id,
+                                            input: math.edit_source().to_string(),
+                                            original_source: String::new(),
+                                            original_latex: String::new(),
+                                            is_new: true,
+                                        });
                                     }
                                 }
                             }
