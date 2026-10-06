@@ -14,11 +14,129 @@ use drafftink_core::snap::{
     detect_smart_guides_for_point, snap_line_endpoint_isometric, snap_ray_to_smart_guides,
     snap_to_grid,
 };
-use drafftink_core::tools::ToolKind;
+use drafftink_core::tools::{EraserMode, ToolKind};
 use kurbo::{Point, Rect, Size};
 
 /// Maximum number of snap candidates (like Inkscape's limit of 200).
 const MAX_SNAP_CANDIDATES: usize = 200;
+
+fn point_segment_distance(point: Point, a: Point, b: Point) -> f64 {
+    let ab = b - a;
+    let len_sq = ab.hypot2();
+    if len_sq <= f64::EPSILON {
+        return (point - a).hypot();
+    }
+    let t = ((point - a).dot(ab) / len_sq).clamp(0.0, 1.0);
+    let projection = a + ab * t;
+    (point - projection).hypot()
+}
+
+fn orientation(a: Point, b: Point, c: Point) -> f64 {
+    (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+}
+
+fn segments_intersect(a: Point, b: Point, c: Point, d: Point) -> bool {
+    const EPS: f64 = 1e-9;
+    let o1 = orientation(a, b, c);
+    let o2 = orientation(a, b, d);
+    let o3 = orientation(c, d, a);
+    let o4 = orientation(c, d, b);
+
+    if ((o1 > EPS && o2 < -EPS) || (o1 < -EPS && o2 > EPS))
+        && ((o3 > EPS && o4 < -EPS) || (o3 < -EPS && o4 > EPS))
+    {
+        return true;
+    }
+
+    // Collinear/touching cases are covered by a tiny point-to-segment tolerance.
+    point_segment_distance(c, a, b) <= EPS
+        || point_segment_distance(d, a, b) <= EPS
+        || point_segment_distance(a, c, d) <= EPS
+        || point_segment_distance(b, c, d) <= EPS
+}
+
+fn segment_segment_distance(a: Point, b: Point, c: Point, d: Point) -> f64 {
+    if segments_intersect(a, b, c, d) {
+        0.0
+    } else {
+        point_segment_distance(a, c, d)
+            .min(point_segment_distance(b, c, d))
+            .min(point_segment_distance(c, a, b))
+            .min(point_segment_distance(d, a, b))
+    }
+}
+
+/// Cut a freehand/highlighter stroke where the eraser capsule crosses it.
+/// Returns None when the stroke is untouched; otherwise returns the remaining fragments.
+fn split_freehand_by_eraser(
+    freehand: &Freehand,
+    erase_start: Point,
+    erase_end: Point,
+    radius: f64,
+) -> Option<Vec<Shape>> {
+    if freehand.closed || freehand.points.len() < 2 {
+        return None;
+    }
+
+    let threshold = radius + freehand.style.stroke_width / 2.0;
+    let has_pressure = freehand.pressures.len() == freehand.points.len();
+    let mut changed = false;
+    let mut fragments: Vec<(Vec<Point>, Vec<f64>)> = Vec::new();
+    let mut points: Vec<Point> = Vec::new();
+    let mut pressures: Vec<f64> = Vec::new();
+
+    let mut flush = |points: &mut Vec<Point>, pressures: &mut Vec<f64>| {
+        if points.len() >= 2 {
+            fragments.push((std::mem::take(points), std::mem::take(pressures)));
+        } else {
+            points.clear();
+            pressures.clear();
+        }
+    };
+
+    for i in 0..freehand.points.len() - 1 {
+        let a = freehand.points[i];
+        let b = freehand.points[i + 1];
+        let erased = segment_segment_distance(a, b, erase_start, erase_end) <= threshold;
+
+        if erased {
+            changed = true;
+            flush(&mut points, &mut pressures);
+            continue;
+        }
+
+        if points.is_empty() {
+            points.push(a);
+            if has_pressure {
+                pressures.push(freehand.pressures[i]);
+            }
+        }
+        points.push(b);
+        if has_pressure {
+            pressures.push(freehand.pressures[i + 1]);
+        }
+    }
+    flush(&mut points, &mut pressures);
+
+    if !changed {
+        return None;
+    }
+
+    let remaining = fragments
+        .into_iter()
+        .map(|(pts, prs)| {
+            let mut fragment = if has_pressure {
+                Freehand::from_points_with_pressure(pts, prs)
+            } else {
+                Freehand::from_points(pts)
+            };
+            fragment.style = freehand.style.clone();
+            Shape::Freehand(fragment)
+        })
+        .collect();
+
+    Some(remaining)
+}
 
 /// Get snap points from a line/arrow's own endpoints, excluding the one being dragged.
 fn self_snap_rects(shape: &Shape, handle: Option<HandleKind>) -> Vec<Rect> {
@@ -143,6 +261,10 @@ pub struct EventHandler {
     eraser_points: Vec<Point>,
     /// Eraser radius for hit detection.
     pub eraser_radius: f64,
+    /// Current eraser behavior.
+    pub eraser_mode: EraserMode,
+    /// Whether an undo snapshot has already been created for the current eraser stroke.
+    eraser_undo_started: bool,
     /// Laser pointer position (for rendering).
     pub laser_position: Option<Point>,
     /// Laser pointer trail for fading effect.
@@ -179,6 +301,8 @@ impl EventHandler {
             rotation_state: None,
             eraser_points: Vec::new(),
             eraser_radius: 10.0,
+            eraser_mode: EraserMode::Classic,
+            eraser_undo_started: false,
             laser_position: None,
             laser_trail: Vec::new(),
             pending_math_edit: None,
@@ -557,6 +681,7 @@ impl EventHandler {
                 // Start eraser stroke
                 self.eraser_points.clear();
                 self.eraser_points.push(world_point);
+                self.eraser_undo_started = false;
             }
             ToolKind::LaserPointer => {
                 // Laser pointer just updates position
@@ -763,8 +888,9 @@ impl EventHandler {
                 canvas.tool_manager.cancel();
             }
             ToolKind::Eraser => {
-                // Erasing happens during drag, just clear points
+                // Erasing happens during drag; finish the current undo group.
                 self.eraser_points.clear();
+                self.eraser_undo_started = false;
             }
             ToolKind::LaserPointer => {
                 // Laser pointer doesn't create anything, just clear position
@@ -790,8 +916,8 @@ impl EventHandler {
                 canvas.tool_manager.cancel();
             }
             ToolKind::Math => {
-                // Math tool: create math shape at click position with placeholder
-                let mut math = Math::new(world_point, r"x^2 + y^2 = r^2".to_string());
+                // Math tool: create an equation and immediately request the formula editor.
+                let mut math = Math::new(world_point, r"x^2".to_string());
                 math.style = current_style.clone();
                 let shape = Shape::Math(math);
                 let shape_id = shape.id();
@@ -799,6 +925,7 @@ impl EventHandler {
                 canvas.document.add_shape(shape);
                 canvas.clear_selection();
                 canvas.add_to_selection(shape_id);
+                self.pending_math_edit = Some(shape_id);
                 canvas.tool_manager.cancel();
             }
             ToolKind::Line | ToolKind::Arrow => {
@@ -1281,30 +1408,70 @@ impl EventHandler {
         self.smart_guides.clear();
     }
 
-    /// Apply eraser to shapes that intersect with the eraser path.
+    /// Apply the current eraser mode to shapes intersecting the current eraser segment.
     fn apply_eraser(&mut self, canvas: &mut Canvas) {
         if self.eraser_points.is_empty() {
             return;
         }
 
         let radius = self.eraser_radius;
-        let mut shapes_to_remove: Vec<ShapeId> = Vec::new();
 
-        // Check each shape for intersection with eraser points
-        for shape in canvas.document.shapes_ordered() {
-            for &point in &self.eraser_points {
-                if shape.hit_test(point, radius) {
-                    shapes_to_remove.push(shape.id());
-                    break;
+        match self.eraser_mode {
+            EraserMode::Classic => {
+                let mut shapes_to_remove: Vec<ShapeId> = Vec::new();
+                for shape in canvas.document.shapes_ordered() {
+                    if self
+                        .eraser_points
+                        .iter()
+                        .any(|&point| shape.hit_test(point, radius))
+                    {
+                        shapes_to_remove.push(shape.id());
+                    }
+                }
+
+                if !shapes_to_remove.is_empty() {
+                    if !self.eraser_undo_started {
+                        canvas.document.push_undo();
+                        self.eraser_undo_started = true;
+                    }
+                    canvas.clear_selection();
+                    for id in shapes_to_remove {
+                        canvas.document.remove_shape(id);
+                    }
                 }
             }
-        }
+            EraserMode::Manual => {
+                if self.eraser_points.len() < 2 {
+                    return;
+                }
+                let erase_start = self.eraser_points[0];
+                let erase_end = *self.eraser_points.last().unwrap_or(&erase_start);
 
-        // Apply changes
-        if !shapes_to_remove.is_empty() {
-            canvas.document.push_undo();
-            for id in shapes_to_remove {
-                canvas.document.remove_shape(id);
+                let replacements: Vec<(ShapeId, Vec<Shape>)> = canvas
+                    .document
+                    .shapes_ordered()
+                    .filter_map(|shape| match shape {
+                        Shape::Freehand(freehand) => split_freehand_by_eraser(
+                            freehand,
+                            erase_start,
+                            erase_end,
+                            radius,
+                        )
+                        .map(|parts| (shape.id(), parts)),
+                        _ => None,
+                    })
+                    .collect();
+
+                if !replacements.is_empty() {
+                    if !self.eraser_undo_started {
+                        canvas.document.push_undo();
+                        self.eraser_undo_started = true;
+                    }
+                    canvas.clear_selection();
+                    for (id, parts) in replacements {
+                        canvas.document.replace_shape_with_many(id, parts);
+                    }
+                }
             }
         }
     }

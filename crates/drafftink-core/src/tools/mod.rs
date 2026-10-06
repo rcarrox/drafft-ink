@@ -29,6 +29,16 @@ fn generate_tool_seed() -> u32 {
     x
 }
 
+/// Eraser behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum EraserMode {
+    /// Delete the whole object as soon as the eraser touches it.
+    #[default]
+    Classic,
+    /// Trim only the touched portion of freehand/highlighter strokes.
+    Manual,
+}
+
 /// Available tools.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum ToolKind {

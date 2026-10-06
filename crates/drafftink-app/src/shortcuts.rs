@@ -45,17 +45,17 @@ impl ShortcutRegistry {
     /// Get all registered shortcuts.
     pub fn all() -> Vec<Shortcut> {
         vec![
-            Shortcut::new("V / 1", false, false, "Selection tool"),
-            Shortcut::new("H", false, false, "Pan tool"),
+            Shortcut::new("S / 1", false, false, "Selection tool"),
+            Shortcut::new("M", false, false, "Pan tool"),
             Shortcut::new("R / 2", false, false, "Rectangle tool"),
             Shortcut::new("O / 4", false, false, "Ellipse tool"),
             Shortcut::new("A / 5", false, false, "Arrow tool"),
             Shortcut::new("L / 6", false, false, "Line tool"),
-            Shortcut::new("P / 7", false, false, "Pen tool"),
+            Shortcut::new("B / 7", false, false, "Draw tool"),
             Shortcut::new("K", false, false, "Highlighter tool"),
-            Shortcut::new("E", false, false, "Eraser tool"),
+            Shortcut::new("E", false, false, "Eraser tool (Classic / Manual)"),
             Shortcut::new("T / 8", false, false, "Text tool"),
-            Shortcut::new("M / 9", false, false, "Math tool"),
+            Shortcut::new("9", false, false, "Math formula tool"),
             Shortcut::new("Z", false, false, "Laser pointer"),
             Shortcut::new("Space (hold)", false, false, "Temporary pan; release to return to previous tool"),
             Shortcut::new("+ / =", false, false, "Zoom in"),
