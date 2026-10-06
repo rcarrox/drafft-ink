@@ -581,7 +581,6 @@ pub enum UiAction {
 struct Tool {
     kind: ToolKind,
     label: &'static str,
-    shortcut: &'static str,
     icon: ImageSource<'static>,
 }
 
@@ -590,73 +589,61 @@ fn get_tools() -> Vec<Tool> {
         Tool {
             kind: ToolKind::Select,
             label: "Select",
-            shortcut: "S / 1",
             icon: include_image!("../assets/select.svg"),
         },
         Tool {
             kind: ToolKind::Pan,
             label: "Pan",
-            shortcut: "M",
             icon: include_image!("../assets/pan.svg"),
         },
         Tool {
             kind: ToolKind::Rectangle,
             label: "Rectangle",
-            shortcut: "R / 2",
             icon: include_image!("../assets/rectangle.svg"),
         },
         Tool {
             kind: ToolKind::Ellipse,
             label: "Ellipse",
-            shortcut: "O / 4",
             icon: include_image!("../assets/ellipse.svg"),
         },
         Tool {
             kind: ToolKind::Arrow,
             label: "Arrow",
-            shortcut: "A / 5",
             icon: include_image!("../assets/arrow.svg"),
         },
         Tool {
             kind: ToolKind::Line,
             label: "Line",
-            shortcut: "L / 6",
             icon: include_image!("../assets/line.svg"),
         },
         Tool {
             kind: ToolKind::Freehand,
             label: "Draw",
-            shortcut: "B / 7",
             icon: include_image!("../assets/freehand.svg"),
         },
         Tool {
             kind: ToolKind::Highlighter,
             label: "Highlighter",
-            shortcut: "K",
             icon: include_image!("../assets/highlighter.svg"),
         },
         Tool {
             kind: ToolKind::Eraser,
             label: "Eraser",
-            shortcut: "E",
             icon: include_image!("../assets/eraser.svg"),
         },
         Tool {
             kind: ToolKind::Text,
             label: "Text",
-            shortcut: "T / 8",
             icon: include_image!("../assets/text.svg"),
         },
         Tool {
             kind: ToolKind::Math,
             label: "Math",
-            shortcut: "9",
             icon: include_image!("../assets/math.svg"),
         },
         Tool {
             kind: ToolKind::LaserPointer,
             label: "Laser",
-            shortcut: "Z",
             icon: include_image!("../assets/laser.svg"),
         },
     ]
