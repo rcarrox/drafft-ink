@@ -182,6 +182,7 @@ impl SelectedShapeProps {
         Self {
             is_drawing_tool: true,
             tool_is_rectangle: tool == ToolKind::Rectangle,
+            is_text: tool == ToolKind::Text,
             is_line: tool == ToolKind::Line,
             is_arrow: tool == ToolKind::Arrow,
             is_freehand: tool == ToolKind::Freehand || tool == ToolKind::Highlighter,
