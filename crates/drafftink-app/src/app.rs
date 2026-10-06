@@ -3,7 +3,7 @@
 use drafftink_core::canvas::Canvas;
 use drafftink_core::collaboration::CollaborationManager;
 use drafftink_core::input::InputState;
-use drafftink_core::shapes::Shape;
+use drafftink_core::shapes::{Shape, ShapeId};
 use drafftink_core::sync::{AwarenessState, ConnectionState, SyncEvent};
 use drafftink_core::tools::ToolKind;
 #[cfg(not(target_arch = "wasm32"))]
@@ -276,6 +276,102 @@ pub mod file_ops {
         static PENDING_LIBRARY: RefCell<Option<(String, CanvasDocument)>> = const { RefCell::new(None) };
         static PENDING_INTRO_JSON: RefCell<Option<(String, String)>> = const { RefCell::new(None) };
         static PENDING_EXPORT_FOLDER: RefCell<Option<String>> = const { RefCell::new(None) };
+        static PENDING_LOCAL_FONTS: RefCell<Option<Vec<(String, String)>>> = const { RefCell::new(None) };
+        static PENDING_LOCAL_FONT_BYTES: RefCell<Option<(String, Vec<u8>)>> = const { RefCell::new(None) };
+    }
+
+    /// Ask Chrome/Edge for the local fonts installed on this computer.
+    pub fn query_local_fonts_async() {
+        wasm_bindgen_futures::spawn_local(async {
+            let Some(window) = web_sys::window() else {
+                return;
+            };
+            let Ok(value) = js_sys::Reflect::get(
+                window.as_ref(),
+                &JsValue::from_str("drafftinkQueryLocalFonts"),
+            ) else {
+                return;
+            };
+            let Ok(function) = value.dyn_into::<js_sys::Function>() else {
+                return;
+            };
+            let Ok(result) = function.call0(window.as_ref()) else {
+                return;
+            };
+            let Ok(promise) = result.dyn_into::<js_sys::Promise>() else {
+                return;
+            };
+            let Ok(value) = wasm_bindgen_futures::JsFuture::from(promise).await else {
+                return;
+            };
+
+            let array = js_sys::Array::from(&value);
+            let mut fonts = Vec::new();
+            for entry in array.iter() {
+                let family = js_sys::Reflect::get(&entry, &JsValue::from_str("family"))
+                    .ok()
+                    .and_then(|v| v.as_string())
+                    .unwrap_or_default();
+                let postscript = js_sys::Reflect::get(&entry, &JsValue::from_str("postscriptName"))
+                    .ok()
+                    .and_then(|v| v.as_string())
+                    .unwrap_or_default();
+                if !family.is_empty() && !postscript.is_empty() {
+                    fonts.push((family, postscript));
+                }
+            }
+            fonts.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+            fonts.dedup();
+
+            PENDING_LOCAL_FONTS.with(|cell| {
+                *cell.borrow_mut() = Some(fonts);
+            });
+        });
+    }
+
+    pub fn take_pending_local_fonts() -> Option<Vec<(String, String)>> {
+        PENDING_LOCAL_FONTS.with(|cell| cell.borrow_mut().take())
+    }
+
+    /// Load one selected local font into WASM memory so Parley/Vello can render it.
+    pub fn load_local_font_async(family: String, postscript: String) {
+        wasm_bindgen_futures::spawn_local(async move {
+            let Some(window) = web_sys::window() else {
+                return;
+            };
+            let Ok(value) = js_sys::Reflect::get(
+                window.as_ref(),
+                &JsValue::from_str("drafftinkReadLocalFont"),
+            ) else {
+                return;
+            };
+            let Ok(function) = value.dyn_into::<js_sys::Function>() else {
+                return;
+            };
+            let Ok(result) = function.call1(window.as_ref(), &JsValue::from_str(&postscript)) else {
+                return;
+            };
+            let Ok(promise) = result.dyn_into::<js_sys::Promise>() else {
+                return;
+            };
+            let Ok(value) = wasm_bindgen_futures::JsFuture::from(promise).await else {
+                return;
+            };
+            let Ok(bytes_value) = js_sys::Reflect::get(&value, &JsValue::from_str("bytes")) else {
+                return;
+            };
+            let bytes = js_sys::Uint8Array::new(&bytes_value).to_vec();
+            if bytes.is_empty() {
+                return;
+            }
+            PENDING_LOCAL_FONT_BYTES.with(|cell| {
+                *cell.borrow_mut() = Some((family, bytes));
+            });
+        });
+    }
+
+    pub fn take_pending_local_font_bytes() -> Option<(String, Vec<u8>)> {
+        PENDING_LOCAL_FONT_BYTES.with(|cell| cell.borrow_mut().take())
     }
 
     /// Request clipboard text read (async). Result will be available via take_pending_clipboard_text().
