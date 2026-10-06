@@ -182,6 +182,7 @@ impl SelectedShapeProps {
         Self {
             is_drawing_tool: true,
             tool_is_rectangle: tool == ToolKind::Rectangle,
+            is_text: tool == ToolKind::Text,
             is_line: tool == ToolKind::Line,
             is_arrow: tool == ToolKind::Arrow,
             is_freehand: tool == ToolKind::Freehand || tool == ToolKind::Highlighter,
@@ -332,6 +333,10 @@ pub struct UiState {
     pub tab_names: Vec<String>,
     /// Index of the active tab within `tab_names`.
     pub active_tab: usize,
+    /// Tab currently being renamed inline.
+    pub renaming_tab: Option<usize>,
+    /// Temporary rename buffer.
+    pub tab_rename_buffer: String,
 }
 
 impl Default for UiState {
@@ -352,7 +357,7 @@ impl Default for UiState {
             smart_snap_enabled: false,
             angle_snap_enabled: false,
             export_scale: 2, // Default to 2x for good quality
-            sloppiness: drafftink_core::shapes::Sloppiness::Artist,
+            sloppiness: drafftink_core::shapes::Sloppiness::Architect,
             fill_pattern: FillPattern::Solid,
             corner_radius: 0.0, // Sharp corners by default
             path_style: 0,      // Direct by default
@@ -385,6 +390,8 @@ impl Default for UiState {
             local_fonts_loading: false,
             tab_names: Vec::new(),
             active_tab: 0,
+            renaming_tab: None,
+            tab_rename_buffer: String::new(),
         }
     }
 }
@@ -461,6 +468,10 @@ pub enum UiAction {
     ImportMermaidFromClipboard,
     /// Switch to the tab at the given index.
     SwitchTab(usize),
+    /// Create a new blank canvas tab.
+    NewCanvas,
+    /// Rename a canvas tab.
+    RenameTab(usize, String),
     /// Close the tab at the given index.
     CloseTab(usize),
     /// Load an Excalidraw library (`.excalidrawlib`) into a new tab.
@@ -710,23 +721,76 @@ fn render_tab_bar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
             panel_frame().show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing = Vec2::new(4.0, 0.0);
+
                     for (i, name) in tabs.iter().enumerate() {
-                        let selected = i == active;
-                        let label = egui::RichText::new(name).size(12.0).color(if selected {
-                            Color32::WHITE
+                        if ui_state.renaming_tab == Some(i) {
+                            let response = Frame::new()
+                                .fill(Color32::WHITE)
+                                .stroke(Stroke::new(1.0, Color32::from_gray(190)))
+                                .corner_radius(CornerRadius::same(4))
+                                .inner_margin(Margin::symmetric(4, 1))
+                                .show(ui, |ui| {
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut ui_state.tab_rename_buffer)
+                                            .desired_width(90.0)
+                                            .text_color(Color32::BLACK)
+                                            .background_color(Color32::WHITE)
+                                            .frame(false),
+                                    )
+                                })
+                                .inner;
+
+                            response.request_focus();
+                            let commit = response.has_focus()
+                                && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                            let cancel = ui.input(|input| input.key_pressed(egui::Key::Escape));
+                            if commit {
+                                let name = ui_state.tab_rename_buffer.trim().to_string();
+                                if !name.is_empty() {
+                                    action = Some(UiAction::RenameTab(i, name));
+                                }
+                                ui_state.renaming_tab = None;
+                            } else if cancel {
+                                ui_state.renaming_tab = None;
+                            }
                         } else {
-                            Color32::from_gray(90)
-                        });
-                        let btn = egui::Button::new(label)
-                            .fill(if selected {
-                                Color32::from_rgb(59, 130, 246)
+                            let selected = i == active;
+                            let label = egui::RichText::new(name).size(12.0).color(if selected {
+                                Color32::WHITE
                             } else {
-                                Color32::TRANSPARENT
-                            })
-                            .corner_radius(egui::CornerRadius::same(4));
-                        if ui.add(btn).clicked() {
-                            action = Some(UiAction::SwitchTab(i));
+                                Color32::from_gray(90)
+                            });
+                            let btn = egui::Button::new(label)
+                                .fill(if selected {
+                                    Color32::from_rgb(59, 130, 246)
+                                } else {
+                                    Color32::TRANSPARENT
+                                })
+                                .corner_radius(egui::CornerRadius::same(4));
+                            let response = ui.add(btn);
+                            if response.clicked() {
+                                action = Some(UiAction::SwitchTab(i));
+                            }
+                            if response.double_clicked() {
+                                ui_state.renaming_tab = Some(i);
+                                ui_state.tab_rename_buffer = name.clone();
+                            }
+
+                            if selected {
+                                let rename = egui::Button::new(
+                                    egui::RichText::new("✎")
+                                        .size(12.0)
+                                        .color(Color32::from_gray(110)),
+                                )
+                                .fill(Color32::TRANSPARENT)
+                                .corner_radius(egui::CornerRadius::same(4));
+                                if ui.add(rename).on_hover_text("Renommer ce canvas").clicked() {
+                                    ui_state.renaming_tab = Some(i);
+                                    ui_state.tab_rename_buffer = name.clone();
+                                }
+                            }
                         }
+
                         if closable {
                             let close = egui::Button::new(
                                 egui::RichText::new("×")
@@ -735,13 +799,28 @@ fn render_tab_bar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                             )
                             .fill(Color32::TRANSPARENT)
                             .corner_radius(egui::CornerRadius::same(4));
-                            if ui.add(close).on_hover_text("Close tab").clicked() {
+                            if ui.add(close).on_hover_text("Fermer le canvas").clicked() {
                                 action = Some(UiAction::CloseTab(i));
                             }
                         }
                     }
 
                     ui.add_space(6.0);
+                    let add_canvas = egui::Button::new(
+                        egui::RichText::new("+ Canvas")
+                            .size(12.0)
+                            .color(Color32::from_gray(90)),
+                    )
+                    .fill(Color32::TRANSPARENT)
+                    .corner_radius(egui::CornerRadius::same(4));
+                    if ui
+                        .add(add_canvas)
+                        .on_hover_text("Ajouter un nouveau canvas vide")
+                        .clicked()
+                    {
+                        action = Some(UiAction::NewCanvas);
+                    }
+
                     let load = egui::Button::new(
                         egui::RichText::new("+ Library")
                             .size(12.0)
@@ -1395,10 +1474,16 @@ fn render_right_panel(
     ui_state: &mut UiState,
     props: &SelectedShapeProps,
 ) -> Option<UiAction> {
-    // Selection properties are always available. Tool properties can be hidden
-    // from Settings for a cleaner teaching/whiteboard interface.
+    // Text properties follow the Text tool itself: they stay visible while Text
+    // is active even if generic tool-properties are disabled, and disappear as
+    // soon as another tool is selected. Other tool panels respect Settings.
+    let text_tool_active = ui_state.current_tool == ToolKind::Text;
+    if props.has_selection && props.is_text && !text_tool_active {
+        return None;
+    }
     if !props.has_selection
-        && (!props.is_drawing_tool || !ui_state.settings.show_properties_for_tools)
+        && (!props.is_drawing_tool
+            || (!ui_state.settings.show_properties_for_tools && !text_tool_active))
     {
         return None;
     }
@@ -3114,12 +3199,21 @@ fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAct
                                             .color(Color32::from_gray(45)),
                                     );
                                     let value = ui_state.settings.shortcut_for_mut(tool);
-                                    ui.add(
-                                        egui::TextEdit::singleline(value)
-                                            .desired_width(52.0)
-                                            .char_limit(1)
-                                            .text_color(Color32::BLACK),
-                                    );
+                                    Frame::new()
+                                        .fill(Color32::WHITE)
+                                        .stroke(Stroke::new(1.0, Color32::from_gray(190)))
+                                        .corner_radius(CornerRadius::same(4))
+                                        .inner_margin(Margin::symmetric(5, 2))
+                                        .show(ui, |ui| {
+                                            ui.add(
+                                                egui::TextEdit::singleline(value)
+                                                    .desired_width(42.0)
+                                                    .char_limit(1)
+                                                    .text_color(Color32::BLACK)
+                                                    .background_color(Color32::WHITE)
+                                                    .frame(false),
+                                            );
+                                        });
                                     ui.end_row();
                                 }
                             });
@@ -3127,7 +3221,7 @@ fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAct
                         ui.add_space(14.0);
                         ui.checkbox(
                             &mut ui_state.settings.show_properties_for_tools,
-                            "Afficher le panneau Properties lors de la sélection d'un outil",
+                            "Afficher Properties pour les outils (Text reste toujours visible)",
                         );
 
                         ui.add_space(16.0);
@@ -3272,11 +3366,17 @@ fn render_math_editor(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction>
                                         .font(egui::TextStyle::Body)
                                         .text_color(Color32::BLACK)
                                         .frame(false)
-                                        .hint_text("ex. 1/2 +3, x^2 +1, sqrt(x), int(x^2,x,0,1)"),
+                                        .hint_text("ex. 1/2 +3, x^2 +1, x_1, sqrt(x)"),
                                 )
                             })
                             .inner;
                         response.request_focus();
+
+                        ui.label(
+                            egui::RichText::new("^ exposant  ·  _ indice  ·  Espace/→ sortir d'un bloc")
+                                .size(10.0)
+                                .color(Color32::from_gray(115)),
+                        );
 
                         if response.changed() {
                             // Text expanders often inject Unicode superscripts/subscripts.

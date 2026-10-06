@@ -7,7 +7,9 @@ use drafftink_core::selection::{
     HANDLE_HIT_TOLERANCE, ManipulationState, MultiMoveState, apply_manipulation, apply_rotation,
     get_handles, get_manipulation_target_position, hit_test_boundary, hit_test_handles,
 };
-use drafftink_core::shapes::{Freehand, Math, Shape, ShapeId, ShapeStyle, ShapeTrait, Text};
+use drafftink_core::shapes::{
+    Freehand, Math, Shape, ShapeId, ShapeStyle, ShapeTrait, Sloppiness, Text,
+};
 use drafftink_core::snap::{
     AngleSnapResult, ENDPOINT_SNAP_RADIUS, GRID_SIZE, MULTI_MOVE_SNAP_RADIUS,
     SMART_GUIDE_THRESHOLD, SmartGuide, SnapResult, detect_smart_guides,
@@ -19,6 +21,15 @@ use kurbo::{Point, Rect, Size};
 
 /// Maximum number of snap candidates (like Inkscape's limit of 200).
 const MAX_SNAP_CANDIDATES: usize = 200;
+
+fn constrain_square_endpoint(start: Point, end: Point) -> Point {
+    let dx = end.x - start.x;
+    let dy = end.y - start.y;
+    let side = dx.abs().max(dy.abs());
+    let sx = if dx < 0.0 { -1.0 } else { 1.0 };
+    let sy = if dy < 0.0 { -1.0 } else { 1.0 };
+    Point::new(start.x + sx * side, start.y + sy * side)
+}
 
 fn point_segment_distance(point: Point, a: Point, b: Point) -> f64 {
     let ab = b - a;
@@ -253,6 +264,8 @@ pub struct EventHandler {
     pub last_angle_snap: Option<AngleSnapResult>,
     /// Start point for line/arrow drawing (for angle snap visualization).
     pub line_start_point: Option<Point>,
+    /// Start point for rectangle/ellipse Shift-constrained drawing.
+    shape_start_point: Option<Point>,
     /// Current smart guides (for rendering).
     pub smart_guides: Vec<SmartGuide>,
     /// Current rotation angle during rotation drag (for helper line rendering).
@@ -297,6 +310,7 @@ impl EventHandler {
             last_snap: None,
             last_angle_snap: None,
             line_start_point: None,
+            shape_start_point: None,
             smart_guides: Vec::new(),
             rotation_state: None,
             eraser_points: Vec::new(),
@@ -337,6 +351,7 @@ impl EventHandler {
         self.selection_rect = None;
         self.last_snap = None;
         self.last_angle_snap = None;
+        self.shape_start_point = None;
         self.rotation_state = None;
         canvas.tool_manager.cancel();
     }
@@ -711,6 +726,14 @@ impl EventHandler {
                     world_point
                 };
                 self.line_start_point = None; // Clear for non-line tools
+                self.shape_start_point = if matches!(
+                    canvas.tool_manager.current_tool,
+                    ToolKind::Rectangle | ToolKind::Ellipse
+                ) {
+                    Some(start_point)
+                } else {
+                    None
+                };
                 canvas.tool_manager.begin(start_point);
             }
         }
@@ -934,7 +957,7 @@ impl EventHandler {
                     let angle_result = snap_line_endpoint_isometric(
                         start,
                         world_point,
-                        angle_snap_enabled,
+                        angle_snap_enabled || input.shift(),
                         grid_snap_enabled,
                         false,
                         GRID_SIZE,
@@ -953,27 +976,40 @@ impl EventHandler {
                     // Only add if shape has meaningful size
                     let bounds = shape.bounds();
                     if bounds.width() > 1.0 || bounds.height() > 1.0 {
-                        // Apply current style to the new shape
+                        // Geometric tools always start in Architect mode.
                         *shape.style_mut() = current_style.clone();
+                        shape.style_mut().sloppiness = Sloppiness::Architect;
                         canvas.document.push_undo();
                         canvas.document.add_shape(shape);
                     }
                 }
             }
             _ => {
-                // Complete other shapes (Rectangle, Ellipse) - snap end point if enabled
-                let end_point = if grid_snap_enabled {
+                // Complete Rectangle/Ellipse with optional Shift constraint.
+                let mut end_point = if grid_snap_enabled {
                     snap_to_grid(world_point, GRID_SIZE).point
                 } else {
                     world_point
                 };
+                if input.shift()
+                    && matches!(
+                        canvas.tool_manager.current_tool,
+                        ToolKind::Rectangle | ToolKind::Ellipse
+                    )
+                {
+                    if let Some(start) = self.shape_start_point {
+                        end_point = constrain_square_endpoint(start, end_point);
+                    }
+                }
+                self.shape_start_point = None;
 
                 if let Some(mut shape) = canvas.tool_manager.end(end_point) {
-                    // Only add if shape has meaningful size
                     let bounds = shape.bounds();
                     if bounds.width() > 1.0 || bounds.height() > 1.0 {
-                        // Apply current style to the new shape
                         *shape.style_mut() = current_style.clone();
+                        if matches!(shape, Shape::Rectangle(_) | Shape::Ellipse(_)) {
+                            shape.style_mut().sloppiness = Sloppiness::Architect;
+                        }
                         canvas.document.push_undo();
                         canvas.document.add_shape(shape);
                     }
@@ -1049,7 +1085,7 @@ impl EventHandler {
                 // Get the other endpoint as the origin for polar snapping
                 let other_endpoint = get_line_other_endpoint(&manip.original_shape, manip.handle);
 
-                if angle_snap_enabled {
+                if angle_snap_enabled || input.shift() {
                     // First snap angle for direction
                     let angle_result = snap_line_endpoint_isometric(
                         other_endpoint,
@@ -1370,7 +1406,7 @@ impl EventHandler {
                     let angle_result = snap_line_endpoint_isometric(
                         start,
                         world_point,
-                        angle_snap_enabled,
+                        angle_snap_enabled || input.shift(),
                         grid_snap_enabled,
                         false, // unused parameter kept for API compatibility
                         GRID_SIZE,
@@ -1387,7 +1423,7 @@ impl EventHandler {
             }
 
             // Apply snapping for other shape creation tools (except freehand/highlighter)
-            let point = if grid_snap_enabled
+            let mut point = if grid_snap_enabled
                 && !matches!(tool, ToolKind::Freehand | ToolKind::Highlighter)
             {
                 let snap_result = snap_to_grid(world_point, GRID_SIZE);
@@ -1396,6 +1432,14 @@ impl EventHandler {
             } else {
                 world_point
             };
+
+            // Shift constrains rectangles to squares and ellipses to circles.
+            if input.shift() && matches!(tool, ToolKind::Rectangle | ToolKind::Ellipse) {
+                if let Some(start) = self.shape_start_point {
+                    point = constrain_square_endpoint(start, point);
+                }
+            }
+
             canvas.tool_manager.update(point);
         }
     }
@@ -1405,6 +1449,7 @@ impl EventHandler {
         self.last_snap = None;
         self.last_angle_snap = None;
         self.line_start_point = None;
+        self.shape_start_point = None;
         self.smart_guides.clear();
     }
 

@@ -31,12 +31,12 @@ impl Default for UserSettings {
     fn default() -> Self {
         Self {
             shortcut_select: "s".into(),
-            shortcut_pan: "m".into(),
-            shortcut_draw: "b".into(),
+            shortcut_pan: "h".into(),
+            shortcut_draw: "d".into(),
             shortcut_highlighter: "k".into(),
             shortcut_eraser: "e".into(),
             shortcut_text: "t".into(),
-            shortcut_math: "9".into(),
+            shortcut_math: "m".into(),
             shortcut_rectangle: "r".into(),
             shortcut_ellipse: "o".into(),
             shortcut_arrow: "a".into(),
@@ -117,6 +117,17 @@ impl UserSettings {
 
     pub fn sanitize(&mut self) {
         self.autosave_interval_secs = self.autosave_interval_secs.clamp(1, 3600);
+
+        // Migrate the 0.4.x defaults to the new 0.5.x layout without
+        // overwriting users who already customized any of these keys.
+        if self.shortcut_pan.eq_ignore_ascii_case("m")
+            && self.shortcut_draw.eq_ignore_ascii_case("b")
+            && self.shortcut_math == "9"
+        {
+            self.shortcut_pan = "h".into();
+            self.shortcut_draw = "d".into();
+            self.shortcut_math = "m".into();
+        }
         for tool in [
             ToolKind::Select,
             ToolKind::Pan,

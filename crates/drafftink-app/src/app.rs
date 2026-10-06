@@ -1962,6 +1962,10 @@ fn load_tab_into_canvas(state: &mut AppState, index: usize) {
     state.canvas.document = state.tabs[index].document.clone();
     state.canvas.camera = state.tabs[index].camera.clone();
     state.canvas.clear_selection();
+    state.event_handler.editing_text = None;
+    state.text_edit_state = None;
+    state.ui_state.math_editor = None;
+    state.ui_state.math_editor_screen_pos = None;
     state.needs_redraw = true;
 }
 
@@ -2822,8 +2826,16 @@ impl ApplicationHandler for App {
                     }
                 }
 
-                // Sync current style to tool manager for preview shapes
-                state.canvas.tool_manager.current_style = state.ui_state.to_shape_style();
+                // Sync current style to tool manager for preview shapes.
+                // Geometric tools always start in Architect mode.
+                let mut tool_style = state.ui_state.to_shape_style();
+                if matches!(
+                    state.canvas.tool_manager.current_tool,
+                    ToolKind::Rectangle | ToolKind::Ellipse | ToolKind::Line | ToolKind::Arrow
+                ) {
+                    tool_style.sloppiness = drafftink_core::shapes::Sloppiness::Architect;
+                }
+                state.canvas.tool_manager.current_style = tool_style;
                 state.canvas.tool_manager.corner_radius = state.ui_state.corner_radius as f64;
 
                 // Get selected shape properties for the right panel
@@ -2851,6 +2863,7 @@ impl ApplicationHandler for App {
                         | ToolKind::Arrow
                         | ToolKind::Freehand
                         | ToolKind::Highlighter
+                        | ToolKind::Text
                 );
 
                 if is_drawing_tool && !selected_props.has_selection {
@@ -2919,7 +2932,44 @@ impl ApplicationHandler for App {
                         ui_action_taken = true;
                         match action.clone() {
                             UiAction::SetTool(tool) => {
+                                if tool != ToolKind::Text {
+                                    if state.event_handler.editing_text.is_some() {
+                                        state.event_handler.exit_text_edit(&mut state.canvas);
+                                        state.text_edit_state = None;
+                                    }
+                                    let selected_text = state
+                                        .canvas
+                                        .selection
+                                        .first()
+                                        .and_then(|id| state.canvas.document.get_shape(*id))
+                                        .is_some_and(|shape| matches!(shape, Shape::Text(_)));
+                                    if selected_text {
+                                        state.canvas.clear_selection();
+                                    }
+                                } else {
+                                    let selected_non_text = state
+                                        .canvas
+                                        .selection
+                                        .first()
+                                        .and_then(|id| state.canvas.document.get_shape(*id))
+                                        .is_some_and(|shape| !matches!(shape, Shape::Text(_)));
+                                    if selected_non_text {
+                                        state.canvas.clear_selection();
+                                    }
+                                }
+
                                 state.canvas.set_tool(tool);
+                                state.ui_state.current_tool = tool;
+                                if matches!(
+                                    tool,
+                                    ToolKind::Rectangle
+                                        | ToolKind::Ellipse
+                                        | ToolKind::Line
+                                        | ToolKind::Arrow
+                                ) {
+                                    state.ui_state.sloppiness =
+                                        drafftink_core::shapes::Sloppiness::Architect;
+                                }
                             }
                             UiAction::SetEraserMode(mode) => {
                                 state.ui_state.eraser_mode = mode;
@@ -3153,6 +3203,8 @@ impl ApplicationHandler for App {
                                 file_ops::paste_shapes_from_clipboard_async(center_world);
                             }
                             UiAction::SwitchTab(_)
+                            | UiAction::NewCanvas
+                            | UiAction::RenameTab(_, _)
                             | UiAction::CloseTab(_)
                             | UiAction::LoadLibrary => {
                                 // Tab operations need exclusive access to the
@@ -4090,6 +4142,29 @@ impl ApplicationHandler for App {
                 if let Some(action) = tab_action {
                     match action {
                         UiAction::SwitchTab(i) => switch_to_tab(state, i),
+                        UiAction::NewCanvas => {
+                            let mut n = state.tabs.len() + 1;
+                            let mut name = format!("Canvas {}", n);
+                            while state.tabs.iter().any(|tab| tab.name == name) {
+                                n += 1;
+                                name = format!("Canvas {}", n);
+                            }
+                            let mut document = drafftink_core::canvas::CanvasDocument::new();
+                            document.name = name.clone();
+                            add_tab(state, name, document);
+                        }
+                        UiAction::RenameTab(i, name) => {
+                            if i < state.tabs.len() {
+                                let clean = name.trim().to_string();
+                                if !clean.is_empty() {
+                                    state.tabs[i].name = clean.clone();
+                                    state.tabs[i].document.name = clean.clone();
+                                    if i == state.active_tab {
+                                        state.canvas.document.name = clean;
+                                    }
+                                }
+                            }
+                        }
                         UiAction::CloseTab(i) => close_tab(state, i),
                         UiAction::LoadLibrary => file_ops::load_excalidrawlib_async(),
                         _ => {}
@@ -5003,6 +5078,54 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::KeyboardInput { event, .. } => {
+                // French layouts expose ^ as a dead key. When the inline math
+                // editor has focus, translate it explicitly into the structured
+                // exponent marker. Ctrl+ArrowUp / Ctrl+ArrowDown are layout-
+                // independent exponent/subscript shortcuts.
+                if event.state == ElementState::Pressed && state.ui_state.math_editor.is_some() {
+                    let math_marker = match &event.logical_key {
+                        Key::Dead(Some('^')) => Some('^'),
+                        Key::Character(c) if c == "^" => Some('^'),
+                        _ if state.input.ctrl()
+                            && matches!(event.physical_key, PhysicalKey::Code(KeyCode::ArrowUp)) =>
+                        {
+                            Some('^')
+                        }
+                        _ if state.input.ctrl()
+                            && matches!(event.physical_key, PhysicalKey::Code(KeyCode::ArrowDown)) =>
+                        {
+                            Some('_')
+                        }
+                        _ if state.input.ctrl()
+                            && state.input.shift()
+                            && matches!(event.physical_key, PhysicalKey::Code(KeyCode::Equal)) =>
+                        {
+                            Some('^')
+                        }
+                        _ if state.input.ctrl()
+                            && matches!(event.physical_key, PhysicalKey::Code(KeyCode::Equal)) =>
+                        {
+                            Some('_')
+                        }
+                        _ => None,
+                    };
+
+                    if let Some(marker) = math_marker {
+                        if let Some(editor) = state.ui_state.math_editor.as_mut() {
+                            editor.input.push(marker);
+                            let latex = crate::math_input::friendly_math_to_latex(&editor.input);
+                            if let Some(Shape::Math(math)) =
+                                state.canvas.document.get_shape_mut(editor.shape_id)
+                            {
+                                math.set_formula(editor.input.clone(), latex);
+                            }
+                        }
+                        state.needs_redraw = true;
+                        state.window.request_redraw();
+                        return;
+                    }
+                }
+
                 // Skip canvas processing if egui wants keyboard
                 if egui_wants_input {
                     state.needs_redraw = true;
@@ -5025,14 +5148,60 @@ impl ApplicationHandler for App {
                             }
                         }
 
-                        // Check for copy/paste shortcuts first
+                        // Script shortcuts are handled before clipboard shortcuts.
+                        // ^ (including the French dead-key form) enters superscript.
+                        // Ctrl+ArrowUp / Ctrl+Shift+= enters superscript.
+                        // Ctrl+ArrowDown / Ctrl+= enters subscript.
                         let has_ctrl = state.input.ctrl();
-                        let text_key = if has_ctrl {
+                        let script_key = match &event.logical_key {
+                            Key::Dead(Some('^')) => Some(TextKey::ToggleSuperscript),
+                            Key::Character(c) if c == "^" => Some(TextKey::ToggleSuperscript),
+                            Key::Character(c) if has_ctrl && c == "_" => {
+                                Some(TextKey::ToggleSubscript)
+                            }
+                            _ if has_ctrl
+                                && matches!(
+                                    event.physical_key,
+                                    PhysicalKey::Code(KeyCode::ArrowUp)
+                                ) =>
+                            {
+                                Some(TextKey::ToggleSuperscript)
+                            }
+                            _ if has_ctrl
+                                && matches!(
+                                    event.physical_key,
+                                    PhysicalKey::Code(KeyCode::ArrowDown)
+                                ) =>
+                            {
+                                Some(TextKey::ToggleSubscript)
+                            }
+                            _ if has_ctrl
+                                && state.input.shift()
+                                && matches!(
+                                    event.physical_key,
+                                    PhysicalKey::Code(KeyCode::Equal)
+                                ) =>
+                            {
+                                Some(TextKey::ToggleSuperscript)
+                            }
+                            _ if has_ctrl
+                                && matches!(
+                                    event.physical_key,
+                                    PhysicalKey::Code(KeyCode::Equal)
+                                ) =>
+                            {
+                                Some(TextKey::ToggleSubscript)
+                            }
+                            _ => None,
+                        };
+
+                        let text_key = if script_key.is_some() {
+                            script_key
+                        } else if has_ctrl {
                             match &event.logical_key {
                                 Key::Character(c) if c == "c" || c == "C" => Some(TextKey::Copy),
                                 Key::Character(c) if c == "x" || c == "X" => Some(TextKey::Cut),
                                 Key::Character(c) if c == "v" || c == "V" => {
-                                    // Get text from clipboard
                                     #[cfg(not(target_arch = "wasm32"))]
                                     {
                                         arboard::Clipboard::new()
@@ -5043,12 +5212,10 @@ impl ApplicationHandler for App {
                                     #[cfg(target_arch = "wasm32")]
                                     {
                                         file_ops::request_clipboard_text();
-                                        return; // Don't process "v" - paste will happen on next frame
+                                        return;
                                     }
                                 }
-                                // Let Ctrl+A through for select all (handled in text_editor)
                                 Key::Character(c) if c == "a" || c == "A" => None,
-                                // Ignore other Ctrl+key combos in text edit (don't type the letter)
                                 Key::Character(_) => return,
                                 _ => None,
                             }
@@ -5732,8 +5899,44 @@ impl ApplicationHandler for App {
                                     if state.ui_state.settings.tool_for_key(key).is_some() =>
                                 {
                                     if let Some(tool) = state.ui_state.settings.tool_for_key(key) {
+                                        if tool != ToolKind::Text {
+                                            if state.event_handler.editing_text.is_some() {
+                                                state.event_handler.exit_text_edit(&mut state.canvas);
+                                                state.text_edit_state = None;
+                                            }
+                                            let selected_text = state
+                                                .canvas
+                                                .selection
+                                                .first()
+                                                .and_then(|id| state.canvas.document.get_shape(*id))
+                                                .is_some_and(|shape| matches!(shape, Shape::Text(_)));
+                                            if selected_text {
+                                                state.canvas.clear_selection();
+                                            }
+                                        } else {
+                                            let selected_non_text = state
+                                                .canvas
+                                                .selection
+                                                .first()
+                                                .and_then(|id| state.canvas.document.get_shape(*id))
+                                                .is_some_and(|shape| !matches!(shape, Shape::Text(_)));
+                                            if selected_non_text {
+                                                state.canvas.clear_selection();
+                                            }
+                                        }
+
                                         state.canvas.set_tool(tool);
                                         state.ui_state.current_tool = tool;
+                                        if matches!(
+                                            tool,
+                                            ToolKind::Rectangle
+                                                | ToolKind::Ellipse
+                                                | ToolKind::Line
+                                                | ToolKind::Arrow
+                                        ) {
+                                            state.ui_state.sloppiness =
+                                                drafftink_core::shapes::Sloppiness::Architect;
+                                        }
                                         log::info!("Tool shortcut {:?}: {}", tool, key);
                                     }
                                 }
