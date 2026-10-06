@@ -895,7 +895,19 @@ fn floating_area(_ctx: &Context, state: &UiState, id: &str, default: Pos2) -> eg
         .get(id)
         .map(|p| Pos2::new(p[0], p[1]))
         .unwrap_or(default);
+    // Egui constrains an area's initial size before its contents are measured.
+    // Without these hints, a small tool panel starts as 600x400 and both moves
+    // other panels and expands its drag grip to the full available width.
+    let size = match id {
+        "toolbar" => Vec2::new(50.0, 440.0),
+        "right_panel" => Vec2::new(260.0, 400.0),
+        "bottom_toolbar" => Vec2::new(440.0, 38.0),
+        "properties" => Vec2::new(420.0, 112.0),
+        "laser_palette" => Vec2::new(210.0, 140.0),
+        _ => Vec2::new(300.0, 200.0),
+    };
     egui::Area::new(egui::Id::new(id))
+        .default_size(size)
         .default_pos(pos)
         .movable(true)
         .constrain(true)
@@ -1072,7 +1084,14 @@ fn render_bottom_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiActi
     let screen_rect = ctx.input(|i| i.content_rect());
     let toolbar_height = 36.0;
     let margin = 12.0;
-    let bottom_y = screen_rect.max.y - margin - toolbar_height;
+    let bottom_y = screen_rect.max.y
+        - margin
+        - toolbar_height
+        - if screen_rect.width() < 900.0 {
+            48.0
+        } else {
+            0.0
+        };
 
     let output = floating_area(
         ctx,
@@ -1633,7 +1652,7 @@ fn render_right_panel(
     }
 
     let mut action = None;
-    let panel_width = 200.0;
+    let panel_width = 260.0;
     let margin = 12.0;
 
     let screen = ctx.input(|i| i.content_rect());
@@ -3771,5 +3790,24 @@ mod math_editor_regressions {
         assert_eq!(crate::math_input::dead_caret_text("^3"), "3");
         assert_eq!(crate::math_input::dead_caret_text("3"), "3");
         assert_eq!(crate::math_input::dead_caret_text("â"), "a");
+    }
+}
+
+#[cfg(test)]
+mod floating_panel_regressions {
+    use super::*;
+    #[test]
+    fn initial_toolbar_is_compact_on_narrow_viewport() {
+        let ctx = Context::default();
+        let mut state = UiState::default();
+        let raw = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(714.0, 668.0))),
+            ..Default::default()
+        };
+        let _ = ctx.run(raw, |ctx| {
+            render_toolbar(ctx, &mut state);
+        });
+        let rect = ctx.memory(|m| m.areas().get(egui::Id::new("toolbar")).unwrap().rect());
+        assert!(rect.width() < 80.0, "toolbar width {}", rect.width());
     }
 }

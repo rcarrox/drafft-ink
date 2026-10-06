@@ -819,6 +819,7 @@ impl<'a> ColorGrid<'a> {
 
         egui::Area::new(egui::Id::new("color_grid"))
             .default_pos(pos)
+            .default_size(vec2(400.0, 250.0))
             .movable(true)
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
