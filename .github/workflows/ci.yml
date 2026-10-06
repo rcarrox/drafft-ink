@@ -12,6 +12,16 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  browser-helpers:
+    name: Browser Helpers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test cursor, repaint, and local-font helpers
+        run: node utils/test_browser_helpers.cjs
   quarantine:
     name: Dependency Age Gate
     runs-on: ubuntu-latest
@@ -199,3 +209,4 @@ jobs:
         with:
           name: drafftink-wasm
           path: web/pkg/
+
