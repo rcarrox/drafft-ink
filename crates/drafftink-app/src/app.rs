@@ -3765,6 +3765,24 @@ impl ApplicationHandler for App {
                                 state.ui_state.shortcuts_modal_open =
                                     !state.ui_state.shortcuts_modal_open;
                             }
+                            UiAction::SaveSettings => {
+                                state.ui_state.settings.sanitize();
+                                crate::settings::save_settings(&state.ui_state.settings);
+                                log::info!("Settings saved");
+                            }
+                            UiAction::ImportIntroJson => {
+                                #[cfg(target_arch = "wasm32")]
+                                file_ops::import_intro_json_async();
+                            }
+                            UiAction::ClearIntro => {
+                                state.ui_state.settings.intro_json.clear();
+                                state.ui_state.settings.intro_name.clear();
+                                crate::settings::save_settings(&state.ui_state.settings);
+                            }
+                            UiAction::ChooseExportFolder => {
+                                #[cfg(target_arch = "wasm32")]
+                                file_ops::choose_export_directory();
+                            }
                             UiAction::ToggleCalligraphy => {
                                 state.canvas.tool_manager.calligraphy_mode =
                                     !state.canvas.tool_manager.calligraphy_mode;
@@ -3807,13 +3825,65 @@ impl ApplicationHandler for App {
                                     log::info!("Set opacity to {}%", (opacity * 100.0) as i32);
                                 }
                             }
-                            UiAction::UpdateMathLatex(shape_id, latex) => {
-                                state.canvas.document.push_undo();
+                            UiAction::PreviewMath(shape_id, source, latex) => {
                                 if let Some(Shape::Math(math)) =
                                     state.canvas.document.get_shape_mut(shape_id)
                                 {
-                                    math.set_latex(latex);
-                                    log::info!("Updated math LaTeX");
+                                    math.set_formula(source, latex);
+                                }
+                            }
+                            UiAction::FinishMath(
+                                shape_id,
+                                original_source,
+                                original_latex,
+                                is_new,
+                            ) => {
+                                let current = state.canvas.document.get_shape(shape_id).and_then(
+                                    |shape| match shape {
+                                        Shape::Math(math) => {
+                                            Some((math.source.clone(), math.latex.clone()))
+                                        }
+                                        _ => None,
+                                    },
+                                );
+
+                                if let Some((current_source, current_latex)) = current {
+                                    if current_source.trim().is_empty() {
+                                        state.canvas.remove_shape(shape_id);
+                                    } else if !is_new
+                                        && (current_source != original_source
+                                            || current_latex != original_latex)
+                                    {
+                                        // Build one clean undo step for the entire inline edit.
+                                        if let Some(Shape::Math(math)) =
+                                            state.canvas.document.get_shape_mut(shape_id)
+                                        {
+                                            math.set_formula(
+                                                original_source.clone(),
+                                                original_latex.clone(),
+                                            );
+                                        }
+                                        state.canvas.document.push_undo();
+                                        if let Some(Shape::Math(math)) =
+                                            state.canvas.document.get_shape_mut(shape_id)
+                                        {
+                                            math.set_formula(current_source, current_latex);
+                                        }
+                                    }
+                                }
+                            }
+                            UiAction::CancelMath(
+                                shape_id,
+                                original_source,
+                                original_latex,
+                                is_new,
+                            ) => {
+                                if is_new {
+                                    state.canvas.remove_shape(shape_id);
+                                } else if let Some(Shape::Math(math)) =
+                                    state.canvas.document.get_shape_mut(shape_id)
+                                {
+                                    math.set_formula(original_source, original_latex);
                                 }
                             }
                         }
@@ -5455,65 +5525,14 @@ impl ApplicationHandler for App {
                                         state.ui_state.zoom_level = state.canvas.camera.zoom;
                                     }
                                 }
-                                // Selection: S or 1
-                                "s" | "S" | "1" => {
-                                    state.canvas.set_tool(ToolKind::Select);
-                                    log::info!("Tool: Select");
-                                }
-                                // Pan: M
-                                "m" | "M" => {
-                                    state.canvas.set_tool(ToolKind::Pan);
-                                    log::info!("Tool: Pan");
-                                }
-                                // Rectangle: R or 2
-                                "r" | "R" | "2" => {
-                                    state.canvas.set_tool(ToolKind::Rectangle);
-                                    log::info!("Tool: Rectangle");
-                                }
-                                // Ellipse: O or 4
-                                "o" | "O" | "4" => {
-                                    state.canvas.set_tool(ToolKind::Ellipse);
-                                    log::info!("Tool: Ellipse");
-                                }
-                                // Arrow: A or 5
-                                "a" | "A" | "5" => {
-                                    state.canvas.set_tool(ToolKind::Arrow);
-                                    log::info!("Tool: Arrow");
-                                }
-                                // Line: L or 6
-                                "l" | "L" | "6" => {
-                                    state.canvas.set_tool(ToolKind::Line);
-                                    log::info!("Tool: Line");
-                                }
-                                // Draw/Pen: B or 7
-                                "b" | "B" | "7" => {
-                                    state.canvas.set_tool(ToolKind::Freehand);
-                                    log::info!("Tool: Draw");
-                                }
-                                // Text: T or 8
-                                "t" | "T" | "8" => {
-                                    state.canvas.set_tool(ToolKind::Text);
-                                    log::info!("Tool: Text");
-                                }
-                                // Math formula: 9 (M is reserved for Pan)
-                                "9" => {
-                                    state.canvas.set_tool(ToolKind::Math);
-                                    log::info!("Tool: Math");
-                                }
-                                // Highlighter: K
-                                "k" | "K" => {
-                                    state.canvas.set_tool(ToolKind::Highlighter);
-                                    log::info!("Tool: Highlighter");
-                                }
-                                // Eraser: E
-                                "e" | "E" => {
-                                    state.canvas.set_tool(ToolKind::Eraser);
-                                    log::info!("Tool: Eraser");
-                                }
-                                // Laser Pointer: Z
-                                "z" | "Z" => {
-                                    state.canvas.set_tool(ToolKind::LaserPointer);
-                                    log::info!("Tool: Laser Pointer");
+                                key
+                                    if state.ui_state.settings.tool_for_key(key).is_some() =>
+                                {
+                                    if let Some(tool) = state.ui_state.settings.tool_for_key(key) {
+                                        state.canvas.set_tool(tool);
+                                        state.ui_state.current_tool = tool;
+                                        log::info!("Tool shortcut {:?}: {}", tool, key);
+                                    }
                                 }
                                 "Delete" | "Backspace" => {
                                     if !state.canvas.selection.is_empty() {
@@ -5532,6 +5551,7 @@ impl ApplicationHandler for App {
                                         || state.ui_state.menu_open
                                         || state.ui_state.collab_modal_open
                                         || state.ui_state.shortcuts_modal_open
+                                        || state.ui_state.settings_open
                                         || state.ui_state.save_dialog_open
                                         || state.ui_state.open_dialog_open
                                         || state.ui_state.open_recent_dialog_open;
@@ -5542,6 +5562,7 @@ impl ApplicationHandler for App {
                                         state.ui_state.menu_open = false;
                                         state.ui_state.collab_modal_open = false;
                                         state.ui_state.shortcuts_modal_open = false;
+                                        state.ui_state.settings_open = false;
                                         state.ui_state.save_dialog_open = false;
                                         state.ui_state.open_dialog_open = false;
                                         state.ui_state.open_recent_dialog_open = false;
