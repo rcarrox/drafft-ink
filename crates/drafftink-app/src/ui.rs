@@ -3383,6 +3383,9 @@ fn render_math_editor(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction>
     let x = pos.x.clamp(12.0, (screen_rect.right() - 390.0).max(12.0));
     let y = (pos.y + 28.0).clamp(12.0, (screen_rect.bottom() - 72.0).max(12.0));
 
+    // Read completion keys before TextEdit or egui focus navigation consumes them.
+    let finish_requested =
+        ctx.input(|i| i.key_pressed(egui::Key::Escape) || i.key_pressed(egui::Key::Enter));
     let mut action = None;
     let mut close = false;
 
@@ -3416,6 +3419,9 @@ fn render_math_editor(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction>
                                 });
                             }
                         }
+                        // Egui may surrender focus at frame start on Escape. Restore
+                        // this active editor before processing any preceding text events.
+                        ui.memory_mut(|m| m.request_focus(edit_id));
                         let mut output = Frame::new()
                             .fill(Color32::WHITE)
                             .corner_radius(CornerRadius::same(6))
@@ -3472,17 +3478,7 @@ fn render_math_editor(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction>
                             ));
                         }
 
-                        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                            action = Some(UiAction::FinishMath(
-                                shape_id,
-                                editor.original_source.clone(),
-                                editor.original_latex.clone(),
-                                editor.is_new,
-                                editor.input.clone(),
-                                friendly_math_to_latex(&editor.input),
-                            ));
-                            close = true;
-                        } else if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        if finish_requested {
                             action = Some(UiAction::FinishMath(
                                 shape_id,
                                 editor.original_source.clone(),
@@ -3581,7 +3577,9 @@ mod math_editor_regressions {
             vec![egui::Event::Text("3".into()), key(egui::Key::Escape)],
         );
         assert!(
-            matches!(action, Some(UiAction::FinishMath(_, _, _, _, source, _)) if source == "x^3")
+            matches!(&action, Some(UiAction::FinishMath(_, _, _, _, source, _)) if source == "x^3"),
+            "action={action:?}, editor={:?}",
+            state.math_editor
         );
         assert!(state.math_editor.is_none());
     }
