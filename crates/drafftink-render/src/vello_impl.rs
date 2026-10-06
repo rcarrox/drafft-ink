@@ -931,7 +931,7 @@ impl VelloRenderer {
             builder.push_default(StyleProperty::FontStyle(parley::FontStyle::Italic));
         }
         builder.push_default(StyleProperty::FontStack(parley::FontStack::Single(
-            parley::FontFamily::Named(font_name.into()),
+            parley::FontFamily::Named(font_name.to_string().into()),
         )));
 
         let mut byte_offset = 0;
@@ -1292,7 +1292,7 @@ impl VelloRenderer {
             use parley::{FontFamily, FontStack, StyleProperty};
             let styles = edit_state.editor_mut().edit_styles();
             styles.insert(StyleProperty::FontStack(FontStack::Single(
-                FontFamily::Named(font_name.into()),
+                FontFamily::Named(font_name.to_string().into()),
             )));
             styles.insert(StyleProperty::FontWeight(parley_weight));
             if is_italic {
@@ -1311,7 +1311,7 @@ impl VelloRenderer {
         builder.push_default(parley::StyleProperty::Brush(brush.clone()));
         builder.push_default(parley::StyleProperty::FontWeight(parley_weight));
         builder.push_default(parley::StyleProperty::FontStack(parley::FontStack::Single(
-            parley::FontFamily::Named(font_name.into()),
+            parley::FontFamily::Named(font_name.to_string().into()),
         )));
 
         // Apply per-character colors
