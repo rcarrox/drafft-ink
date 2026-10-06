@@ -773,6 +773,11 @@ fn apply_corner_resize_freehand(
     }
 }
 
+fn rotate_delta(delta: kurbo::Vec2, angle: f64) -> kurbo::Vec2 {
+    let (sin, cos) = angle.sin_cos();
+    kurbo::Vec2::new(cos * delta.x - sin * delta.y, sin * delta.x + cos * delta.y)
+}
+
 /// Apply corner resize to an image.
 fn apply_corner_resize_image(
     image: &mut crate::shapes::Image,
@@ -780,7 +785,7 @@ fn apply_corner_resize_image(
     delta: kurbo::Vec2,
     keep_aspect_ratio: bool,
 ) {
-    let local = Affine::rotate(-image.rotation) * delta;
+    let local = rotate_delta(delta, -image.rotation);
     let left = matches!(corner, Corner::TopLeft | Corner::BottomLeft);
     let top = matches!(corner, Corner::TopLeft | Corner::TopRight);
     let mut width = (image.width + if left { -local.x } else { local.x }).max(1.0);
@@ -796,7 +801,7 @@ fn apply_corner_resize_image(
         (width - image.width) * if left { -0.5 } else { 0.5 },
         (height - image.height) * if top { -0.5 } else { 0.5 },
     );
-    let center = image.as_rect().center() + Affine::rotate(image.rotation) * shift;
+    let center = image.as_rect().center() + rotate_delta(shift, image.rotation);
     image.width = width;
     image.height = height;
     image.position = Point::new(center.x - width / 2.0, center.y - height / 2.0);
@@ -809,7 +814,7 @@ pub fn apply_image_crop(shape: &Shape, handle: Option<HandleKind>, delta: kurbo:
         return shape.clone();
     };
     let mut image = original.clone();
-    let local = Affine::rotate(-image.rotation) * delta;
+    let local = rotate_delta(delta, -image.rotation);
     let left = matches!(corner, Corner::TopLeft | Corner::BottomLeft);
     let top = matches!(corner, Corner::TopLeft | Corner::TopRight);
     let sx = image.width / image.crop.width();
@@ -831,7 +836,7 @@ pub fn apply_image_crop(shape: &Shape, handle: Option<HandleKind>, delta: kurbo:
         (crop.center().x - image.crop.center().x) * sx,
         (crop.center().y - image.crop.center().y) * sy,
     );
-    let center = image.as_rect().center() + Affine::rotate(image.rotation) * shift;
+    let center = image.as_rect().center() + rotate_delta(shift, image.rotation);
     image.crop = crop;
     image.width = crop.width() * sx;
     image.height = crop.height() * sy;
@@ -1116,7 +1121,7 @@ mod image_geometry_regressions {
                 Corner::BottomRight,
             ] {
                 let original = image(angle);
-                let delta = Affine::rotate(angle) * kurbo::Vec2::new(12.0, 9.0);
+                let delta = rotate_delta(kurbo::Vec2::new(12.0, 9.0), angle);
                 let resized =
                     apply_manipulation(&original, Some(HandleKind::Corner(c)), delta, false);
                 assert!(corner(&resized, c).distance(corner(&original, c) + delta) < 1e-8);
@@ -1146,7 +1151,7 @@ mod image_geometry_regressions {
                 } else {
                     -10.0
                 };
-                let delta = Affine::rotate(angle) * kurbo::Vec2::new(dx, dy);
+                let delta = rotate_delta(kurbo::Vec2::new(dx, dy), angle);
                 let cropped = apply_image_crop(&original, Some(HandleKind::Corner(c)), delta);
                 assert!(corner(&cropped, c).distance(corner(&original, c) + delta) < 1e-8);
                 assert!(
@@ -1170,7 +1175,7 @@ mod image_geometry_regressions {
         let cropped = apply_image_crop(
             &original,
             Some(HandleKind::Corner(Corner::TopLeft)),
-            Affine::rotate(0.7) * kurbo::Vec2::new(30.0, 20.0),
+            rotate_delta(kurbo::Vec2::new(30.0, 20.0), 0.7),
         );
         *doc.get_shape_mut(id).unwrap() = cropped.clone();
         assert!(doc.undo());
