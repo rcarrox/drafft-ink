@@ -593,7 +593,7 @@ fn get_tools() -> Vec<Tool> {
         Tool {
             kind: ToolKind::Highlighter,
             label: "Highlighter",
-            shortcut: "H",
+            shortcut: "K",
             icon: include_image!("../assets/highlighter.svg"),
         },
         Tool {
@@ -1856,29 +1856,21 @@ fn render_right_panel(ctx: &Context, props: &SelectedShapeProps) -> Option<UiAct
     action
 }
 
-/// Render the hamburger menu and collab button at top-left.
+/// Render the hamburger menu at top-left.
+///
+/// The personal/local build intentionally exposes no collaboration controls.
 fn render_file_menu(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
     let mut action = None;
     let has_selection = ui_state.selection_count > 0;
 
-    // Hamburger button and collab button in a panel
+    // Single hamburger button in the personal/local build.
     egui::Area::new(egui::Id::new("hamburger_button"))
         .anchor(Align2::LEFT_TOP, Vec2::new(12.0, 12.0))
         .show(ctx, |ui| {
             panel_frame().show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing = Vec2::new(4.0, 0.0);
-
-                    if hamburger_button(ui, ui_state.menu_open) {
-                        ui_state.menu_open = !ui_state.menu_open;
-                        ui_state.collab_modal_open = false; // Close modal when opening menu
-                    }
-
-                    if collab_button(ui, ui_state.connection_state, ui_state.collab_modal_open) {
-                        ui_state.collab_modal_open = !ui_state.collab_modal_open;
-                        ui_state.menu_open = false; // Close menu when opening modal
-                    }
-                });
+                if hamburger_button(ui, ui_state.menu_open) {
+                    ui_state.menu_open = !ui_state.menu_open;
+                }
             });
         });
 
@@ -2007,7 +1999,7 @@ fn render_file_menu(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
         if ctx.input(|i| i.pointer.any_click()) {
             let buttons_rect = Rect::from_min_size(
                 Pos2::new(12.0, 12.0),
-                Vec2::new(80.0, 48.0), // Wider to include collab button
+                Vec2::new(48.0, 48.0),
             );
             let menu_rect = Rect::from_min_size(
                 Pos2::new(12.0, 56.0),
@@ -2018,13 +2010,6 @@ fn render_file_menu(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                     ui_state.menu_open = false;
                 }
             }
-        }
-    }
-
-    // Render collaboration modal if open
-    if ui_state.collab_modal_open {
-        if let Some(modal_action) = render_collaboration_modal(ctx, ui_state) {
-            action = Some(modal_action);
         }
     }
 

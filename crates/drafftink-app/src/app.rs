@@ -1566,6 +1566,8 @@ struct AppState {
     active_tab: usize,
     input: InputState,
     config: AppConfig,
+    /// Tool active before holding Space for temporary panning.
+    temporary_pan_tool: Option<ToolKind>,
 
     // Event handling
     event_handler: EventHandler,
@@ -1893,6 +1895,7 @@ impl App {
             active_tab: 0,
             input: InputState::new(),
             config: self.config.clone(),
+            temporary_pan_tool: None,
             event_handler: EventHandler::new(),
             text_edit_state: None,
             collab: CollaborationManager::new(),
@@ -4157,7 +4160,7 @@ impl ApplicationHandler for App {
                 }
 
                 // Handle dragging (manipulation or shape drawing).
-                // SPACE acts as a virtual left mouse button (Paint-style draw).
+                // SPACE keeps InputState active while the temporary Pan tool is held.
                 if state.input.is_drawing() {
                     // Handle text selection dragging first
                     if let Some(text_id) = state.event_handler.editing_text {
@@ -4437,21 +4440,31 @@ impl ApplicationHandler for App {
                     return;
                 }
 
-                let scroll = match delta {
+                let (scroll, zoom_factor) = match delta {
                     MouseScrollDelta::LineDelta(x, y) => {
-                        Vec2::new(x as f64 * 20.0, y as f64 * 20.0)
+                        let scroll = Vec2::new(x as f64 * 20.0, y as f64 * 20.0);
+                        // Mouse-wheel zoom: predictable but less abrupt than fixed 10% steps.
+                        let factor = ((y as f64) * 0.12).exp().clamp(0.75, 1.35);
+                        (scroll, factor)
                     }
-                    MouseScrollDelta::PixelDelta(pos) => Vec2::new(pos.x, pos.y),
+                    MouseScrollDelta::PixelDelta(pos) => {
+                        let scroll = Vec2::new(pos.x, pos.y);
+                        // Precision touchpads (Chrome/Edge pinch -> Ctrl+pixel wheel)
+                        // generate many small deltas. Exponential scaling makes the
+                        // zoom continuous and keeps the point under the pointer fixed.
+                        let factor = (pos.y * 0.0025).exp().clamp(0.80, 1.25);
+                        (scroll, factor)
+                    }
                 };
 
                 let position = state.input.mouse_position();
 
                 if state.input.ctrl() {
-                    // Ctrl/Cmd + scroll = zoom
-                    let zoom_factor = if scroll.y > 0.0 { 1.1 } else { 0.9 };
+                    // Ctrl/Cmd + wheel, and two-finger pinch on precision touchpads = zoom.
                     state.canvas.camera.zoom_at(position, zoom_factor);
+                    state.ui_state.zoom_level = state.canvas.camera.zoom;
                 } else {
-                    // Normal scroll/trackpad = pan
+                    // Two-finger trackpad scroll / normal wheel = pan.
                     state.canvas.camera.pan(scroll);
                 }
                 state.needs_redraw = true;
@@ -4698,50 +4711,26 @@ impl ApplicationHandler for App {
                     return;
                 }
 
-                // SPACE behaves like the left mouse button for drawing
-                // (Paint-style: press to start, release to finish — uses the
-                // current cursor position). Modifier combos like Ctrl+Space
-                // are left to the regular handler below.
-                //
-                // Match on `physical_key` (not `logical_key`) so we agree with
-                // `InputState::is_drawing()`, which queries the physical-key
-                // hold state via winit_input_helper. Using the logical key
-                // here would risk the two checks disagreeing on layouts/IMEs
-                // where the space bar's logical output differs.
+                // Hold SPACE for a temporary pan tool. Releasing SPACE restores
+                // the previously active tool. This is intentionally layout-independent.
                 if matches!(event.physical_key, PhysicalKey::Code(KeyCode::Space))
                     && !state.input.ctrl()
                     && !event.repeat
                 {
-                    let position = state.input.mouse_position();
-                    let world_point = state.canvas.camera.screen_to_world(position);
-
                     match event.state {
                         ElementState::Pressed => {
-                            state.event_handler.handle_press(
-                                &mut state.canvas,
-                                world_point,
-                                &state.input,
-                                state.ui_state.grid_snap_enabled,
-                            );
+                            if state.temporary_pan_tool.is_none() {
+                                let previous = state.canvas.tool_manager.current_tool;
+                                state.temporary_pan_tool = Some(previous);
+                                state.canvas.set_tool(ToolKind::Pan);
+                                state.ui_state.current_tool = ToolKind::Pan;
+                            }
                         }
                         ElementState::Released => {
-                            let current_style = state.ui_state.to_shape_style();
-                            state.event_handler.handle_release(
-                                &mut state.canvas,
-                                world_point,
-                                &state.input,
-                                &current_style,
-                                state.ui_state.grid_snap_enabled,
-                                state.ui_state.angle_snap_enabled,
-                            );
-
-                            broadcast_doc_changes(
-                                &mut state.collab,
-                                &state.canvas.document,
-                                state.websocket.as_ref(),
-                            );
-
-                            state.event_handler.clear_snap();
+                            if let Some(previous) = state.temporary_pan_tool.take() {
+                                state.canvas.set_tool(previous);
+                                state.ui_state.current_tool = previous;
+                            }
                         }
                     }
 
@@ -5241,6 +5230,52 @@ impl ApplicationHandler for App {
                             }
                         } else {
                             match key_str {
+                                // View shortcuts
+                                "+" | "=" => {
+                                    let center = kurbo::Point::new(
+                                        state.canvas.viewport_size.width / 2.0,
+                                        state.canvas.viewport_size.height / 2.0,
+                                    );
+                                    state.canvas.camera.zoom_at(center, 1.20);
+                                    state.ui_state.zoom_level = state.canvas.camera.zoom;
+                                }
+                                "-" => {
+                                    let center = kurbo::Point::new(
+                                        state.canvas.viewport_size.width / 2.0,
+                                        state.canvas.viewport_size.height / 2.0,
+                                    );
+                                    state.canvas.camera.zoom_at(center, 1.0 / 1.20);
+                                    state.ui_state.zoom_level = state.canvas.camera.zoom;
+                                }
+                                "0" => {
+                                    state.canvas.camera.zoom = drafftink_core::camera::BASE_ZOOM;
+                                    state.ui_state.zoom_level = drafftink_core::camera::BASE_ZOOM;
+                                }
+                                "f" | "F" => {
+                                    let bounds = if state.canvas.selection.is_empty() {
+                                        state.canvas.document.bounds()
+                                    } else {
+                                        let mut result: Option<kurbo::Rect> = None;
+                                        for &id in &state.canvas.selection {
+                                            if let Some(shape) = state.canvas.document.get_shape(id) {
+                                                let b = shape.bounds();
+                                                result = Some(match result {
+                                                    Some(r) => r.union(b),
+                                                    None => b,
+                                                });
+                                            }
+                                        }
+                                        result
+                                    };
+                                    if let Some(bounds) = bounds {
+                                        state.canvas.camera.fit_to_bounds(
+                                            bounds,
+                                            state.canvas.viewport_size,
+                                            50.0,
+                                        );
+                                        state.ui_state.zoom_level = state.canvas.camera.zoom;
+                                    }
+                                }
                                 // Selection: V or 1
                                 "v" | "V" | "1" => {
                                     state.canvas.set_tool(ToolKind::Select);
@@ -5285,6 +5320,11 @@ impl ApplicationHandler for App {
                                 "m" | "M" | "9" => {
                                     state.canvas.set_tool(ToolKind::Math);
                                     log::info!("Tool: Math");
+                                }
+                                // Highlighter: K
+                                "k" | "K" => {
+                                    state.canvas.set_tool(ToolKind::Highlighter);
+                                    log::info!("Tool: Highlighter");
                                 }
                                 // Eraser: E
                                 "e" | "E" => {

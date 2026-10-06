@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="fr">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DrafftInk</title>
+    <title>DrafftInk — tableau local</title>
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
     <style>
         * {
@@ -53,6 +53,8 @@
             height: 100%;
             display: block;
             outline: none;
+            touch-action: none;
+            overscroll-behavior: none;
         }
     </style>
 </head>
@@ -60,13 +62,13 @@
     <div id="app">
         <div id="loading">
             <div class="spinner"></div>
-            <div id="loading-text">Loading DrafftInk...</div>
+            <div id="loading-text">Chargement de DrafftInk...</div>
             <div id="loading-progress" style="font-size: 14px; color: #888; margin-top: 8px;"></div>
         </div>
     </div>
     
     <script>
-        // Prevent browser from intercepting keyboard shortcuts we need
+        // Prevent the browser from stealing shortcuts used by the whiteboard.
         document.addEventListener('keydown', function(e) {
             if ((e.ctrlKey || e.metaKey) && (
                 e.key === 'e' || e.key === 'E' ||
@@ -76,6 +78,18 @@
                 e.preventDefault();
             }
         });
+
+        // Chrome/Edge expose precision-touchpad pinch as Ctrl+wheel. Prevent
+        // browser page zoom so DrafftInk receives the gesture instead.
+        window.addEventListener('wheel', function(e) {
+            if (e.ctrlKey || e.metaKey) {
+                e.preventDefault();
+            }
+        }, { passive: false });
+
+        // The app uses WebGPU. Give a clear message before fetching the WASM
+        // rather than failing later with an opaque renderer error.
+        window.__drafftinkWebGpuAvailable = !!navigator.gpu;
     </script>
     <script type="module">
         import init from './pkg/drafftink_app.js';
@@ -89,6 +103,12 @@
         async function run() {
             const loadingText = document.getElementById('loading-text');
             const loadingProgress = document.getElementById('loading-progress');
+
+            if (!window.__drafftinkWebGpuAvailable) {
+                loadingText.textContent = 'WebGPU indisponible';
+                loadingProgress.innerHTML = 'Utilisez une version récente de Chrome ou Edge, avec l’accélération matérielle activée.';
+                return;
+            }
             
             try {
                 // Fetch WASM with progress
@@ -123,7 +143,7 @@
                     offset += chunk.length;
                 }
                 
-                loadingText.textContent = 'Initializing...';
+                loadingText.textContent = 'Initialisation...';
                 loadingProgress.textContent = '';
                 
                 // Initialize with the fetched WASM bytes
@@ -139,12 +159,12 @@
                 const loading = document.getElementById('loading');
                 if (loading) {
                     loading.innerHTML = `
-                        <div style="color: #ef4444;">Failed to load DrafftInk</div>
+                        <div style="color: #ef4444;">Impossible de charger DrafftInk</div>
                         <div style="font-size: 14px; margin-top: 8px; color: #888;">
                             ${error.message || 'Unknown error'}
                         </div>
                         <div style="font-size: 12px; margin-top: 16px; color: #666;">
-                            Make sure your browser supports WebGPU.
+                            Vérifiez que WebGPU est disponible dans ce navigateur (Chrome ou Edge récent recommandé).
                         </div>
                     `;
                 }

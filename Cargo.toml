@@ -6,11 +6,10 @@ members = [
     "crates/drafftink-render",
     "crates/drafftink-widgets",
     "crates/drafftink-app",
-    "crates/drafftink-server",
 ]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 license = "AGPL-3.0"
 rust-version = "1.86"

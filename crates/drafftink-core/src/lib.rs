@@ -5,7 +5,6 @@
 pub mod camera;
 pub mod canvas;
 pub mod collaboration;
-pub mod crdt;
 pub mod elbow;
 pub mod excalidraw;
 pub mod input;
@@ -21,7 +20,6 @@ pub mod widget;
 pub use camera::Camera;
 pub use canvas::Canvas;
 pub use collaboration::CollaborationManager;
-pub use crdt::CrdtDocument;
 pub use excalidraw::{LibraryItem, library_from_excalidrawlib, library_layout_grid};
 pub use input::InputState;
 pub use mermaid::shapes_from_mermaid;

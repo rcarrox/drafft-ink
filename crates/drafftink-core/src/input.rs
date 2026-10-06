@@ -133,8 +133,9 @@ impl InputState {
         self.helper.mouse_held(button)
     }
 
-    /// True while the user is actively drawing — left mouse button held,
-    /// or SPACE held (virtual left button for Paint-style keyboard drawing).
+    /// True while pointer-driven canvas interaction is active.
+    /// SPACE is kept here so the app can pan continuously while the temporary
+    /// Pan tool is held, even without pressing a mouse button.
     pub fn is_drawing(&self) -> bool {
         self.helper.mouse_held(MouseButton::Left) || self.helper.key_held(KeyCode::Space)
     }

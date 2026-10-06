@@ -1,4 +1,13 @@
+# DrafftInk Local 0.2.0
+
+Personal/local branch: collaboration networking removed; portable WebAssembly builds are produced by GitHub Actions. See `README_LOCAL_FR.md`.
+
+---
+
 # Drafft.ink
+
+> **Version locale personnelle** : cette branche retire la collaboration et ajoute un lanceur Windows avec choix Chrome/Edge. Voir [README_LOCAL_FR.md](README_LOCAL_FR.md).
+
 
 
 <img src="./logo.png" alt="Drafft.ink Logo" width="120" align="left">
@@ -7,7 +16,7 @@
 
 Try it now: [drafft.ink](https://drafft.ink/) — draw first, sign up never.
 
-Cross-platform (Linux, Windows, macOS, browser, mobile). Real-time collaboration via CRDTs. No account required. Self-hostable with a single binary.
+Cross-platform (Linux, Windows, macOS, browser, mobile). This local branch is single-user and keeps all drawing data local.
 
 <br clear="left"/>
 
@@ -21,7 +30,6 @@ Cross-platform (Linux, Windows, macOS, browser, mobile). Real-time collaboration
 - **Smart Guides** - Smart alignment snapping, equal spacing detection, angle snapping
 - **Text** - Multiple font families (GelPen, GelPen Serif, Vanilla Extract), per-character styling, inline LaTeX math
 - **Images** - Drag-and-drop, paste from clipboard, embedded in document
-- **Collaboration** - Real-time sync via Loro CRDT. Watch your colleagues draw boxes around things that don't need boxes.
 - **Open Formats** - Export to PNG or JSON. Import them back.
 - **No Telemetry** - We don't know what you're drawing, and frankly, we don't want to.
 - **Touch Support** - iPad and tablet friendly, gesture navigation
@@ -51,25 +59,15 @@ Or use the build script:
 ./build.sh --wasm
 ```
 
-### Collaboration Server
-
-```bash
-cargo build --release -p drafftink-server
-./target/release/drafftink-server
-```
-
-Listens on `ws://localhost:3030/ws`. One binary, no configuration files. Self-host it. Or don't. We're not your manager.
-
 ---
 
 ## Architecture
 
 ```
 crates/
-  drafftink-core/     # Canvas state, shapes, CRDT sync, snapping logic
+  drafftink-core/     # Canvas state, shapes, snapping logic
   drafftink-render/   # Vello-based GPU rendering, text layout (Parley)
   drafftink-app/      # Application logic, UI (egui), event handling
-  drafftink-server/   # WebSocket collaboration server
   drafftink-widgets/  # Custom UI components
 ```
 

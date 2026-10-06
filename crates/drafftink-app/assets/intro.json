@@ -727,7 +727,7 @@
           "x": 299.0234375,
           "y": 273.11197916666663
         },
-        "content": "Effortlessly self-host whiteboards. High-performance, \ncross-platform digital whiteboard with live collaboration \nbuilt in Rust & WebGPU. Zero subscription, AGPLv3-licensed.\nWith colored text spans!",
+        "content": "Effortlessly self-host whiteboards. High-performance, \ncross-platform digital whiteboard with fast local autosave \nbuilt in Rust & WebGPU. Zero subscription, AGPLv3-licensed.\nWith colored text spans!",
         "font_size": 20.0,
         "font_family": "GelPen",
         "font_weight": "Regular",
@@ -2114,7 +2114,7 @@
           "x": 68.86253720238102,
           "y": 868.4495907738096
         },
-        "content": "fullCRDT\nhistory",
+        "content": "local\nautosave",
         "font_size": 20.0,
         "font_family": "GelPen",
         "font_weight": "Regular",

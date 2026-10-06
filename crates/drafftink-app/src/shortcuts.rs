@@ -38,13 +38,30 @@ impl Shortcut {
     }
 }
 
-/// Registry of all keyboard shortcuts.
+/// Registry of all keyboard shortcuts shown by the help dialog.
 pub struct ShortcutRegistry;
 
 impl ShortcutRegistry {
     /// Get all registered shortcuts.
     pub fn all() -> Vec<Shortcut> {
         vec![
+            Shortcut::new("V / 1", false, false, "Selection tool"),
+            Shortcut::new("H", false, false, "Pan tool"),
+            Shortcut::new("R / 2", false, false, "Rectangle tool"),
+            Shortcut::new("O / 4", false, false, "Ellipse tool"),
+            Shortcut::new("A / 5", false, false, "Arrow tool"),
+            Shortcut::new("L / 6", false, false, "Line tool"),
+            Shortcut::new("P / 7", false, false, "Pen tool"),
+            Shortcut::new("K", false, false, "Highlighter tool"),
+            Shortcut::new("E", false, false, "Eraser tool"),
+            Shortcut::new("T / 8", false, false, "Text tool"),
+            Shortcut::new("M / 9", false, false, "Math tool"),
+            Shortcut::new("Z", false, false, "Laser pointer"),
+            Shortcut::new("Space (hold)", false, false, "Temporary pan; release to return to previous tool"),
+            Shortcut::new("+ / =", false, false, "Zoom in"),
+            Shortcut::new("-", false, false, "Zoom out"),
+            Shortcut::new("0", false, false, "Reset zoom to 100%"),
+            Shortcut::new("F", false, false, "Fit selection or drawing to the viewport"),
             Shortcut::new("A", true, false, "Select all shapes"),
             Shortcut::new("S", true, false, "Save Local"),
             Shortcut::new("O", true, false, "Open..."),
@@ -59,21 +76,11 @@ impl ShortcutRegistry {
             Shortcut::new("C", true, false, "Copy shapes"),
             Shortcut::new("X", true, false, "Cut shapes"),
             Shortcut::new("V", true, false, "Paste shapes or image"),
+            Shortcut::new("D", true, false, "Duplicate selected shapes"),
             Shortcut::new("Delete", false, false, "Delete selected shapes"),
             Shortcut::new("Backspace", false, false, "Delete selected shapes"),
-            Shortcut::new("Escape", false, false, "Cancel current action"),
-            Shortcut::new(
-                "Space",
-                false,
-                false,
-                "Draw / click at cursor (hold like the left mouse button)",
-            ),
-            Shortcut::new(
-                "Shift+Drag",
-                false,
-                false,
-                "Maintain aspect ratio while resizing",
-            ),
+            Shortcut::new("Escape", false, false, "Cancel current action / return to selection"),
+            Shortcut::new("Shift+Drag", false, false, "Maintain aspect ratio while resizing"),
         ]
     }
 
