@@ -148,8 +148,8 @@ pub enum StrokeStyle {
     #[default]
     Solid,
     Dashed,
-    DashedShort,
     Dotted,
+    DashedShort,
 }
 
 impl StrokeStyle {

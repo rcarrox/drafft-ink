@@ -3117,7 +3117,7 @@ impl ApplicationHandler for App {
                                     );
                                 }
                             }
-                            UiAction::SetStrokeStyle(pattern) => {
+                            UiAction::SetOutlinePattern(pattern) => {
                                 state.ui_state.stroke_style = pattern;
                                 if !state.canvas.selection.is_empty() {
                                     state.canvas.document.push_undo();
@@ -3594,9 +3594,11 @@ impl ApplicationHandler for App {
                                         match shape {
                                             Shape::Line(line) => {
                                                 line.stroke_style = stroke_style;
+                                                line.style.stroke_style = stroke_style;
                                             }
                                             Shape::Arrow(arrow) => {
                                                 arrow.stroke_style = stroke_style;
+                                                arrow.style.stroke_style = stroke_style;
                                             }
                                             _ => {}
                                         }

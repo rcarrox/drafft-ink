@@ -455,7 +455,7 @@ pub enum UiAction {
     SetFillColor(Option<Color32>),
     /// Change stroke width.
     SetStrokeWidth(f32),
-    SetStrokeStyle(StrokeStyle),
+    SetOutlinePattern(StrokeStyle),
     /// Save document with current name to local storage.
     SaveLocal,
     /// Show save dialog to rename and save document locally.
@@ -736,23 +736,7 @@ fn render_tab_bar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
 
                     for (i, name) in tabs.iter().enumerate() {
                         if ui_state.renaming_tab == Some(i) {
-                            let edit_id = egui::Id::new(("math_source", shape_id));
-                        // Replace block-exit arrows with a text event so the widget
-                        // advances its cursor too. In the middle, arrows navigate normally.
-                        if let Some(state) = egui::TextEdit::load_state(ctx, edit_id) {
-                            let at_end = state.cursor.char_range().is_some_and(|r|
-                                r.is_empty() && r.primary.index == editor.input.chars().count());
-                            if at_end && open_structured_depth(&editor.input) > 0 {
-                                ui.input_mut(|i| {
-                                    for event in &mut i.events {
-                                        if matches!(event, egui::Event::Key { key: egui::Key::ArrowRight, pressed: true, modifiers, .. } if !modifiers.any()) {
-                                            *event = egui::Event::Text(" ".to_string());
-                                        }
-                                    }
-                                });
-                            }
-                        }
-                        let mut output = Frame::new()
+                            let response = Frame::new()
                                 .fill(Color32::WHITE)
                                 .stroke(Stroke::new(1.0, Color32::from_gray(190)))
                                 .corner_radius(CornerRadius::same(4))
@@ -1341,7 +1325,7 @@ fn render_properties_panel(ctx: &Context, ui_state: &mut UiState) -> Option<UiAc
                             (StrokeStyle::Dotted, "Dotted"),
                         ] {
                             if ui.selectable_label(ui_state.stroke_style == pattern, label).clicked() {
-                                action = Some(UiAction::SetStrokeStyle(pattern));
+                                action = Some(UiAction::SetOutlinePattern(pattern));
                             }
                         }
                     });
