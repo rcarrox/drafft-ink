@@ -741,7 +741,7 @@ fn render_tab_bar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                                 .inner;
 
                             response.request_focus();
-                            let commit = response.lost_focus()
+                            let commit = response.has_focus()
                                 && ui.input(|input| input.key_pressed(egui::Key::Enter));
                             let cancel = ui.input(|input| input.key_pressed(egui::Key::Escape));
                             if commit {
