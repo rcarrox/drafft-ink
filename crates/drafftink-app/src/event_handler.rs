@@ -917,7 +917,7 @@ impl EventHandler {
             }
             ToolKind::Math => {
                 // Math tool: create an equation and immediately request the formula editor.
-                let mut math = Math::new(world_point, r"x^2".to_string());
+                let mut math = Math::new(world_point, String::new());
                 math.style = current_style.clone();
                 let shape = Shape::Math(math);
                 let shape_id = shape.id();
