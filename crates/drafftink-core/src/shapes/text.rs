@@ -251,7 +251,7 @@ impl Text {
             font_family,
             font_weight,
             custom_font: None,
-            rotation:
+            rotation,
             style,
             char_colors,
             cached_size: RwLock::new(None),
