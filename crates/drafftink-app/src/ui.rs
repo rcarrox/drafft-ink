@@ -3518,7 +3518,9 @@ mod math_editor_regressions {
         };
         let mut action = None;
         let _ = ctx.run(input, |ctx| {
-            action = render_math_editor(ctx, state);
+            if let Some(result) = render_math_editor(ctx, state) {
+                action = Some(result);
+            }
         });
         action
     }
