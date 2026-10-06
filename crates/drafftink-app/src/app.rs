@@ -2946,6 +2946,16 @@ impl ApplicationHandler for App {
                                     if selected_text {
                                         state.canvas.clear_selection();
                                     }
+                                } else {
+                                    let selected_non_text = state
+                                        .canvas
+                                        .selection
+                                        .first()
+                                        .and_then(|id| state.canvas.document.get_shape(*id))
+                                        .is_some_and(|shape| !matches!(shape, Shape::Text(_)));
+                                    if selected_non_text {
+                                        state.canvas.clear_selection();
+                                    }
                                 }
 
                                 state.canvas.set_tool(tool);
@@ -5901,6 +5911,16 @@ impl ApplicationHandler for App {
                                                 .and_then(|id| state.canvas.document.get_shape(*id))
                                                 .is_some_and(|shape| matches!(shape, Shape::Text(_)));
                                             if selected_text {
+                                                state.canvas.clear_selection();
+                                            }
+                                        } else {
+                                            let selected_non_text = state
+                                                .canvas
+                                                .selection
+                                                .first()
+                                                .and_then(|id| state.canvas.document.get_shape(*id))
+                                                .is_some_and(|shape| !matches!(shape, Shape::Text(_)));
+                                            if selected_non_text {
                                                 state.canvas.clear_selection();
                                             }
                                         }
