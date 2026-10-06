@@ -119,7 +119,7 @@ impl Default for ToolManager {
             smoothed_pressure: 1.0,
             current_style: ShapeStyle::default(),
             corner_radius: 0.0,
-            calligraphy_mode: false,
+            calligraphy_mode: true,
             pressure_simulation: false,
             msd_pos: Point::ZERO,
             msd_vel: Point::ZERO,
