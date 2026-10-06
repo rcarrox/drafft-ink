@@ -1318,16 +1318,24 @@ fn render_properties_panel(ctx: &Context, ui_state: &mut UiState) -> Option<UiAc
                         });
                         ui.add_space(6.0);
                         widgets_section_label(ui, "Stroke style");
-                        for (pattern, label) in [
+                        let patterns = [
                             (StrokeStyle::Solid, "Solid"),
                             (StrokeStyle::Dashed, "Dashed 1 — long"),
                             (StrokeStyle::DashedShort, "Dashed 2 — short"),
                             (StrokeStyle::Dotted, "Dotted"),
-                        ] {
-                            if ui.selectable_label(ui_state.stroke_style == pattern, label).clicked() {
-                                action = Some(UiAction::SetOutlinePattern(pattern));
-                            }
-                        }
+                        ];
+                        let label = patterns.iter().find(|(p, _)| *p == ui_state.stroke_style)
+                            .map(|(_, label)| *label).unwrap_or("Solid");
+                        egui::ComboBox::from_id_salt("outline_pattern")
+                            .selected_text(egui::RichText::new(label).color(Color32::BLACK))
+                            .show_ui(ui, |ui| {
+                                for (pattern, label) in patterns {
+                                    if ui.selectable_label(ui_state.stroke_style == pattern,
+                                        egui::RichText::new(label).color(Color32::BLACK)).clicked() {
+                                        action = Some(UiAction::SetOutlinePattern(pattern));
+                                    }
+                                }
+                            });
                     });
                 });
             });
@@ -3416,6 +3424,8 @@ fn render_math_editor(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction>
                             .show(ui, |ui| {
                                 ui.visuals_mut().text_cursor.stroke = Stroke::new(2.0, Color32::BLACK);
                                 ui.visuals_mut().text_cursor.blink = true;
+                                ui.visuals_mut().text_cursor.on_duration = 0.75;
+                                ui.visuals_mut().text_cursor.off_duration = 0.25;
                                 egui::TextEdit::singleline(&mut editor.input)
                                         .id(edit_id)
                                         .desired_width(350.0)

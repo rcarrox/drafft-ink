@@ -586,3 +586,36 @@ impl Default for TextEditState {
         Self::new("", 32.0)
     }
 }
+
+#[cfg(test)]
+mod escape_regression {
+    use super::*;
+    #[test]
+    fn escape_keeps_the_current_text() {
+        let mut fonts = FontContext::new();
+        let mut layouts = LayoutContext::new();
+        let mut editor = TextEditState::new("Bonjour", 24.0);
+        editor.handle_key(
+            TextKey::End,
+            TextModifiers::default(),
+            &mut fonts,
+            &mut layouts,
+        );
+        editor.handle_key(
+            TextKey::Character(" monde".into()),
+            TextModifiers::default(),
+            &mut fonts,
+            &mut layouts,
+        );
+        assert_eq!(
+            editor.handle_key(
+                TextKey::Escape,
+                TextModifiers::default(),
+                &mut fonts,
+                &mut layouts
+            ),
+            TextEditResult::ExitEdit
+        );
+        assert_eq!(editor.text(), "Bonjour monde");
+    }
+}

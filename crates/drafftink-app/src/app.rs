@@ -2990,6 +2990,19 @@ impl ApplicationHandler for App {
 
                 // Run egui and get any actions
                 let egui_input = state.egui_state.take_egui_input(&state.window);
+                // Browser canvas focus is not always accompanied by an initial
+                // Winit Focused event. Without this egui accepts typing but hides
+                // its caret. Read the actual document focus on the WASM target.
+                #[cfg(target_arch = "wasm32")]
+                let egui_input = {
+                    let mut input = egui_input;
+                    input.focused = web_sys::window()
+                        .and_then(|w| w.document())
+                        .and_then(|d| d.has_focus().ok())
+                        .unwrap_or(input.focused);
+                    input
+                };
+
                 // Sync the tab strip metadata for the UI to render.
                 state.ui_state.tab_names = state.tabs.iter().map(|t| t.name.clone()).collect();
                 state.ui_state.active_tab = state.active_tab;
