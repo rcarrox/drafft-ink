@@ -262,6 +262,7 @@ pub mod file_ops {
 pub mod file_ops {
     use drafftink_core::canvas::CanvasDocument;
     use drafftink_core::storage::{IndexedDbStorage, Storage};
+    use crate::settings::UserSettings;
     use std::cell::RefCell;
     use std::rc::Rc;
     use wasm_bindgen::prelude::*;
@@ -273,6 +274,8 @@ pub mod file_ops {
         static PENDING_CLIPBOARD_TEXT: RefCell<Option<String>> = const { RefCell::new(None) };
         static PENDING_MATH_CLIPBOARD: RefCell<Option<String>> = const { RefCell::new(None) };
         static PENDING_LIBRARY: RefCell<Option<(String, CanvasDocument)>> = const { RefCell::new(None) };
+        static PENDING_INTRO_JSON: RefCell<Option<(String, String)>> = const { RefCell::new(None) };
+        static PENDING_EXPORT_FOLDER: RefCell<Option<String>> = const { RefCell::new(None) };
     }
 
     /// Request clipboard text read (async). Result will be available via take_pending_clipboard_text().
@@ -396,9 +399,32 @@ pub mod file_ops {
         });
     }
 
-    /// Try to load the last document on startup.
-    pub fn try_load_last_document() {
-        load_document_async();
+    /// Restore the last autosaved document, or the configured intro document.
+    /// An empty intro setting deliberately leaves a blank canvas.
+    pub fn try_load_last_document(settings: &UserSettings) {
+        let settings = settings.clone();
+        STORAGE.with(|storage| {
+            let storage = storage.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                if settings.restore_last_document {
+                    if let Ok(doc) = storage.load("__last__").await {
+                        log::info!("Restored last autosaved document: {}", doc.name);
+                        set_pending_document(doc);
+                        return;
+                    }
+                }
+
+                if !settings.intro_json.trim().is_empty() {
+                    match CanvasDocument::from_json(&settings.intro_json) {
+                        Ok(doc) => {
+                            log::info!("Loading configured intro document");
+                            set_pending_document(doc);
+                        }
+                        Err(e) => log::warn!("Configured intro document is invalid: {}", e),
+                    }
+                }
+            });
+        });
     }
 
     /// Load document by name from IndexedDB - triggers async load.
@@ -460,6 +486,79 @@ pub mod file_ops {
     /// Use `take_pending_document()` to retrieve the loaded document.
     pub fn upload_document_async() {
         trigger_file_input_async();
+    }
+
+    /// Pick a JSON document to use as the startup intro.
+    pub fn import_intro_json_async() {
+        wasm_bindgen_futures::spawn_local(async {
+            if let Err(e) = import_intro_json_impl().await {
+                log::warn!("Failed to import intro JSON: {:?}", e);
+            }
+        });
+    }
+
+    pub fn take_pending_intro_json() -> Option<(String, String)> {
+        PENDING_INTRO_JSON.with(|cell| cell.borrow_mut().take())
+    }
+
+    async fn import_intro_json_impl() -> Result<(), JsValue> {
+        let window = web_sys::window().ok_or("No window")?;
+        let document = window.document().ok_or("No document")?;
+        let input: web_sys::HtmlInputElement = document.create_element("input")?.dyn_into()?;
+        input.set_type("file");
+        input.set_accept(".json");
+        input.style().set_property("display", "none").ok();
+        document.body().ok_or("No body")?.append_child(&input)?;
+
+        let file = wait_for_file_selection(&input).await;
+        input.remove();
+        let file = file?;
+        let name = file.name();
+        let text = wasm_bindgen_futures::JsFuture::from(file.text())
+            .await?
+            .as_string()
+            .ok_or("Failed to read intro JSON")?;
+
+        CanvasDocument::from_json(&text)
+            .map_err(|e| JsValue::from_str(&format!("Invalid DrafftInk JSON: {}", e)))?;
+
+        PENDING_INTRO_JSON.with(|cell| *cell.borrow_mut() = Some((name, text)));
+        Ok(())
+    }
+
+    /// Open Chrome/Edge's directory picker for the default export folder.
+    pub fn choose_export_directory() {
+        wasm_bindgen_futures::spawn_local(async {
+            let Some(window) = web_sys::window() else {
+                return;
+            };
+            let Ok(value) = js_sys::Reflect::get(
+                window.as_ref(),
+                &JsValue::from_str("drafftinkPickExportDirectory"),
+            ) else {
+                return;
+            };
+            let Ok(function) = value.dyn_into::<js_sys::Function>() else {
+                return;
+            };
+            let Ok(result) = function.call0(window.as_ref()) else {
+                return;
+            };
+            let Ok(promise) = result.dyn_into::<js_sys::Promise>() else {
+                return;
+            };
+            if let Ok(value) = wasm_bindgen_futures::JsFuture::from(promise).await {
+                if let Some(name) = value.as_string() {
+                    if !name.is_empty() {
+                        PENDING_EXPORT_FOLDER.with(|cell| *cell.borrow_mut() = Some(name));
+                    }
+                }
+            }
+        });
+    }
+
+    pub fn take_pending_export_folder() -> Option<String> {
+        PENDING_EXPORT_FOLDER.with(|cell| cell.borrow_mut().take())
     }
 
     /// Take the pending document loaded from async operations.
@@ -525,68 +624,87 @@ pub mod file_ops {
     }
 
     fn download_file(filename: &str, content: &str, mime_type: &str) {
-        let window = web_sys::window().expect("No window");
-        let document = window.document().expect("No document");
-
-        // Create blob
         let blob_parts = js_sys::Array::new();
         blob_parts.push(&JsValue::from_str(content));
-
         let options = web_sys::BlobPropertyBag::new();
         options.set_type(mime_type);
-
-        let blob = web_sys::Blob::new_with_str_sequence_and_options(&blob_parts, &options)
-            .expect("Failed to create blob");
-
-        // Create download URL
-        let url = web_sys::Url::create_object_url_with_blob(&blob).expect("Failed to create URL");
-
-        // Create and click download link
-        let a = document
-            .create_element("a")
-            .expect("Failed to create element")
-            .dyn_into::<web_sys::HtmlAnchorElement>()
-            .expect("Failed to cast to anchor");
-
-        a.set_href(&url);
-        a.set_download(filename);
-        a.click();
-
-        // Clean up
-        web_sys::Url::revoke_object_url(&url).ok();
+        if let Ok(blob) = web_sys::Blob::new_with_str_sequence_and_options(&blob_parts, &options) {
+            export_blob_or_download(filename.to_string(), blob);
+        }
     }
 
     fn download_binary_file(filename: &str, data: &[u8], mime_type: &str) {
-        let window = web_sys::window().expect("No window");
-        let document = window.document().expect("No document");
-
-        // Create Uint8Array from data
         let uint8_array = js_sys::Uint8Array::from(data);
         let blob_parts = js_sys::Array::new();
         blob_parts.push(&uint8_array);
-
         let options = web_sys::BlobPropertyBag::new();
         options.set_type(mime_type);
+        if let Ok(blob) =
+            web_sys::Blob::new_with_u8_array_sequence_and_options(&blob_parts, &options)
+        {
+            export_blob_or_download(filename.to_string(), blob);
+        }
+    }
 
-        let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&blob_parts, &options)
-            .expect("Failed to create blob");
+    fn export_blob_or_download(filename: String, blob: web_sys::Blob) {
+        wasm_bindgen_futures::spawn_local(async move {
+            if try_save_blob_to_export_folder(&filename, &blob)
+                .await
+                .unwrap_or(false)
+            {
+                log::info!("Exported '{}' to configured folder", filename);
+                return;
+            }
+            fallback_download_blob(&filename, &blob);
+        });
+    }
 
-        // Create download URL
-        let url = web_sys::Url::create_object_url_with_blob(&blob).expect("Failed to create URL");
+    async fn try_save_blob_to_export_folder(
+        filename: &str,
+        blob: &web_sys::Blob,
+    ) -> Result<bool, JsValue> {
+        let window = web_sys::window().ok_or("No window")?;
+        let value = js_sys::Reflect::get(
+            window.as_ref(),
+            &JsValue::from_str("drafftinkSaveBlobToExportDirectory"),
+        )?;
+        let function: js_sys::Function = match value.dyn_into() {
+            Ok(f) => f,
+            Err(_) => return Ok(false),
+        };
+        let result = function.call2(
+            window.as_ref(),
+            &JsValue::from_str(filename),
+            blob.as_ref(),
+        )?;
+        let promise: js_sys::Promise = match result.dyn_into() {
+            Ok(p) => p,
+            Err(_) => return Ok(false),
+        };
+        let value = wasm_bindgen_futures::JsFuture::from(promise).await?;
+        Ok(value.as_bool().unwrap_or(false))
+    }
 
-        // Create and click download link
-        let a = document
-            .create_element("a")
-            .expect("Failed to create element")
-            .dyn_into::<web_sys::HtmlAnchorElement>()
-            .expect("Failed to cast to anchor");
-
+    fn fallback_download_blob(filename: &str, blob: &web_sys::Blob) {
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let Some(document) = window.document() else {
+            return;
+        };
+        let Ok(url) = web_sys::Url::create_object_url_with_blob(blob) else {
+            return;
+        };
+        let Ok(element) = document.create_element("a") else {
+            return;
+        };
+        let Ok(a) = element.dyn_into::<web_sys::HtmlAnchorElement>() else {
+            return;
+        };
         a.set_href(&url);
         a.set_download(filename);
         a.click();
-
-        // Clean up
-        web_sys::Url::revoke_object_url(&url).ok();
+        let _ = web_sys::Url::revoke_object_url(&url);
     }
 
     fn trigger_file_input_async() {
