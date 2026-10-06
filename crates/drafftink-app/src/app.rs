@@ -1962,6 +1962,10 @@ fn load_tab_into_canvas(state: &mut AppState, index: usize) {
     state.canvas.document = state.tabs[index].document.clone();
     state.canvas.camera = state.tabs[index].camera.clone();
     state.canvas.clear_selection();
+    state.event_handler.editing_text = None;
+    state.text_edit_state = None;
+    state.ui_state.math_editor = None;
+    state.ui_state.math_editor_screen_pos = None;
     state.needs_redraw = true;
 }
 
@@ -3173,6 +3177,8 @@ impl ApplicationHandler for App {
                                 file_ops::paste_shapes_from_clipboard_async(center_world);
                             }
                             UiAction::SwitchTab(_)
+                            | UiAction::NewCanvas
+                            | UiAction::RenameTab(_, _)
                             | UiAction::CloseTab(_)
                             | UiAction::LoadLibrary => {
                                 // Tab operations need exclusive access to the
@@ -4110,6 +4116,29 @@ impl ApplicationHandler for App {
                 if let Some(action) = tab_action {
                     match action {
                         UiAction::SwitchTab(i) => switch_to_tab(state, i),
+                        UiAction::NewCanvas => {
+                            let mut n = state.tabs.len() + 1;
+                            let mut name = format!("Canvas {}", n);
+                            while state.tabs.iter().any(|tab| tab.name == name) {
+                                n += 1;
+                                name = format!("Canvas {}", n);
+                            }
+                            let mut document = drafftink_core::canvas::CanvasDocument::new();
+                            document.name = name.clone();
+                            add_tab(state, name, document);
+                        }
+                        UiAction::RenameTab(i, name) => {
+                            if i < state.tabs.len() {
+                                let clean = name.trim().to_string();
+                                if !clean.is_empty() {
+                                    state.tabs[i].name = clean.clone();
+                                    state.tabs[i].document.name = clean.clone();
+                                    if i == state.active_tab {
+                                        state.canvas.document.name = clean;
+                                    }
+                                }
+                            }
+                        }
                         UiAction::CloseTab(i) => close_tab(state, i),
                         UiAction::LoadLibrary => file_ops::load_excalidrawlib_async(),
                         _ => {}
