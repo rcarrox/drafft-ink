@@ -453,12 +453,12 @@ mod tests {
         );
         assert_eq!(
             friendly_math_to_latex("int(x^2,x,0,1)"),
-            r"\int_{0}^{1} x^2\,dx"
+            r"\int_{0}^{1} x^{2}\,dx"
         );
         assert_eq!(friendly_math_to_latex("vec(AB)"), r"\vec{AB}");
         assert_eq!(
             friendly_math_to_latex("sum(i^2,i,1,n)"),
-            r"\sum_{i=1}^{n} i^2"
+            r"\sum_{i=1}^{n} i^{2}"
         );
         assert_eq!(
             friendly_math_to_latex("lim(sin(x)/x,x,0)"),
