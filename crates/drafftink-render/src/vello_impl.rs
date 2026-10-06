@@ -389,10 +389,9 @@ impl VelloRenderer {
         if bytes.is_empty() {
             return;
         }
-        self.font_cx.collection.register_fonts(
-            vello::peniko::Blob::new(std::sync::Arc::new(bytes)),
-            None,
-        );
+        self.font_cx
+            .collection
+            .register_fonts(vello::peniko::Blob::new(std::sync::Arc::new(bytes)), None);
         self.text_cache.clear();
     }
 
@@ -647,7 +646,7 @@ impl VelloRenderer {
 
         // For hand-drawn style, draw multiple strokes like rough.js
         if roughness > 0.0 {
-            let stroke = Stroke::new(style.stroke_width);
+            let stroke = outline_stroke(style.stroke_width, style.stroke_style);
 
             // First stroke
             let path1 = self.get_cached_hand_drawn(shape_id, path, roughness, seed, 0);
@@ -670,7 +669,7 @@ impl VelloRenderer {
             );
         } else {
             // Clean stroke for Architect mode
-            let stroke = Stroke::new(style.stroke_width);
+            let stroke = outline_stroke(style.stroke_width, style.stroke_style);
             self.scene
                 .stroke(&stroke, transform, style.stroke_with_opacity(), None, path);
         }
@@ -687,21 +686,12 @@ impl VelloRenderer {
         let roughness = style.sloppiness.roughness();
         let seed = style.seed;
 
-        // Create stroke with dash pattern based on stroke_style
-        let mut stroke = Stroke::new(style.stroke_width);
-        match stroke_style {
-            StrokeStyle::Solid => {}
-            StrokeStyle::Dashed => {
-                let dash_len = style.stroke_width * 4.0;
-                let gap_len = style.stroke_width * 2.0;
-                stroke = stroke.with_dashes(0.0, [dash_len, gap_len]);
-            }
-            StrokeStyle::Dotted => {
-                let dot_len = style.stroke_width;
-                let gap_len = style.stroke_width * 2.0;
-                stroke = stroke.with_dashes(0.0, [dot_len, gap_len]);
-            }
-        }
+        let pattern = if style.stroke_style != StrokeStyle::Solid {
+            style.stroke_style
+        } else {
+            stroke_style
+        };
+        let stroke = outline_stroke(style.stroke_width, pattern);
 
         if roughness > 0.0 {
             let path1 = apply_hand_drawn_effect(path, roughness, self.zoom, seed, 0);
@@ -881,45 +871,44 @@ impl VelloRenderer {
         let brush = Brush::Solid(style.stroke_with_opacity());
         let font_size = text.font_size as f32;
 
-        let (font_name, parley_weight, is_italic) = if let Some(custom) = text.custom_font.as_deref() {
-            (custom, parley::FontWeight::NORMAL, false)
-        } else {
-            match (&text.font_family, &text.font_weight) {
-                (FontFamily::GelPen, FontWeight::Light) => {
-                    ("GelPenLight", parley::FontWeight::NORMAL, false)
+        let (font_name, parley_weight, is_italic) =
+            if let Some(custom) = text.custom_font.as_deref() {
+                (custom, parley::FontWeight::NORMAL, false)
+            } else {
+                match (&text.font_family, &text.font_weight) {
+                    (FontFamily::GelPen, FontWeight::Light) => {
+                        ("GelPenLight", parley::FontWeight::NORMAL, false)
+                    }
+                    (FontFamily::GelPen, FontWeight::Regular) => {
+                        ("GelPen", parley::FontWeight::NORMAL, false)
+                    }
+                    (FontFamily::GelPen, FontWeight::Heavy) => {
+                        ("GelPenHeavy", parley::FontWeight::NORMAL, false)
+                    }
+                    (FontFamily::NotoSans, FontWeight::Light) => {
+                        ("Noto Sans", parley::FontWeight::NORMAL, true)
+                    }
+                    (FontFamily::NotoSans, FontWeight::Regular) => {
+                        ("Noto Sans", parley::FontWeight::NORMAL, false)
+                    }
+                    (FontFamily::NotoSans, FontWeight::Heavy) => {
+                        ("Noto Sans", parley::FontWeight::BOLD, false)
+                    }
+                    (FontFamily::GelPenSerif, FontWeight::Light) => {
+                        ("GelPenSerifLight", parley::FontWeight::NORMAL, false)
+                    }
+                    (FontFamily::GelPenSerif, FontWeight::Regular) => {
+                        ("GelPenSerif", parley::FontWeight::NORMAL, false)
+                    }
+                    (FontFamily::GelPenSerif, FontWeight::Heavy) => {
+                        ("GelPenSerifHeavy", parley::FontWeight::NORMAL, false)
+                    }
+                    (FontFamily::VanillaExtract, _) => {
+                        ("Vanilla Extract", parley::FontWeight::NORMAL, false)
+                    }
+                    (FontFamily::XitsMath, _) => ("XITS Math", parley::FontWeight::NORMAL, false),
                 }
-                (FontFamily::GelPen, FontWeight::Regular) => {
-                    ("GelPen", parley::FontWeight::NORMAL, false)
-                }
-                (FontFamily::GelPen, FontWeight::Heavy) => {
-                    ("GelPenHeavy", parley::FontWeight::NORMAL, false)
-                }
-                (FontFamily::NotoSans, FontWeight::Light) => {
-                    ("Noto Sans", parley::FontWeight::NORMAL, true)
-                }
-                (FontFamily::NotoSans, FontWeight::Regular) => {
-                    ("Noto Sans", parley::FontWeight::NORMAL, false)
-                }
-                (FontFamily::NotoSans, FontWeight::Heavy) => {
-                    ("Noto Sans", parley::FontWeight::BOLD, false)
-                }
-                (FontFamily::GelPenSerif, FontWeight::Light) => {
-                    ("GelPenSerifLight", parley::FontWeight::NORMAL, false)
-                }
-                (FontFamily::GelPenSerif, FontWeight::Regular) => {
-                    ("GelPenSerif", parley::FontWeight::NORMAL, false)
-                }
-                (FontFamily::GelPenSerif, FontWeight::Heavy) => {
-                    ("GelPenSerifHeavy", parley::FontWeight::NORMAL, false)
-                }
-                (FontFamily::VanillaExtract, _) => {
-                    ("Vanilla Extract", parley::FontWeight::NORMAL, false)
-                }
-                (FontFamily::XitsMath, _) => {
-                    ("XITS Math", parley::FontWeight::NORMAL, false)
-                }
-            }
-        };
+            };
 
         let mut builder =
             self.layout_cx
@@ -1082,14 +1071,19 @@ impl VelloRenderer {
 
         // Calculate the transform to scale and position the image
         let bounds = image.bounds();
-        let scale_x = bounds.width() / image_data.width as f64;
-        let scale_y = bounds.height() / image_data.height as f64;
+        let scale_x = bounds.width() / (image.crop.width() * image_data.width as f64);
+        let scale_y = bounds.height() / (image.crop.height() * image_data.height as f64);
 
         let image_transform = transform
-            * Affine::translate((bounds.x0, bounds.y0))
+            * Affine::translate((
+                bounds.x0 - image.crop.x0 * image_data.width as f64 * scale_x,
+                bounds.y0 - image.crop.y0 * image_data.height as f64 * scale_y,
+            ))
             * Affine::scale_non_uniform(scale_x, scale_y);
 
+        self.scene.push_clip_layer(transform, &bounds);
         self.scene.draw_image(&image_data.into(), image_transform);
+        self.scene.pop_layer();
     }
 
     /// Render a placeholder for images that couldn't be loaded.
@@ -1243,7 +1237,9 @@ impl VelloRenderer {
 
         // Determine font name and parley weight based on family and weight
         // Use same logic as render_text - all Roboto variants use "Roboto" family with weight
-        let (font_name, parley_weight, is_italic) = if let Some(custom) = text.custom_font.as_deref() {
+        let (font_name, parley_weight, is_italic) = if let Some(custom) =
+            text.custom_font.as_deref()
+        {
             (custom, parley::FontWeight::NORMAL, false)
         } else {
             match (&text.font_family, &text.font_weight) {
@@ -1277,9 +1273,7 @@ impl VelloRenderer {
                 (ShapeFontFamily::VanillaExtract, _) => {
                     ("Vanilla Extract", parley::FontWeight::NORMAL, false)
                 }
-                (ShapeFontFamily::XitsMath, _) => {
-                    ("XITS Math", parley::FontWeight::NORMAL, false)
-                }
+                (ShapeFontFamily::XitsMath, _) => ("XITS Math", parley::FontWeight::NORMAL, false),
             }
         };
 
@@ -2425,6 +2419,18 @@ impl VelloRenderer {
                 &handle_rect.to_path(0.1),
             );
         }
+    }
+}
+
+fn outline_stroke(width: f64, pattern: StrokeStyle) -> Stroke {
+    let stroke = Stroke::new(width);
+    match pattern {
+        StrokeStyle::Solid => stroke,
+        StrokeStyle::Dashed => stroke.with_dashes(0.0, [width * 6.0, width * 3.0]),
+        StrokeStyle::DashedShort => stroke.with_dashes(0.0, [width * 2.0, width * 2.0]),
+        StrokeStyle::Dotted => stroke
+            .with_caps(kurbo::Cap::Round)
+            .with_dashes(0.0, [0.01, width * 2.5]),
     }
 }
 

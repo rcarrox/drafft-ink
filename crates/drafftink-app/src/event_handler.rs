@@ -4,8 +4,9 @@ use drafftink_core::canvas::Canvas;
 use drafftink_core::input::InputState;
 use drafftink_core::selection::{Corner, HandleKind};
 use drafftink_core::selection::{
-    HANDLE_HIT_TOLERANCE, ManipulationState, MultiMoveState, apply_manipulation, apply_rotation,
-    get_handles, get_manipulation_target_position, hit_test_boundary, hit_test_handles,
+    HANDLE_HIT_TOLERANCE, ManipulationState, MultiMoveState, apply_image_crop, apply_manipulation,
+    apply_rotation, get_handles, get_manipulation_target_position, hit_test_boundary,
+    hit_test_handles,
 };
 use drafftink_core::shapes::{
     Freehand, Math, Shape, ShapeId, ShapeStyle, ShapeTrait, Sloppiness, Text,
@@ -785,17 +786,14 @@ impl EventHandler {
 
             // Check if shape actually changed (delta is non-zero)
             if delta.x.abs() > 0.1 || delta.y.abs() > 0.1 {
-                // Push undo state before finalizing (restore original, then re-apply)
-                // First restore the original shape
-                if let Some(shape) = canvas.document.get_shape_mut(manip.shape_id) {
-                    *shape = manip.original_shape.clone();
-                }
-                // Now push undo and apply the final change
-                canvas.document.push_undo();
-                let new_shape =
-                    apply_manipulation(&manip.original_shape, manip.handle, delta, input.shift());
-                if let Some(shape) = canvas.document.get_shape_mut(manip.shape_id) {
-                    *shape = new_shape;
+                if let Some(final_shape) = canvas.document.get_shape(manip.shape_id).cloned() {
+                    if let Some(shape) = canvas.document.get_shape_mut(manip.shape_id) {
+                        *shape = manip.original_shape;
+                    }
+                    canvas.document.push_undo();
+                    if let Some(shape) = canvas.document.get_shape_mut(manip.shape_id) {
+                        *shape = final_shape;
+                    }
                 }
             }
             return;
@@ -1253,12 +1251,19 @@ impl EventHandler {
             );
 
             // Apply manipulation preview to the shape
-            let new_shape = apply_manipulation(
-                &manip.original_shape,
-                manip.handle,
-                adjusted_delta,
-                input.shift(),
-            );
+            let new_shape = if input.ctrl()
+                && matches!(manip.original_shape, Shape::Image(_))
+                && matches!(manip.handle, Some(HandleKind::Corner(_)))
+            {
+                apply_image_crop(&manip.original_shape, manip.handle, adjusted_delta)
+            } else {
+                apply_manipulation(
+                    &manip.original_shape,
+                    manip.handle,
+                    adjusted_delta,
+                    input.shift(),
+                )
+            };
             if let Some(shape) = canvas.document.get_shape_mut(manip.shape_id) {
                 *shape = new_shape;
             }
@@ -1496,13 +1501,10 @@ impl EventHandler {
                     .document
                     .shapes_ordered()
                     .filter_map(|shape| match shape {
-                        Shape::Freehand(freehand) => split_freehand_by_eraser(
-                            freehand,
-                            erase_start,
-                            erase_end,
-                            radius,
-                        )
-                        .map(|parts| (shape.id(), parts)),
+                        Shape::Freehand(freehand) => {
+                            split_freehand_by_eraser(freehand, erase_start, erase_end, radius)
+                                .map(|parts| (shape.id(), parts))
+                        }
                         _ => None,
                     })
                     .collect();

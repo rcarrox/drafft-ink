@@ -20,7 +20,7 @@
 
 use crate::shapes::{
     Arrow, Ellipse, FillPattern, Freehand, Group, Line, PathStyle, Rectangle, SerializableColor,
-    Shape, ShapeStyle, Sloppiness, Text,
+    Shape, ShapeStyle, Sloppiness, StrokeStyle, Text,
 };
 use kurbo::Point;
 use serde_json::Value;
@@ -301,6 +301,7 @@ fn parse_style(elem: &Value) -> ShapeStyle {
     ShapeStyle {
         stroke_color,
         stroke_width,
+        stroke_style: StrokeStyle::default(),
         fill_color,
         fill_pattern,
         sloppiness,

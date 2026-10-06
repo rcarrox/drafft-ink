@@ -400,15 +400,11 @@ pub fn get_manipulation_target_position(shape: &Shape, handle: Option<HandleKind
             }
             _ => shape.bounds().center(),
         },
-        Some(HandleKind::Corner(corner)) => {
-            let bounds = shape.bounds();
-            match corner {
-                Corner::TopLeft => Point::new(bounds.x0, bounds.y0),
-                Corner::TopRight => Point::new(bounds.x1, bounds.y0),
-                Corner::BottomLeft => Point::new(bounds.x0, bounds.y1),
-                Corner::BottomRight => Point::new(bounds.x1, bounds.y1),
-            }
-        }
+        Some(kind @ HandleKind::Corner(_)) => get_handles(shape)
+            .iter()
+            .find(|h| h.kind == kind)
+            .map(|h| h.position)
+            .unwrap_or(shape.bounds().center()),
         Some(HandleKind::Edge(edge)) => {
             let bounds = shape.bounds();
             match edge {
@@ -777,6 +773,11 @@ fn apply_corner_resize_freehand(
     }
 }
 
+fn rotate_delta(delta: kurbo::Vec2, angle: f64) -> kurbo::Vec2 {
+    let (sin, cos) = angle.sin_cos();
+    kurbo::Vec2::new(cos * delta.x - sin * delta.y, sin * delta.x + cos * delta.y)
+}
+
 /// Apply corner resize to an image.
 fn apply_corner_resize_image(
     image: &mut crate::shapes::Image,
@@ -784,58 +785,63 @@ fn apply_corner_resize_image(
     delta: kurbo::Vec2,
     keep_aspect_ratio: bool,
 ) {
-    let bounds = image.bounds();
-    let (new_x0, new_y0, new_x1, new_y1) = match corner {
-        Corner::TopLeft => (
-            bounds.x0 + delta.x,
-            bounds.y0 + delta.y,
-            bounds.x1,
-            bounds.y1,
-        ),
-        Corner::TopRight => (
-            bounds.x0,
-            bounds.y0 + delta.y,
-            bounds.x1 + delta.x,
-            bounds.y1,
-        ),
-        Corner::BottomLeft => (
-            bounds.x0 + delta.x,
-            bounds.y0,
-            bounds.x1,
-            bounds.y1 + delta.y,
-        ),
-        Corner::BottomRight => (
-            bounds.x0,
-            bounds.y0,
-            bounds.x1 + delta.x,
-            bounds.y1 + delta.y,
-        ),
-    };
-
-    let (x0, x1) = if new_x0 < new_x1 {
-        (new_x0, new_x1)
-    } else {
-        (new_x1, new_x0)
-    };
-    let (y0, y1) = if new_y0 < new_y1 {
-        (new_y0, new_y1)
-    } else {
-        (new_y1, new_y0)
-    };
-
-    let (width, height) = if keep_aspect_ratio {
-        let aspect = bounds.width() / bounds.height().max(0.1);
-        let new_width = (x1 - x0).max(1.0);
-        let new_height = (y1 - y0).max(1.0);
-        let size = new_width.max(new_height);
-        (size, size / aspect)
-    } else {
-        ((x1 - x0).max(1.0), (y1 - y0).max(1.0))
-    };
-
-    image.position = Point::new(x0, y0);
+    let local = rotate_delta(delta, -image.rotation);
+    let left = matches!(corner, Corner::TopLeft | Corner::BottomLeft);
+    let top = matches!(corner, Corner::TopLeft | Corner::TopRight);
+    let mut width = (image.width + if left { -local.x } else { local.x }).max(1.0);
+    let mut height = (image.height + if top { -local.y } else { local.y }).max(1.0);
+    if keep_aspect_ratio {
+        let scale = (width / image.width).max(height / image.height);
+        width = image.width * scale;
+        height = image.height * scale;
+    }
+    // The opposite corner stays fixed in world space. A changed center must
+    // move by the rotated half-size delta, not the unrotated mouse delta.
+    let shift = kurbo::Vec2::new(
+        (width - image.width) * if left { -0.5 } else { 0.5 },
+        (height - image.height) * if top { -0.5 } else { 0.5 },
+    );
+    let center = image.as_rect().center() + rotate_delta(shift, image.rotation);
     image.width = width;
     image.height = height;
+    image.position = Point::new(center.x - width / 2.0, center.y - height / 2.0);
+}
+
+/// Manipulate image source boundaries without resampling or stretching pixels.
+/// All deltas are measured from the original drag snapshot, as for resizing.
+pub fn apply_image_crop(shape: &Shape, handle: Option<HandleKind>, delta: kurbo::Vec2) -> Shape {
+    let (Shape::Image(original), Some(HandleKind::Corner(corner))) = (shape, handle) else {
+        return shape.clone();
+    };
+    let mut image = original.clone();
+    let local = rotate_delta(delta, -image.rotation);
+    let left = matches!(corner, Corner::TopLeft | Corner::BottomLeft);
+    let top = matches!(corner, Corner::TopLeft | Corner::TopRight);
+    let sx = image.width / image.crop.width();
+    let sy = image.height / image.crop.height();
+    let min_x = (1.0 / image.source_width.max(1) as f64).min(image.crop.width());
+    let min_y = (1.0 / image.source_height.max(1) as f64).min(image.crop.height());
+    let mut crop = image.crop;
+    if left {
+        crop.x0 = (crop.x0 + local.x / sx).clamp(0.0, crop.x1 - min_x);
+    } else {
+        crop.x1 = (crop.x1 + local.x / sx).clamp(crop.x0 + min_x, 1.0);
+    }
+    if top {
+        crop.y0 = (crop.y0 + local.y / sy).clamp(0.0, crop.y1 - min_y);
+    } else {
+        crop.y1 = (crop.y1 + local.y / sy).clamp(crop.y0 + min_y, 1.0);
+    }
+    let shift = kurbo::Vec2::new(
+        (crop.center().x - image.crop.center().x) * sx,
+        (crop.center().y - image.crop.center().y) * sy,
+    );
+    let center = image.as_rect().center() + rotate_delta(shift, image.rotation);
+    image.crop = crop;
+    image.width = crop.width() * sx;
+    image.height = crop.height() * sy;
+    image.position = Point::new(center.x - image.width / 2.0, center.y - image.height / 2.0);
+    Shape::Image(image)
 }
 
 /// Apply corner resize to a group by scaling all children relative to group bounds.
@@ -1030,6 +1036,7 @@ mod tests {
             format: ImageFormat::Png,
             data_base64: String::new(),
             rotation: 0.0,
+            crop: Rect::new(0.0, 0.0, 1.0, 1.0),
             style: ShapeStyle::default(),
         };
         let shape = Shape::Image(image);
@@ -1068,5 +1075,156 @@ mod tests {
         } else {
             panic!("Expected Rectangle shape");
         }
+    }
+}
+
+#[cfg(test)]
+mod image_geometry_regressions {
+    use super::*;
+    use crate::canvas::CanvasDocument;
+    use crate::shapes::{Image, ImageFormat, StrokeStyle};
+
+    fn image(angle: f64) -> Shape {
+        let mut image = Image::new(
+            Point::new(20.0, 30.0),
+            &[1, 2, 3],
+            400,
+            200,
+            ImageFormat::Png,
+        )
+        .with_size(200.0, 100.0);
+        image.rotation = angle;
+        Shape::Image(image)
+    }
+    fn corner(shape: &Shape, kind: Corner) -> Point {
+        get_handles(shape)
+            .iter()
+            .find(|h| h.kind == HandleKind::Corner(kind))
+            .unwrap()
+            .position
+    }
+    fn opposite(c: Corner) -> Corner {
+        match c {
+            Corner::TopLeft => Corner::BottomRight,
+            Corner::TopRight => Corner::BottomLeft,
+            Corner::BottomLeft => Corner::TopRight,
+            Corner::BottomRight => Corner::TopLeft,
+        }
+    }
+    #[test]
+    fn rotated_resize_tracks_mouse_and_anchors_opposite_corner() {
+        for angle in [0.0, 0.7, std::f64::consts::FRAC_PI_2, 2.6] {
+            for c in [
+                Corner::TopLeft,
+                Corner::TopRight,
+                Corner::BottomLeft,
+                Corner::BottomRight,
+            ] {
+                let original = image(angle);
+                let delta = rotate_delta(kurbo::Vec2::new(12.0, 9.0), angle);
+                let resized =
+                    apply_manipulation(&original, Some(HandleKind::Corner(c)), delta, false);
+                assert!(corner(&resized, c).distance(corner(&original, c) + delta) < 1e-8);
+                assert!(
+                    corner(&resized, opposite(c)).distance(corner(&original, opposite(c))) < 1e-8
+                );
+            }
+        }
+    }
+    #[test]
+    fn crop_keeps_pixel_scale_and_rotated_anchor() {
+        for angle in [0.0, 0.7, std::f64::consts::FRAC_PI_2, 2.6] {
+            for c in [
+                Corner::TopLeft,
+                Corner::TopRight,
+                Corner::BottomLeft,
+                Corner::BottomRight,
+            ] {
+                let original = image(angle);
+                let dx = if matches!(c, Corner::TopLeft | Corner::BottomLeft) {
+                    20.0
+                } else {
+                    -20.0
+                };
+                let dy = if matches!(c, Corner::TopLeft | Corner::TopRight) {
+                    10.0
+                } else {
+                    -10.0
+                };
+                let delta = rotate_delta(kurbo::Vec2::new(dx, dy), angle);
+                let cropped = apply_image_crop(&original, Some(HandleKind::Corner(c)), delta);
+                assert!(corner(&cropped, c).distance(corner(&original, c) + delta) < 1e-8);
+                assert!(
+                    corner(&cropped, opposite(c)).distance(corner(&original, opposite(c))) < 1e-8
+                );
+                if let Shape::Image(i) = cropped {
+                    assert!((i.width / i.crop.width() - 200.0).abs() < 1e-8);
+                    assert!((i.height / i.crop.height() - 100.0).abs() < 1e-8);
+                    assert_eq!(i.data(), Some(vec![1, 2, 3]));
+                }
+            }
+        }
+    }
+    #[test]
+    fn crop_json_undo_redo_and_resize_preserve_source() {
+        let original = image(0.7);
+        let id = original.id();
+        let mut doc = CanvasDocument::new();
+        doc.add_shape(original.clone());
+        doc.push_undo();
+        let cropped = apply_image_crop(
+            &original,
+            Some(HandleKind::Corner(Corner::TopLeft)),
+            rotate_delta(kurbo::Vec2::new(30.0, 20.0), 0.7),
+        );
+        *doc.get_shape_mut(id).unwrap() = cropped.clone();
+        assert!(doc.undo());
+        assert_eq!(doc.get_shape(id).unwrap().bounds(), original.bounds());
+        assert!(doc.redo());
+        let restored = CanvasDocument::from_json(&doc.to_json().unwrap()).unwrap();
+        let resized = apply_manipulation(
+            restored.get_shape(id).unwrap(),
+            Some(HandleKind::Corner(Corner::BottomRight)),
+            kurbo::Vec2::new(10.0, 20.0),
+            false,
+        );
+        if let (Shape::Image(c), Shape::Image(r)) = (cropped, resized) {
+            assert_eq!(c.crop, r.crop);
+            assert_eq!(c.data_base64, r.data_base64);
+        } else {
+            panic!("image expected");
+        }
+    }
+    #[test]
+    fn stroke_styles_round_trip_and_old_documents_default_to_solid() {
+        for pattern in [
+            StrokeStyle::Solid,
+            StrokeStyle::Dashed,
+            StrokeStyle::DashedShort,
+            StrokeStyle::Dotted,
+        ] {
+            let mut shape =
+                Shape::Rectangle(crate::shapes::Rectangle::new(Point::ZERO, 40.0, 20.0));
+            shape.style_mut().stroke_style = pattern;
+            let mut doc = CanvasDocument::new();
+            let id = shape.id();
+            doc.add_shape(shape);
+            let json = doc.to_json().unwrap();
+            let loaded = CanvasDocument::from_json(&json).unwrap();
+            assert_eq!(loaded.get_shape(id).unwrap().style().stroke_style, pattern);
+        }
+        let mut value = serde_json::to_value(image(0.0)).unwrap();
+        let i = value.get_mut("Image").unwrap();
+        i.as_object_mut().unwrap().remove("crop");
+        i.get_mut("style")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove("stroke_style");
+        let Shape::Image(i) = serde_json::from_value::<Shape>(value).unwrap() else {
+            panic!()
+        };
+        assert_eq!(i.crop, Rect::new(0.0, 0.0, 1.0, 1.0));
+        assert_eq!(i.style.stroke_style, StrokeStyle::Solid);
     }
 }

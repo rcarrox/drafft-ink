@@ -149,6 +149,7 @@ pub enum StrokeStyle {
     Solid,
     Dashed,
     Dotted,
+    DashedShort,
 }
 
 impl StrokeStyle {
@@ -156,7 +157,8 @@ impl StrokeStyle {
     pub fn next(self) -> Self {
         match self {
             StrokeStyle::Solid => StrokeStyle::Dashed,
-            StrokeStyle::Dashed => StrokeStyle::Dotted,
+            StrokeStyle::Dashed => StrokeStyle::DashedShort,
+            StrokeStyle::DashedShort => StrokeStyle::Dotted,
             StrokeStyle::Dotted => StrokeStyle::Solid,
         }
     }
@@ -169,6 +171,9 @@ pub struct ShapeStyle {
     pub stroke_color: SerializableColor,
     /// Stroke width.
     pub stroke_width: f64,
+    /// Outline pattern, including rectangle and ellipse contours.
+    #[serde(default)]
+    pub stroke_style: StrokeStyle,
     /// Fill color (None = no fill).
     pub fill_color: Option<SerializableColor>,
     /// Fill pattern style.
@@ -255,6 +260,7 @@ impl Default for ShapeStyle {
         Self {
             stroke_color: SerializableColor::black(),
             stroke_width: 2.0,
+            stroke_style: StrokeStyle::Solid,
             fill_color: None,
             fill_pattern: FillPattern::default(),
             sloppiness: Sloppiness::default(),

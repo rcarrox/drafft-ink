@@ -74,21 +74,49 @@ enum ScriptMode {
 
 fn superscript_char(ch: char) -> char {
     match ch {
-        '0' => '\u{2070}', '1' => '\u{00B9}', '2' => '\u{00B2}', '3' => '\u{00B3}',
-        '4' => '\u{2074}', '5' => '\u{2075}', '6' => '\u{2076}', '7' => '\u{2077}',
-        '8' => '\u{2078}', '9' => '\u{2079}', '+' => '\u{207A}', '-' => '\u{207B}',
-        '=' => '\u{207C}', '(' => '\u{207D}', ')' => '\u{207E}', 'n' | 'N' => '\u{207F}',
-        'i' | 'I' => '\u{2071}', 'x' | 'X' => '\u{02E3}', other => other,
+        '0' => '\u{2070}',
+        '1' => '\u{00B9}',
+        '2' => '\u{00B2}',
+        '3' => '\u{00B3}',
+        '4' => '\u{2074}',
+        '5' => '\u{2075}',
+        '6' => '\u{2076}',
+        '7' => '\u{2077}',
+        '8' => '\u{2078}',
+        '9' => '\u{2079}',
+        '+' => '\u{207A}',
+        '-' => '\u{207B}',
+        '=' => '\u{207C}',
+        '(' => '\u{207D}',
+        ')' => '\u{207E}',
+        'n' | 'N' => '\u{207F}',
+        'i' | 'I' => '\u{2071}',
+        'x' | 'X' => '\u{02E3}',
+        other => other,
     }
 }
 
 fn subscript_char(ch: char) -> char {
     match ch {
-        '0' => '\u{2080}', '1' => '\u{2081}', '2' => '\u{2082}', '3' => '\u{2083}',
-        '4' => '\u{2084}', '5' => '\u{2085}', '6' => '\u{2086}', '7' => '\u{2087}',
-        '8' => '\u{2088}', '9' => '\u{2089}', '+' => '\u{208A}', '-' => '\u{208B}',
-        '=' => '\u{208C}', '(' => '\u{208D}', ')' => '\u{208E}', 'n' | 'N' => '\u{2099}',
-        'i' | 'I' => '\u{1D62}', 'x' | 'X' => '\u{2093}', other => other,
+        '0' => '\u{2080}',
+        '1' => '\u{2081}',
+        '2' => '\u{2082}',
+        '3' => '\u{2083}',
+        '4' => '\u{2084}',
+        '5' => '\u{2085}',
+        '6' => '\u{2086}',
+        '7' => '\u{2087}',
+        '8' => '\u{2088}',
+        '9' => '\u{2089}',
+        '+' => '\u{208A}',
+        '-' => '\u{208B}',
+        '=' => '\u{208C}',
+        '(' => '\u{208D}',
+        ')' => '\u{208E}',
+        'n' | 'N' => '\u{2099}',
+        'i' | 'I' => '\u{1D62}',
+        'x' | 'X' => '\u{2093}',
+        other => other,
     }
 }
 
@@ -556,5 +584,38 @@ impl TextEditState {
 impl Default for TextEditState {
     fn default() -> Self {
         Self::new("", 32.0)
+    }
+}
+
+#[cfg(test)]
+mod escape_regression {
+    use super::*;
+    #[test]
+    fn escape_keeps_the_current_text() {
+        let mut fonts = FontContext::new();
+        let mut layouts = LayoutContext::new();
+        let mut editor = TextEditState::new("Bonjour", 24.0);
+        editor.handle_key(
+            TextKey::End,
+            TextModifiers::default(),
+            &mut fonts,
+            &mut layouts,
+        );
+        editor.handle_key(
+            TextKey::Character(" monde".into()),
+            TextModifiers::default(),
+            &mut fonts,
+            &mut layouts,
+        );
+        assert_eq!(
+            editor.handle_key(
+                TextKey::Escape,
+                TextModifiers::default(),
+                &mut fonts,
+                &mut layouts
+            ),
+            TextEditResult::ExitEdit
+        );
+        assert_eq!(editor.text(), "Bonjour monde");
     }
 }

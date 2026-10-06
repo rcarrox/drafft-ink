@@ -1,10 +1,10 @@
-# DrafftInk Local 0.5.0
+# DrafftInk Local 0.6.0
 
 Version personnelle du tableau DrafftInk, sans collaboration reseau.
 
 ## Utilisation sous Windows
 
-Le ZIP **DrafftInk_Windows_Portable_0.5.0.zip** produit par GitHub Actions est deja compile.
+Le ZIP **DrafftInk_Windows_Portable_0.6.0.zip** produit par GitHub Actions est deja compile.
 Il ne faut installer ni Rust, ni wasm-pack, ni Visual Studio.
 
 1. Decompresser le ZIP.
@@ -26,8 +26,8 @@ Workflow : `.github/workflows/build-portable.yml`.
 
 A chaque push sur `main`, deux artefacts sont produits :
 
-- `DrafftInk-Windows-Portable-0.5.0` : version locale Windows precompilee ;
-- `DrafftInk-Web-0.5.0` : fichiers statiques a deposer sur un serveur web.
+- `DrafftInk-Windows-Portable-0.6.0` : version locale Windows precompilee ;
+- `DrafftInk-Web-0.6.0` : fichiers statiques a deposer sur un serveur web.
 
 ## Modifications de cette branche
 
@@ -76,7 +76,7 @@ Chrome et Edge recents sont les cibles prioritaires car DrafftInk utilise WebGPU
 - fractions imbriquees possibles sans parenthese, avec un espace par niveau de sortie.
 
 
-## Nouveautes 0.5.0
+## Nouveautes 0.6.0
 
 - champs de raccourcis Settings lisibles : texte noir sur fond blanc ;
 - raccourcis par defaut : D = Draw, M = Math, H = Pan ;
@@ -87,3 +87,11 @@ Chrome et Edge recents sont les cibles prioritaires car DrafftInk utilise WebGPU
 - ajout de plusieurs Canvas : + Canvas, fermeture, renommage au double-clic ou avec le crayon ;
 - Architect devient le style par defaut des formes geometriques ;
 - Shift + Ellipse = cercle, Shift + Rectangle = carre, Shift + Line/Arrow = angle snap.
+
+## Nouveautes 0.6.0
+
+- Math : caret noir clignotant, exposant `^` (touche morte francaise comprise), indice `_`, raccourcis Ctrl+haut/bas sans deplacement du curseur.
+- Escape conserve le texte ou la formule et termine l'edition.
+- Properties : Solid, Dashed 1 (long), Dashed 2 (court), Dotted sous Stroke width.
+- Images tournees : resize dans le repere local, coin oppose fixe.
+- Ctrl + glisser une poignee d'image : rognage non destructif, y compris apres rotation. Relacher Ctrl et glisser pour redimensionner. Undo/Redo et JSON conservent le rognage et les pixels source.

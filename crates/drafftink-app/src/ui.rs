@@ -1,6 +1,8 @@
 //! UI components using egui.
 
-use drafftink_core::shapes::{FillPattern, FontFamily, FontWeight, Shape, ShapeId, ShapeStyle};
+use drafftink_core::shapes::{
+    FillPattern, FontFamily, FontWeight, Shape, ShapeId, ShapeStyle, StrokeStyle,
+};
 use drafftink_core::sync::ConnectionState;
 use drafftink_core::tools::{EraserMode, ToolKind};
 use drafftink_render::GridStyle;
@@ -11,7 +13,9 @@ use egui::{
 
 #[cfg(target_arch = "wasm32")]
 use crate::app::file_ops;
-use crate::math_input::{friendly_math_to_latex, normalize_friendly_math_input, open_structured_depth};
+use crate::math_input::{
+    friendly_math_to_latex, normalize_friendly_math_input, open_structured_depth,
+};
 use crate::settings::UserSettings;
 
 // Re-export from widgets crate for consistent styling
@@ -119,7 +123,11 @@ impl SelectedShapeProps {
                 selection_count: count,
                 is_line: true,
                 path_style: line.path_style as u8,
-                stroke_style: line.stroke_style as u8,
+                stroke_style: if line.style.stroke_style == StrokeStyle::Solid {
+                    line.stroke_style
+                } else {
+                    line.style.stroke_style
+                } as u8,
                 sloppiness,
                 fill_pattern,
                 has_fill,
@@ -131,7 +139,11 @@ impl SelectedShapeProps {
                 selection_count: count,
                 is_arrow: true,
                 path_style: arrow.path_style as u8,
-                stroke_style: arrow.stroke_style as u8,
+                stroke_style: if arrow.style.stroke_style == StrokeStyle::Solid {
+                    arrow.stroke_style
+                } else {
+                    arrow.style.stroke_style
+                } as u8,
                 sloppiness,
                 fill_pattern,
                 has_fill,
@@ -250,6 +262,7 @@ pub struct UiState {
     pub fill_color: Option<Color32>,
     /// Current stroke width for new shapes.
     pub stroke_width: f32,
+    pub stroke_style: StrokeStyle,
     /// Number of selected shapes.
     pub selection_count: usize,
     /// Whether the hamburger menu is open.
@@ -323,6 +336,8 @@ pub struct UiState {
     pub last_picked_fill: Option<Color32>,
     /// Inline math editor state.
     pub math_editor: Option<MathEditorState>,
+    /// A French dead caret was already inserted; strip the composition echo.
+    pub math_dead_caret: bool,
     /// Screen position of the math object currently being edited.
     pub math_editor_screen_pos: Option<Pos2>,
     /// Local fonts exposed by Chrome/Edge: (family, PostScript name).
@@ -348,6 +363,7 @@ impl Default for UiState {
             stroke_color: TAILWIND_COLORS[11].shades[6], // Indigo 500
             fill_color: None,
             stroke_width: 2.0,
+            stroke_style: StrokeStyle::Solid,
             selection_count: 0,
             menu_open: false,
             color_popover: ColorPopover::None,
@@ -385,6 +401,7 @@ impl Default for UiState {
             last_picked_stroke: None,
             last_picked_fill: None,
             math_editor: None,
+            math_dead_caret: false,
             math_editor_screen_pos: None,
             local_fonts: Vec::new(),
             local_fonts_loading: false,
@@ -402,6 +419,7 @@ impl UiState {
         let sc = style.stroke_color;
         self.stroke_color = Color32::from_rgba_unmultiplied(sc.r, sc.g, sc.b, sc.a);
         self.stroke_width = style.stroke_width as f32;
+        self.stroke_style = style.stroke_style;
         self.fill_color = style
             .fill_color
             .map(|fc| Color32::from_rgba_unmultiplied(fc.r, fc.g, fc.b, fc.a));
@@ -421,6 +439,7 @@ impl UiState {
                 self.stroke_color.a(),
             ),
             stroke_width: self.stroke_width as f64,
+            stroke_style: self.stroke_style,
             fill_color: self
                 .fill_color
                 .map(|c| SerializableColor::new(c.r(), c.g(), c.b(), c.a())),
@@ -444,6 +463,7 @@ pub enum UiAction {
     SetFillColor(Option<Color32>),
     /// Change stroke width.
     SetStrokeWidth(f32),
+    SetOutlinePattern(StrokeStyle),
     /// Save document with current name to local storage.
     SaveLocal,
     /// Show save dialog to rename and save document locally.
@@ -596,7 +616,7 @@ pub enum UiAction {
     PreviewMath(ShapeId, String, String),
     /// Commit/close the current inline math editor.
     /// Carries the pre-edit state so undo can be created only when the edit is accepted.
-    FinishMath(ShapeId, String, String, bool),
+    FinishMath(ShapeId, String, String, bool, String, String),
     /// Cancel math editing and restore the previous content, deleting a new formula.
     CancelMath(ShapeId, String, String, bool),
 }
@@ -1304,6 +1324,26 @@ fn render_properties_panel(ctx: &Context, ui_state: &mut UiState) -> Option<UiAc
                                 }
                             }
                         });
+                        ui.add_space(6.0);
+                        widgets_section_label(ui, "Stroke style");
+                        let patterns = [
+                            (StrokeStyle::Solid, "Solid"),
+                            (StrokeStyle::Dashed, "Dashed 1 — long"),
+                            (StrokeStyle::DashedShort, "Dashed 2 — short"),
+                            (StrokeStyle::Dotted, "Dotted"),
+                        ];
+                        let label = patterns.iter().find(|(p, _)| *p == ui_state.stroke_style)
+                            .map(|(_, label)| *label).unwrap_or("Solid");
+                        egui::ComboBox::from_id_salt("outline_pattern")
+                            .selected_text(label)
+                            .show_ui(ui, |ui| {
+                                for (pattern, label) in patterns {
+                                    if ui.selectable_label(ui_state.stroke_style == pattern,
+                                        label).clicked() {
+                                        action = Some(UiAction::SetOutlinePattern(pattern));
+                                    }
+                                }
+                            });
                     });
                 });
             });
@@ -2212,10 +2252,7 @@ fn render_file_menu(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
 
         // Close menu when clicking outside
         if ctx.input(|i| i.pointer.any_click()) {
-            let buttons_rect = Rect::from_min_size(
-                Pos2::new(12.0, 12.0),
-                Vec2::new(48.0, 48.0),
-            );
+            let buttons_rect = Rect::from_min_size(Pos2::new(12.0, 12.0), Vec2::new(48.0, 48.0));
             let menu_rect = Rect::from_min_size(
                 Pos2::new(12.0, 56.0),
                 Vec2::new(180.0, 250.0), // Shorter now without collaboration section
@@ -2802,18 +2839,32 @@ fn render_shortcuts_modal(ctx: &Context, ui_state: &mut UiState) {
                         .show(ui, |ui| {
                             for shortcut in ShortcutRegistry::all() {
                                 let configured_key = match shortcut.description {
-                                    "Selection tool" => Some(ui_state.settings.shortcut_select.as_str()),
+                                    "Selection tool" => {
+                                        Some(ui_state.settings.shortcut_select.as_str())
+                                    }
                                     "Pan tool" => Some(ui_state.settings.shortcut_pan.as_str()),
                                     "Draw tool" => Some(ui_state.settings.shortcut_draw.as_str()),
-                                    "Highlighter tool" => Some(ui_state.settings.shortcut_highlighter.as_str()),
-                                    "Eraser tool (Classic / Manual)" => Some(ui_state.settings.shortcut_eraser.as_str()),
+                                    "Highlighter tool" => {
+                                        Some(ui_state.settings.shortcut_highlighter.as_str())
+                                    }
+                                    "Eraser tool (Classic / Manual)" => {
+                                        Some(ui_state.settings.shortcut_eraser.as_str())
+                                    }
                                     "Text tool" => Some(ui_state.settings.shortcut_text.as_str()),
-                                    "Math formula tool" => Some(ui_state.settings.shortcut_math.as_str()),
-                                    "Rectangle tool" => Some(ui_state.settings.shortcut_rectangle.as_str()),
-                                    "Ellipse tool" => Some(ui_state.settings.shortcut_ellipse.as_str()),
+                                    "Math formula tool" => {
+                                        Some(ui_state.settings.shortcut_math.as_str())
+                                    }
+                                    "Rectangle tool" => {
+                                        Some(ui_state.settings.shortcut_rectangle.as_str())
+                                    }
+                                    "Ellipse tool" => {
+                                        Some(ui_state.settings.shortcut_ellipse.as_str())
+                                    }
                                     "Arrow tool" => Some(ui_state.settings.shortcut_arrow.as_str()),
                                     "Line tool" => Some(ui_state.settings.shortcut_line.as_str()),
-                                    "Laser pointer" => Some(ui_state.settings.shortcut_laser.as_str()),
+                                    "Laser pointer" => {
+                                        Some(ui_state.settings.shortcut_laser.as_str())
+                                    }
                                     _ => None,
                                 };
                                 let shortcut_text = configured_key
@@ -3139,7 +3190,8 @@ fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAct
         .order(egui::Order::Middle)
         .show(ctx, |ui| {
             let rect = ctx.input(|i| i.content_rect());
-            ui.painter().rect_filled(rect, 0.0, Color32::from_black_alpha(65));
+            ui.painter()
+                .rect_filled(rect, 0.0, Color32::from_black_alpha(65));
         });
 
     egui::Area::new(egui::Id::new("settings_dialog"))
@@ -3333,10 +3385,15 @@ fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAct
 /// The formula itself is updated live, so there is no blocking modal/panel.
 fn render_math_editor(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
     let screen_rect = ctx.input(|i| i.content_rect());
-    let pos = ui_state.math_editor_screen_pos.unwrap_or(screen_rect.center());
+    let pos = ui_state
+        .math_editor_screen_pos
+        .unwrap_or(screen_rect.center());
     let x = pos.x.clamp(12.0, (screen_rect.right() - 390.0).max(12.0));
     let y = (pos.y + 28.0).clamp(12.0, (screen_rect.bottom() - 72.0).max(12.0));
 
+    // Read completion keys before TextEdit or egui focus navigation consumes them.
+    let finish_requested =
+        ctx.input(|i| i.key_pressed(egui::Key::Escape) || i.key_pressed(egui::Key::Enter));
     let mut action = None;
     let mut close = false;
 
@@ -3354,22 +3411,46 @@ fn render_math_editor(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction>
                     .stroke(Stroke::new(1.0, Color32::from_gray(205)))
                     .inner_margin(Margin::symmetric(10, 8))
                     .show(ui, |ui| {
-                        let response = Frame::new()
+                        let edit_id = egui::Id::new(("math_source", shape_id));
+                        // Replace block-exit arrows with a text event so the widget
+                        // advances its cursor too. In the middle, arrows navigate normally.
+                        if let Some(state) = egui::TextEdit::load_state(ctx, edit_id) {
+                            let at_end = state.cursor.char_range().is_some_and(|r|
+                                r.is_empty() && r.primary.index == editor.input.chars().count());
+                            if at_end && open_structured_depth(&editor.input) > 0 {
+                                ui.input_mut(|i| {
+                                    for event in &mut i.events {
+                                        if matches!(event, egui::Event::Key { key: egui::Key::ArrowRight, pressed: true, modifiers, .. } if !modifiers.any()) {
+                                            *event = egui::Event::Text(" ".to_string());
+                                        }
+                                    }
+                                });
+                            }
+                        }
+                        // Egui may surrender focus at frame start on Escape. Restore
+                        // this active editor before processing any preceding text events.
+                        ui.memory_mut(|m| m.request_focus(edit_id));
+                        let mut output = Frame::new()
                             .fill(Color32::WHITE)
                             .corner_radius(CornerRadius::same(6))
                             .stroke(Stroke::new(1.0, Color32::from_gray(210)))
                             .inner_margin(Margin::symmetric(8, 5))
                             .show(ui, |ui| {
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut editor.input)
+                                ui.visuals_mut().text_cursor.stroke = Stroke::new(2.0, Color32::BLACK);
+                                ui.visuals_mut().text_cursor.blink = true;
+                                ui.visuals_mut().text_cursor.on_duration = 0.75;
+                                ui.visuals_mut().text_cursor.off_duration = 0.25;
+                                egui::TextEdit::singleline(&mut editor.input)
+                                        .id(edit_id)
                                         .desired_width(350.0)
                                         .font(egui::TextStyle::Body)
                                         .text_color(Color32::BLACK)
                                         .frame(false)
-                                        .hint_text("ex. 1/2 +3, x^2 +1, x_1, sqrt(x)"),
-                                )
+                                        .hint_text("ex. 1/2 +3, x^2 +1, x_1, sqrt(x)")
+                                        .show(ui)
                             })
                             .inner;
+                        let response = &output.response;
                         response.request_focus();
 
                         ui.label(
@@ -3384,6 +3465,17 @@ fn render_math_editor(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction>
                             // in the editable source (e.g. x⁴ becomes x^4 + a block-exit space).
                             let normalized = normalize_friendly_math_input(&editor.input);
                             if normalized != editor.input {
+                                if let Some(range) = output.state.cursor.char_range() {
+                                    let map_index = |index: usize| {
+                                        let prefix: String = editor.input.chars().take(index).collect();
+                                        normalize_friendly_math_input(&prefix).chars().count()
+                                    };
+                                    let mut mapped = range;
+                                    mapped.primary.index = map_index(range.primary.index);
+                                    mapped.secondary.index = map_index(range.secondary.index);
+                                    output.state.cursor.set_char_range(Some(mapped));
+                                    output.state.clone().store(ctx, edit_id);
+                                }
                                 editor.input = normalized;
                             }
                             let latex = friendly_math_to_latex(&editor.input);
@@ -3394,35 +3486,14 @@ fn render_math_editor(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction>
                             ));
                         }
 
-                        // Right Arrow behaves like Space at the end of structured input:
-                        // leave exactly one fraction/exponent/subscript block.
-                        if response.has_focus()
-                            && ui.input(|i| i.key_pressed(egui::Key::ArrowRight))
-                            && open_structured_depth(&editor.input) > 0
-                        {
-                            editor.input.push(' ');
-                            let latex = friendly_math_to_latex(&editor.input);
-                            action = Some(UiAction::PreviewMath(
-                                shape_id,
-                                editor.input.clone(),
-                                latex,
-                            ));
-                        }
-
-                        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                            action = Some(UiAction::CancelMath(
-                                shape_id,
-                                editor.original_source.clone(),
-                                editor.original_latex.clone(),
-                                editor.is_new,
-                            ));
-                            close = true;
-                        } else if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        if finish_requested {
                             action = Some(UiAction::FinishMath(
                                 shape_id,
                                 editor.original_source.clone(),
                                 editor.original_latex.clone(),
                                 editor.is_new,
+                                editor.input.clone(),
+                                friendly_math_to_latex(&editor.input),
                             ));
                             close = true;
                         }
@@ -3432,8 +3503,105 @@ fn render_math_editor(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction>
 
     if close {
         ui_state.math_editor = None;
+        ui_state.math_dead_caret = false;
         ui_state.math_editor_screen_pos = None;
     }
 
     action
+}
+
+#[cfg(test)]
+mod math_editor_regressions {
+    use super::*;
+    fn frame(ctx: &Context, state: &mut UiState, events: Vec<egui::Event>) -> Option<UiAction> {
+        let input = egui::RawInput {
+            events,
+            focused: true,
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 700.0))),
+            ..Default::default()
+        };
+        let mut action = None;
+        let _ = ctx.run(input, |ctx| {
+            if let Some(result) = render_math_editor(ctx, state) {
+                action = Some(result);
+            }
+        });
+        action
+    }
+    fn setup(text: &str) -> (Context, UiState) {
+        let ctx = Context::default();
+        let mut state = UiState::default();
+        state.math_editor = Some(MathEditorState {
+            shape_id: ShapeId::new_v4(),
+            input: text.into(),
+            original_source: text.into(),
+            original_latex: friendly_math_to_latex(text),
+            is_new: false,
+        });
+        frame(&ctx, &mut state, vec![]);
+        frame(&ctx, &mut state, vec![]);
+        (ctx, state)
+    }
+    fn key(key: egui::Key) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+    #[test]
+    fn exponent_then_digit_never_jumps_to_front() {
+        let (ctx, mut state) = setup("x");
+        frame(&ctx, &mut state, vec![egui::Event::Text("^".into())]);
+        frame(&ctx, &mut state, vec![egui::Event::Text("3".into())]);
+        assert_eq!(state.math_editor.unwrap().input, "x^3");
+    }
+    #[test]
+    fn markers_replace_selection_at_cursor() {
+        let (ctx, mut state) = setup("xyz");
+        let id = egui::Id::new(("math_source", state.math_editor.as_ref().unwrap().shape_id));
+        let mut edit = egui::TextEdit::load_state(&ctx, id).unwrap();
+        edit.cursor
+            .set_char_range(Some(egui::text::CCursorRange::two(
+                egui::text::CCursor::new(1),
+                egui::text::CCursor::new(2),
+            )));
+        edit.store(&ctx, id);
+        frame(
+            &ctx,
+            &mut state,
+            vec![egui::Event::Text("_".into()), egui::Event::Text("1".into())],
+        );
+        assert_eq!(state.math_editor.unwrap().input, "x_1z");
+    }
+    #[test]
+    fn escape_commits_even_with_text_in_same_frame() {
+        let (ctx, mut state) = setup("x^");
+        let action = frame(
+            &ctx,
+            &mut state,
+            vec![egui::Event::Text("3".into()), key(egui::Key::Escape)],
+        );
+        assert!(
+            matches!(&action, Some(UiAction::FinishMath(_, _, _, _, source, _)) if source == "x^3"),
+            "action={action:?}, editor={:?}",
+            state.math_editor
+        );
+        assert!(state.math_editor.is_none());
+    }
+    #[test]
+    fn right_arrow_exits_one_block_and_preserves_cursor() {
+        let (ctx, mut state) = setup("1/2^3");
+        frame(&ctx, &mut state, vec![key(egui::Key::ArrowRight)]);
+        frame(&ctx, &mut state, vec![egui::Event::Text("+1".into())]);
+        assert_eq!(state.math_editor.unwrap().input, "1/2^3 +1");
+    }
+    #[test]
+    fn french_dead_caret_composition_is_not_duplicated() {
+        assert_eq!(crate::math_input::dead_caret_text("^3"), "3");
+        assert_eq!(crate::math_input::dead_caret_text("3"), "3");
+        assert_eq!(crate::math_input::dead_caret_text("â"), "a");
+    }
 }
