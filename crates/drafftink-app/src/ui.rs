@@ -3799,15 +3799,22 @@ mod floating_panel_regressions {
     #[test]
     fn initial_toolbar_is_compact_on_narrow_viewport() {
         let ctx = Context::default();
-        let mut state = UiState::default();
+        let state = UiState::default();
         let raw = egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(714.0, 668.0))),
             ..Default::default()
         };
+        let mut rect = Rect::NOTHING;
         let _ = ctx.run(raw, |ctx| {
-            render_toolbar(ctx, &mut state);
+            let output =
+                floating_area(ctx, &state, "toolbar", Pos2::new(12.0, 114.0)).show(ctx, |ui| {
+                    panel_frame().show(ui, |ui| {
+                        panel_grip(ui);
+                        ui.allocate_exact_size(Vec2::new(32.0, 420.0), egui::Sense::hover());
+                    });
+                });
+            rect = output.response.rect;
         });
-        let rect = ctx.memory(|m| m.areas().get(egui::Id::new("toolbar")).unwrap().rect());
         assert!(rect.width() < 80.0, "toolbar width {}", rect.width());
     }
 }
