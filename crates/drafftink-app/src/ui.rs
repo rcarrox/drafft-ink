@@ -571,7 +571,8 @@ pub enum UiAction {
     /// Live preview of a friendly math expression (source, translated LaTeX).
     PreviewMath(ShapeId, String, String),
     /// Commit/close the current inline math editor.
-    FinishMath(ShapeId),
+    /// Carries the pre-edit state so undo can be created only when the edit is accepted.
+    FinishMath(ShapeId, String, String, bool),
     /// Cancel math editing and restore the previous content, deleting a new formula.
     CancelMath(ShapeId, String, String, bool),
 }
@@ -3203,7 +3204,12 @@ fn render_math_editor(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction>
                             ));
                             close = true;
                         } else if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                            action = Some(UiAction::FinishMath(shape_id));
+                            action = Some(UiAction::FinishMath(
+                                shape_id,
+                                editor.original_source.clone(),
+                                editor.original_latex.clone(),
+                                editor.is_new,
+                            ));
                             close = true;
                         }
                     });
