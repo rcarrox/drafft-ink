@@ -2644,9 +2644,27 @@ fn render_shortcuts_modal(ctx: &Context, ui_state: &mut UiState) {
                         .max_height(400.0)
                         .show(ui, |ui| {
                             for shortcut in ShortcutRegistry::all() {
+                                let configured_key = match shortcut.description {
+                                    "Selection tool" => Some(ui_state.settings.shortcut_select.as_str()),
+                                    "Pan tool" => Some(ui_state.settings.shortcut_pan.as_str()),
+                                    "Draw tool" => Some(ui_state.settings.shortcut_draw.as_str()),
+                                    "Highlighter tool" => Some(ui_state.settings.shortcut_highlighter.as_str()),
+                                    "Eraser tool (Classic / Manual)" => Some(ui_state.settings.shortcut_eraser.as_str()),
+                                    "Text tool" => Some(ui_state.settings.shortcut_text.as_str()),
+                                    "Math formula tool" => Some(ui_state.settings.shortcut_math.as_str()),
+                                    "Rectangle tool" => Some(ui_state.settings.shortcut_rectangle.as_str()),
+                                    "Ellipse tool" => Some(ui_state.settings.shortcut_ellipse.as_str()),
+                                    "Arrow tool" => Some(ui_state.settings.shortcut_arrow.as_str()),
+                                    "Line tool" => Some(ui_state.settings.shortcut_line.as_str()),
+                                    "Laser pointer" => Some(ui_state.settings.shortcut_laser.as_str()),
+                                    _ => None,
+                                };
+                                let shortcut_text = configured_key
+                                    .map(|key| key.to_uppercase())
+                                    .unwrap_or_else(|| shortcut.format());
                                 ui.horizontal(|ui| {
                                     ui.label(
-                                        egui::RichText::new(shortcut.format())
+                                        egui::RichText::new(shortcut_text)
                                             .size(12.0)
                                             .family(egui::FontFamily::Monospace)
                                             .color(Color32::from_rgb(100, 116, 139)),
