@@ -27,7 +27,7 @@ use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
 use winit::window::{CursorIcon, Window, WindowId};
 
 use crate::event_handler::EventHandler;
-use crate::ui::{SelectedShapeProps, UiAction, UiState, render_ui};
+use crate::ui::{MathEditorState, SelectedShapeProps, UiAction, UiState, render_ui};
 
 #[cfg(feature = "native")]
 pub mod file_ops {
@@ -2031,7 +2031,9 @@ impl App {
         // Try to restore last saved document on WASM
         #[cfg(target_arch = "wasm32")]
         {
-            file_ops::try_load_last_document();
+            if let Some(ref state) = self.state {
+                file_ops::try_load_last_document(&state.ui_state.settings);
+            }
         }
 
         // Setup drag-drop handlers on WASM
@@ -2424,6 +2426,19 @@ impl ApplicationHandler for App {
                     state.ui_state.recent_documents = docs;
                 }
 
+                #[cfg(target_arch = "wasm32")]
+                if let Some((name, json)) = file_ops::take_pending_intro_json() {
+                    state.ui_state.settings.intro_name = name;
+                    state.ui_state.settings.intro_json = json;
+                    crate::settings::save_settings(&state.ui_state.settings);
+                }
+
+                #[cfg(target_arch = "wasm32")]
+                if let Some(folder_name) = file_ops::take_pending_export_folder() {
+                    state.ui_state.settings.export_folder_name = folder_name;
+                    crate::settings::save_settings(&state.ui_state.settings);
+                }
+
                 // Check for pending pasted image (WASM)
                 #[cfg(target_arch = "wasm32")]
                 if let Some(image_shape) = file_ops::take_pending_image() {
@@ -2515,8 +2530,14 @@ impl ApplicationHandler for App {
                 // Check for pending math clipboard paste (WASM async)
                 #[cfg(target_arch = "wasm32")]
                 if let Some(clipboard_text) = file_ops::take_pending_math_clipboard() {
-                    if let Some((_, ref mut latex)) = state.ui_state.math_editor {
-                        *latex = clipboard_text;
+                    if let Some(editor) = state.ui_state.math_editor.as_mut() {
+                        editor.input = clipboard_text;
+                        let latex = crate::math_input::friendly_math_to_latex(&editor.input);
+                        if let Some(Shape::Math(math)) =
+                            state.canvas.document.get_shape_mut(editor.shape_id)
+                        {
+                            math.set_formula(editor.input.clone(), latex);
+                        }
                     }
                 }
 
@@ -2616,6 +2637,19 @@ impl ApplicationHandler for App {
                 state.ui_state.zoom_level = state.canvas.camera.zoom;
                 state.ui_state.grid_style = state.config.grid_style;
 
+                state.ui_state.math_editor_screen_pos = state
+                    .ui_state
+                    .math_editor
+                    .as_ref()
+                    .and_then(|editor| state.canvas.document.get_shape(editor.shape_id))
+                    .and_then(|shape| match shape {
+                        Shape::Math(math) => {
+                            let p = state.canvas.camera.world_to_screen(math.position);
+                            Some(egui::Pos2::new(p.x as f32, p.y as f32))
+                        }
+                        _ => None,
+                    });
+
                 // Update UI state from first selected shape's style
                 if let Some(&shape_id) = state.canvas.selection.first() {
                     if let Some(shape) = state.canvas.document.get_shape(shape_id) {
@@ -2682,17 +2716,15 @@ impl ApplicationHandler for App {
                     })
                     .collect();
 
-                // Auto-save to IndexedDB (WASM only) - every 5 seconds if document changed
+                // Configurable silent autosave to IndexedDB.
                 #[cfg(target_arch = "wasm32")]
                 {
-                    let doc_version = state.canvas.document.shapes.len() as u64
-                        + state.canvas.document.z_order.len() as u64;
-                    if doc_version != state.last_doc_version
-                        && state.last_autosave.elapsed().as_secs() >= 5
+                    if state.ui_state.settings.autosave_enabled
+                        && state.last_autosave.elapsed().as_secs()
+                            >= state.ui_state.settings.autosave_interval_secs.max(1)
                     {
                         file_ops::autosave_document(&state.canvas.document);
                         state.last_autosave = web_time::Instant::now();
-                        state.last_doc_version = doc_version;
                     }
                 }
 
@@ -2978,14 +3010,16 @@ impl ApplicationHandler for App {
                                 }
                             }
                             UiAction::ShowIntro => {
-                                static INTRO_JSON: &str = include_str!("../assets/intro.json");
-                                if let Ok(doc) =
-                                    drafftink_core::canvas::CanvasDocument::from_json(INTRO_JSON)
-                                {
-                                    state.canvas.document = doc;
-                                    state.canvas.clear_selection();
-                                    state.canvas.camera.reset();
-                                    log::info!("Loaded intro document");
+                                let intro = state.ui_state.settings.intro_json.clone();
+                                if !intro.trim().is_empty() {
+                                    if let Ok(doc) =
+                                        drafftink_core::canvas::CanvasDocument::from_json(&intro)
+                                    {
+                                        state.canvas.document = doc;
+                                        state.canvas.clear_selection();
+                                        state.canvas.camera.reset();
+                                        log::info!("Loaded configured intro document");
+                                    }
                                 }
                             }
                             UiAction::ExportPng | UiAction::CopyPng => {
@@ -4494,9 +4528,14 @@ impl ApplicationHandler for App {
                                     if let Some(Shape::Math(math)) =
                                         state.canvas.document.get_shape(math_id)
                                     {
-                                        state.ui_state.math_editor =
-                                            Some((math_id, math.latex.clone()));
-                                        log::info!("Opening math editor for shape {:?}", math_id);
+                                        state.ui_state.math_editor = Some(MathEditorState {
+                                            shape_id: math_id,
+                                            input: math.edit_source().to_string(),
+                                            original_source: math.edit_source().to_string(),
+                                            original_latex: math.latex.clone(),
+                                            is_new: false,
+                                        });
+                                        log::info!("Opening inline math editor for shape {:?}", math_id);
                                     }
                                 }
                             }
@@ -4523,7 +4562,13 @@ impl ApplicationHandler for App {
                             // A newly placed math object opens its formula editor immediately.
                             if let Some(math_id) = state.event_handler.pending_math_edit.take() {
                                 if let Some(Shape::Math(math)) = state.canvas.document.get_shape(math_id) {
-                                    state.ui_state.math_editor = Some((math_id, math.latex.clone()));
+                                    state.ui_state.math_editor = Some(MathEditorState {
+                                        shape_id: math_id,
+                                        input: math.edit_source().to_string(),
+                                        original_source: String::new(),
+                                        original_latex: String::new(),
+                                        is_new: true,
+                                    });
                                 }
                             }
 
