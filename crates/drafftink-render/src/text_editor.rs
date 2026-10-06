@@ -28,6 +28,8 @@ pub enum TextKey {
     Copy,
     Cut,
     Paste(String),
+    ToggleSuperscript,
+    ToggleSubscript,
 }
 
 /// Keyboard modifiers.
@@ -63,6 +65,43 @@ pub enum TextEditResult {
     Copy(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScriptMode {
+    Normal,
+    Superscript,
+    Subscript,
+}
+
+fn superscript_char(ch: char) -> char {
+    match ch {
+        '0' => '\u{2070}', '1' => '\u{00B9}', '2' => '\u{00B2}', '3' => '\u{00B3}',
+        '4' => '\u{2074}', '5' => '\u{2075}', '6' => '\u{2076}', '7' => '\u{2077}',
+        '8' => '\u{2078}', '9' => '\u{2079}', '+' => '\u{207A}', '-' => '\u{207B}',
+        '=' => '\u{207C}', '(' => '\u{207D}', ')' => '\u{207E}', 'n' | 'N' => '\u{207F}',
+        'i' | 'I' => '\u{2071}', 'x' | 'X' => '\u{02E3}', other => other,
+    }
+}
+
+fn subscript_char(ch: char) -> char {
+    match ch {
+        '0' => '\u{2080}', '1' => '\u{2081}', '2' => '\u{2082}', '3' => '\u{2083}',
+        '4' => '\u{2084}', '5' => '\u{2085}', '6' => '\u{2086}', '7' => '\u{2087}',
+        '8' => '\u{2088}', '9' => '\u{2089}', '+' => '\u{208A}', '-' => '\u{208B}',
+        '=' => '\u{208C}', '(' => '\u{208D}', ')' => '\u{208E}', 'n' | 'N' => '\u{2099}',
+        'i' | 'I' => '\u{1D62}', 'x' | 'X' => '\u{2093}', other => other,
+    }
+}
+
+fn convert_script_text(text: &str, mode: ScriptMode) -> String {
+    text.chars()
+        .map(|ch| match mode {
+            ScriptMode::Normal => ch,
+            ScriptMode::Superscript => superscript_char(ch),
+            ScriptMode::Subscript => subscript_char(ch),
+        })
+        .collect()
+}
+
 /// Text editor state for a single text shape being edited.
 pub struct TextEditState {
     /// The Parley PlainEditor for handling text editing.
@@ -79,6 +118,7 @@ pub struct TextEditState {
     cached_width: f32,
     /// Cached layout height for bounds calculation.
     cached_height: f32,
+    script_mode: ScriptMode,
 }
 
 impl TextEditState {
@@ -104,6 +144,7 @@ impl TextEditState {
             is_dragging: false,
             cached_width: 0.0,
             cached_height: 0.0,
+            script_mode: ScriptMode::Normal,
         }
     }
 
