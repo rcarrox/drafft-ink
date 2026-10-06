@@ -3182,13 +3182,22 @@ fn render_math_editor(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction>
                     .stroke(Stroke::new(1.0, Color32::from_gray(205)))
                     .inner_margin(Margin::symmetric(10, 8))
                     .show(ui, |ui| {
-                        let response = ui.add(
-                            egui::TextEdit::singleline(&mut editor.input)
-                                .desired_width(350.0)
-                                .font(egui::TextStyle::Monospace)
-                                .text_color(Color32::BLACK)
-                                .hint_text("ex. sqrt(x), (a+b)/(c+d), int(0,1,x^2,x)"),
-                        );
+                        let response = Frame::new()
+                            .fill(Color32::WHITE)
+                            .corner_radius(CornerRadius::same(6))
+                            .stroke(Stroke::new(1.0, Color32::from_gray(210)))
+                            .inner_margin(Margin::symmetric(8, 5))
+                            .show(ui, |ui| {
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut editor.input)
+                                        .desired_width(350.0)
+                                        .font(egui::TextStyle::Monospace)
+                                        .text_color(Color32::BLACK)
+                                        .frame(false)
+                                        .hint_text("ex. sqrt(x), (a+b)/(c+d), int(x^2,x,0,1)"),
+                                )
+                            })
+                            .inner;
                         response.request_focus();
 
                         if response.changed() {
