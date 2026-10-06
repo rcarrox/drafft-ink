@@ -2892,6 +2892,20 @@ impl ApplicationHandler for App {
                 if let Some(&shape_id) = state.canvas.selection.first() {
                     if let Some(shape) = state.canvas.document.get_shape(shape_id) {
                         state.ui_state.update_from_style(shape.style());
+                        // Older line/arrow documents store their pattern on the
+                        // shape itself; mirror that into the shared outline picker.
+                        if shape.style().stroke_style == drafftink_core::shapes::StrokeStyle::Solid
+                        {
+                            match shape {
+                                Shape::Line(line) => {
+                                    state.ui_state.stroke_style = line.stroke_style
+                                }
+                                Shape::Arrow(arrow) => {
+                                    state.ui_state.stroke_style = arrow.stroke_style
+                                }
+                                _ => {}
+                            }
+                        }
                     }
                 }
 

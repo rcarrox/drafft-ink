@@ -123,7 +123,11 @@ impl SelectedShapeProps {
                 selection_count: count,
                 is_line: true,
                 path_style: line.path_style as u8,
-                stroke_style: line.stroke_style as u8,
+                stroke_style: if line.style.stroke_style == StrokeStyle::Solid {
+                    line.stroke_style
+                } else {
+                    line.style.stroke_style
+                } as u8,
                 sloppiness,
                 fill_pattern,
                 has_fill,
@@ -135,7 +139,11 @@ impl SelectedShapeProps {
                 selection_count: count,
                 is_arrow: true,
                 path_style: arrow.path_style as u8,
-                stroke_style: arrow.stroke_style as u8,
+                stroke_style: if arrow.style.stroke_style == StrokeStyle::Solid {
+                    arrow.stroke_style
+                } else {
+                    arrow.style.stroke_style
+                } as u8,
                 sloppiness,
                 fill_pattern,
                 has_fill,
