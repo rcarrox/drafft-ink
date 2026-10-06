@@ -142,6 +142,23 @@ impl CanvasDocument {
         self.shapes.remove(&id)
     }
 
+    /// Replace one shape by zero or more shapes while preserving its z-order position.
+    /// Used by the manual eraser when a freehand stroke is cut into fragments.
+    pub fn replace_shape_with_many(&mut self, id: ShapeId, replacements: Vec<Shape>) {
+        let Some(index) = self.z_order.iter().position(|&shape_id| shape_id == id) else {
+            return;
+        };
+
+        self.z_order.remove(index);
+        self.shapes.remove(&id);
+
+        for (offset, shape) in replacements.into_iter().enumerate() {
+            let replacement_id = shape.id();
+            self.shapes.insert(replacement_id, shape);
+            self.z_order.insert(index + offset, replacement_id);
+        }
+    }
+
     /// Clear all shapes from the document.
     pub fn clear(&mut self) {
         self.shapes.clear();
