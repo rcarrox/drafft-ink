@@ -2932,6 +2932,22 @@ impl ApplicationHandler for App {
                         ui_action_taken = true;
                         match action.clone() {
                             UiAction::SetTool(tool) => {
+                                if tool != ToolKind::Text {
+                                    if state.event_handler.editing_text.is_some() {
+                                        state.event_handler.exit_text_edit(&mut state.canvas);
+                                        state.text_edit_state = None;
+                                    }
+                                    let selected_text = state
+                                        .canvas
+                                        .selection
+                                        .first()
+                                        .and_then(|id| state.canvas.document.get_shape(*id))
+                                        .is_some_and(|shape| matches!(shape, Shape::Text(_)));
+                                    if selected_text {
+                                        state.canvas.clear_selection();
+                                    }
+                                }
+
                                 state.canvas.set_tool(tool);
                                 state.ui_state.current_tool = tool;
                                 if matches!(
@@ -5873,6 +5889,22 @@ impl ApplicationHandler for App {
                                     if state.ui_state.settings.tool_for_key(key).is_some() =>
                                 {
                                     if let Some(tool) = state.ui_state.settings.tool_for_key(key) {
+                                        if tool != ToolKind::Text {
+                                            if state.event_handler.editing_text.is_some() {
+                                                state.event_handler.exit_text_edit(&mut state.canvas);
+                                                state.text_edit_state = None;
+                                            }
+                                            let selected_text = state
+                                                .canvas
+                                                .selection
+                                                .first()
+                                                .and_then(|id| state.canvas.document.get_shape(*id))
+                                                .is_some_and(|shape| matches!(shape, Shape::Text(_)));
+                                            if selected_text {
+                                                state.canvas.clear_selection();
+                                            }
+                                        }
+
                                         state.canvas.set_tool(tool);
                                         state.ui_state.current_tool = tool;
                                         if matches!(
