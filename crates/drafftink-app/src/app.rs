@@ -5052,6 +5052,54 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::KeyboardInput { event, .. } => {
+                // French layouts expose ^ as a dead key. When the inline math
+                // editor has focus, translate it explicitly into the structured
+                // exponent marker. Ctrl+ArrowUp / Ctrl+ArrowDown are layout-
+                // independent exponent/subscript shortcuts.
+                if event.state == ElementState::Pressed && state.ui_state.math_editor.is_some() {
+                    let math_marker = match &event.logical_key {
+                        Key::Dead(Some('^')) => Some('^'),
+                        Key::Character(c) if c == "^" => Some('^'),
+                        _ if state.input.ctrl()
+                            && matches!(event.physical_key, PhysicalKey::Code(KeyCode::ArrowUp)) =>
+                        {
+                            Some('^')
+                        }
+                        _ if state.input.ctrl()
+                            && matches!(event.physical_key, PhysicalKey::Code(KeyCode::ArrowDown)) =>
+                        {
+                            Some('_')
+                        }
+                        _ if state.input.ctrl()
+                            && state.input.shift()
+                            && matches!(event.physical_key, PhysicalKey::Code(KeyCode::Equal)) =>
+                        {
+                            Some('^')
+                        }
+                        _ if state.input.ctrl()
+                            && matches!(event.physical_key, PhysicalKey::Code(KeyCode::Equal)) =>
+                        {
+                            Some('_')
+                        }
+                        _ => None,
+                    };
+
+                    if let Some(marker) = math_marker {
+                        if let Some(editor) = state.ui_state.math_editor.as_mut() {
+                            editor.input.push(marker);
+                            let latex = crate::math_input::friendly_math_to_latex(&editor.input);
+                            if let Some(Shape::Math(math)) =
+                                state.canvas.document.get_shape_mut(editor.shape_id)
+                            {
+                                math.set_formula(editor.input.clone(), latex);
+                            }
+                        }
+                        state.needs_redraw = true;
+                        state.window.request_redraw();
+                        return;
+                    }
+                }
+
                 // Skip canvas processing if egui wants keyboard
                 if egui_wants_input {
                     state.needs_redraw = true;
@@ -5074,14 +5122,60 @@ impl ApplicationHandler for App {
                             }
                         }
 
-                        // Check for copy/paste shortcuts first
+                        // Script shortcuts are handled before clipboard shortcuts.
+                        // ^ (including the French dead-key form) enters superscript.
+                        // Ctrl+ArrowUp / Ctrl+Shift+= enters superscript.
+                        // Ctrl+ArrowDown / Ctrl+= enters subscript.
                         let has_ctrl = state.input.ctrl();
-                        let text_key = if has_ctrl {
+                        let script_key = match &event.logical_key {
+                            Key::Dead(Some('^')) => Some(TextKey::ToggleSuperscript),
+                            Key::Character(c) if c == "^" => Some(TextKey::ToggleSuperscript),
+                            Key::Character(c) if has_ctrl && c == "_" => {
+                                Some(TextKey::ToggleSubscript)
+                            }
+                            _ if has_ctrl
+                                && matches!(
+                                    event.physical_key,
+                                    PhysicalKey::Code(KeyCode::ArrowUp)
+                                ) =>
+                            {
+                                Some(TextKey::ToggleSuperscript)
+                            }
+                            _ if has_ctrl
+                                && matches!(
+                                    event.physical_key,
+                                    PhysicalKey::Code(KeyCode::ArrowDown)
+                                ) =>
+                            {
+                                Some(TextKey::ToggleSubscript)
+                            }
+                            _ if has_ctrl
+                                && state.input.shift()
+                                && matches!(
+                                    event.physical_key,
+                                    PhysicalKey::Code(KeyCode::Equal)
+                                ) =>
+                            {
+                                Some(TextKey::ToggleSuperscript)
+                            }
+                            _ if has_ctrl
+                                && matches!(
+                                    event.physical_key,
+                                    PhysicalKey::Code(KeyCode::Equal)
+                                ) =>
+                            {
+                                Some(TextKey::ToggleSubscript)
+                            }
+                            _ => None,
+                        };
+
+                        let text_key = if script_key.is_some() {
+                            script_key
+                        } else if has_ctrl {
                             match &event.logical_key {
                                 Key::Character(c) if c == "c" || c == "C" => Some(TextKey::Copy),
                                 Key::Character(c) if c == "x" || c == "X" => Some(TextKey::Cut),
                                 Key::Character(c) if c == "v" || c == "V" => {
-                                    // Get text from clipboard
                                     #[cfg(not(target_arch = "wasm32"))]
                                     {
                                         arboard::Clipboard::new()
@@ -5092,12 +5186,10 @@ impl ApplicationHandler for App {
                                     #[cfg(target_arch = "wasm32")]
                                     {
                                         file_ops::request_clipboard_text();
-                                        return; // Don't process "v" - paste will happen on next frame
+                                        return;
                                     }
                                 }
-                                // Let Ctrl+A through for select all (handled in text_editor)
                                 Key::Character(c) if c == "a" || c == "A" => None,
-                                // Ignore other Ctrl+key combos in text edit (don't type the letter)
                                 Key::Character(_) => return,
                                 _ => None,
                             }
