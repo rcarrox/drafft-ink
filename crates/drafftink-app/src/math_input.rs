@@ -3,9 +3,9 @@
 //! Accepted examples:
 //!   sqrt(x+1)
 //!   (a+b)/(c+d)
-//!   sum(i=1,n,i^2)
-//!   int(0,1,x^2,x)
-//!   lim(x->0,sin(x)/x)
+//!   sum(i^2,i,1,n)
+//!   int(x^2,x,0,1)
+//!   lim(sin(x)/x,x,0)
 //!   vec(AB)
 //! Raw LaTeX remains accepted too.
 
@@ -75,45 +75,69 @@ fn render_call(name: &str, body: &str) -> Option<String> {
     let args = split_top_level_args(body);
     match name {
         "sqrt" if args.len() == 1 => Some(format!(r"\sqrt{{{}}}", convert_expr(&args[0]))),
-        "vec" if args.len() == 1 => Some(format!(r"\vec{{{}}}", convert_expr(&args[0]))),
+        "vec" | "vector" if args.len() == 1 => {
+            Some(format!(r"\vec{{{}}}", convert_expr(&args[0])))
+        }
         "abs" if args.len() == 1 => Some(format!(r"\left|{}\right|", convert_expr(&args[0]))),
         "frac" if args.len() == 2 => Some(format!(
             r"\frac{{{}}}{{{}}}",
             convert_expr(&args[0]),
             convert_expr(&args[1])
         )),
-        "sum" if args.len() == 3 => {
-            let index = args[0].replace('=', "=");
-            Some(format!(
-                r"\sum_{{{}}}^{{{}}} {}",
-                convert_expr(&index),
-                convert_expr(&args[1]),
-                convert_expr(&args[2])
-            ))
-        }
-        "prod" if args.len() == 3 => {
-            Some(format!(
-                r"\prod_{{{}}}^{{{}}} {}",
-                convert_expr(&args[0]),
-                convert_expr(&args[1]),
-                convert_expr(&args[2])
-            ))
-        }
-        "int" if args.len() == 4 => Some(format!(
-            r"\int_{{{}}}^{{{}}} {}\,d{}",
+        // Compact form: sum(i=1,n,i^2)
+        "sum" if args.len() == 3 && args[0].contains('=') => Some(format!(
+            r"\sum_{{{}}}^{{{}}} {}",
             convert_expr(&args[0]),
             convert_expr(&args[1]),
-            convert_expr(&args[2]),
-            convert_expr(&args[3])
+            convert_expr(&args[2])
         )),
-        "lim" if args.len() == 2 => {
+        // CAS form: sum(i^2,i,1,n)
+        "sum" if args.len() == 4 => Some(format!(
+            r"\sum_{{{}={}}}^{{{}}} {}",
+            convert_expr(&args[1]),
+            convert_expr(&args[2]),
+            convert_expr(&args[3]),
+            convert_expr(&args[0])
+        )),
+        "prod" if args.len() == 4 => Some(format!(
+            r"\prod_{{{}={}}}^{{{}}} {}",
+            convert_expr(&args[1]),
+            convert_expr(&args[2]),
+            convert_expr(&args[3]),
+            convert_expr(&args[0])
+        )),
+        // CAS/Maple-like form: int(x^2,x,0,1)
+        "int" | "integral" if args.len() == 4 => Some(format!(
+            r"\int_{{{}}}^{{{}}} {}\,d{}",
+            convert_expr(&args[2]),
+            convert_expr(&args[3]),
+            convert_expr(&args[0]),
+            convert_expr(&args[1])
+        )),
+        // GeoGebra-like shorthand: int(x^2,0,1), assumes x.
+        "int" | "integral" if args.len() == 3 => Some(format!(
+            r"\int_{{{}}}^{{{}}} {}\,dx",
+            convert_expr(&args[1]),
+            convert_expr(&args[2]),
+            convert_expr(&args[0])
+        )),
+        // lim(x->0, sin(x)/x)
+        "lim" | "limit" if args.len() == 2 => {
             let spec = args[0].replace("->", r"\to ");
-            Some(format!(
-                r"\lim_{{{}}} {}",
-                convert_expr(&spec),
-                convert_expr(&args[1])
-            ))
+            Some(format!(r"\lim_{{{}}} {}", convert_expr(&spec), convert_expr(&args[1])))
         }
+        // lim(sin(x)/x,x,0)
+        "lim" | "limit" if args.len() == 3 => Some(format!(
+            r"\lim_{{{}\to {}}} {}",
+            convert_expr(&args[1]),
+            convert_expr(&args[2]),
+            convert_expr(&args[0])
+        )),
+        "diff" | "derivative" if args.len() == 2 => Some(format!(
+            r"\frac{{d}}{{d{}}}\left({}\right)",
+            convert_expr(&args[1]),
+            convert_expr(&args[0])
+        )),
         "sin" | "cos" | "tan" | "ln" | "log" | "exp" if args.len() == 1 => Some(format!(
             r"\{}\left({}\right)",
             name,
@@ -144,8 +168,8 @@ fn convert_expr(input: &str) -> String {
     }
 
     for name in [
-        "sqrt", "vec", "abs", "frac", "sum", "prod", "int", "lim", "sin", "cos", "tan",
-        "ln", "log", "exp",
+        "sqrt", "vec", "vector", "abs", "frac", "sum", "prod", "int", "integral", "lim",
+        "limit", "diff", "derivative", "sin", "cos", "tan", "ln", "log", "exp",
     ] {
         if let Some(body) = call_body(s, name) {
             if let Some(rendered) = render_call(name, body) {
@@ -171,6 +195,18 @@ fn convert_expr(input: &str) -> String {
         if out == from {
             out = to.to_string();
         }
+    }
+
+    // Common Unicode powers/subscripts typed or pasted from course material.
+    for (from, to) in [
+        ("⁰", "^{0}"), ("¹", "^{1}"), ("²", "^{2}"), ("³", "^{3}"),
+        ("⁴", "^{4}"), ("⁵", "^{5}"), ("⁶", "^{6}"), ("⁷", "^{7}"),
+        ("⁸", "^{8}"), ("⁹", "^{9}"),
+        ("₀", "_{0}"), ("₁", "_{1}"), ("₂", "_{2}"), ("₃", "_{3}"),
+        ("₄", "_{4}"), ("₅", "_{5}"), ("₆", "_{6}"), ("₇", "_{7}"),
+        ("₈", "_{8}"), ("₉", "_{9}"),
+    ] {
+        out = out.replace(from, to);
     }
 
     out = out
@@ -228,9 +264,18 @@ mod tests {
             r"\frac{\left(a+b\right)}{\left(c+d\right)}"
         );
         assert_eq!(
-            friendly_math_to_latex("int(0,1,x^2,x)"),
+            friendly_math_to_latex("int(x^2,x,0,1)"),
             r"\int_{0}^{1} x^2\,dx"
         );
         assert_eq!(friendly_math_to_latex("vec(AB)"), r"\vec{AB}");
+        assert_eq!(
+            friendly_math_to_latex("sum(i^2,i,1,n)"),
+            r"\sum_{i=1}^{n} i^2"
+        );
+        assert_eq!(
+            friendly_math_to_latex("lim(sin(x)/x,x,0)"),
+            r"\lim_{x\to 0} \frac{\sin\left(x\right)}{x}"
+        );
+        assert_eq!(friendly_math_to_latex("x²"), r"x^{2}");
     }
 }
