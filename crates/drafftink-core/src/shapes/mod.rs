@@ -75,9 +75,9 @@ impl From<SerializableColor> for Color {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Sloppiness {
     /// No roughness - clean, precise lines (roughness = 0)
+    #[default]
     Architect = 0,
     /// Medium roughness - slight hand-drawn feel (roughness = 1)
-    #[default]
     Artist = 1,
     /// High roughness - very sketchy, cartoon-like (roughness = 2)
     Cartoonist = 2,
