@@ -262,9 +262,9 @@ pub mod file_ops {
 
 #[cfg(target_arch = "wasm32")]
 pub mod file_ops {
+    use crate::settings::UserSettings;
     use drafftink_core::canvas::CanvasDocument;
     use drafftink_core::storage::{IndexedDbStorage, Storage};
-    use crate::settings::UserSettings;
     use std::cell::RefCell;
     use std::rc::Rc;
     use wasm_bindgen::prelude::*;
@@ -350,7 +350,8 @@ pub mod file_ops {
             let Ok(function) = value.dyn_into::<js_sys::Function>() else {
                 return;
             };
-            let Ok(result) = function.call1(window.as_ref(), &JsValue::from_str(&postscript)) else {
+            let Ok(result) = function.call1(window.as_ref(), &JsValue::from_str(&postscript))
+            else {
                 return;
             };
             let Ok(promise) = result.dyn_into::<js_sys::Promise>() else {
@@ -792,11 +793,8 @@ pub mod file_ops {
             Ok(f) => f,
             Err(_) => return Ok(false),
         };
-        let result = function.call2(
-            window.as_ref(),
-            &JsValue::from_str(filename),
-            blob.as_ref(),
-        )?;
+        let result =
+            function.call2(window.as_ref(), &JsValue::from_str(filename), blob.as_ref())?;
         let promise: js_sys::Promise = match result.dyn_into() {
             Ok(p) => p,
             Err(_) => return Ok(false),
@@ -2519,6 +2517,77 @@ impl ApplicationHandler for App {
         // Process input events through WinitInputHelper
         state.input.process_window_event(&event);
 
+        if let WindowEvent::KeyboardInput { event, .. } = &event {
+            // French layouts expose ^ as a dead key. When the inline math
+            // editor has focus, translate it explicitly into the structured
+            // exponent marker. Ctrl+ArrowUp / Ctrl+ArrowDown are layout-
+            // independent exponent/subscript shortcuts.
+            if event.state == ElementState::Pressed && state.ui_state.math_editor.is_some() {
+                let math_marker = match &event.logical_key {
+                    Key::Dead(Some('^')) => Some('^'),
+                    Key::Dead(None)
+                        if matches!(
+                            event.physical_key,
+                            PhysicalKey::Code(KeyCode::BracketLeft)
+                        ) =>
+                    {
+                        Some('^')
+                    }
+                    Key::Character(c) if c == "^" => Some('^'),
+                    _ if state.input.ctrl()
+                        && matches!(event.physical_key, PhysicalKey::Code(KeyCode::ArrowUp)) =>
+                    {
+                        Some('^')
+                    }
+                    _ if state.input.ctrl()
+                        && matches!(event.physical_key, PhysicalKey::Code(KeyCode::ArrowDown)) =>
+                    {
+                        Some('_')
+                    }
+                    _ if state.input.ctrl()
+                        && state.input.shift()
+                        && matches!(event.physical_key, PhysicalKey::Code(KeyCode::Equal)) =>
+                    {
+                        Some('^')
+                    }
+                    _ if state.input.ctrl()
+                        && matches!(event.physical_key, PhysicalKey::Code(KeyCode::Equal)) =>
+                    {
+                        Some('_')
+                    }
+                    _ => None,
+                };
+
+                if state.ui_state.math_dead_caret {
+                    if let Some(text) = event.text.as_ref().filter(|text| !text.is_empty()) {
+                        state.ui_state.math_dead_caret = false;
+                        let text = crate::math_input::dead_caret_text(text);
+                        if !text.is_empty() {
+                            state
+                                .egui_state
+                                .egui_input_mut()
+                                .events
+                                .push(egui::Event::Text(text));
+                        }
+                        state.needs_redraw = true;
+                        state.window.request_redraw();
+                        return;
+                    }
+                }
+                if let Some(marker) = math_marker {
+                    state.ui_state.math_dead_caret = matches!(event.logical_key, Key::Dead(_));
+                    state
+                        .egui_state
+                        .egui_input_mut()
+                        .events
+                        .push(egui::Event::Text(marker.to_string()));
+                    state.needs_redraw = true;
+                    state.window.request_redraw();
+                    return;
+                }
+            }
+        }
+
         // Let egui process the event first
         let egui_response = state.egui_state.on_window_event(&state.window, &event);
 
@@ -3046,6 +3115,22 @@ impl ApplicationHandler for App {
                                         &state.canvas.document,
                                         state.websocket.as_ref(),
                                     );
+                                }
+                            }
+                            UiAction::SetStrokeStyle(pattern) => {
+                                state.ui_state.stroke_style = pattern;
+                                if !state.canvas.selection.is_empty() {
+                                    state.canvas.document.push_undo();
+                                }
+                                for &id in &state.canvas.selection.clone() {
+                                    if let Some(shape) = state.canvas.document.get_shape_mut(id) {
+                                        shape.style_mut().stroke_style = pattern;
+                                        match shape {
+                                            Shape::Line(line) => line.stroke_style = pattern,
+                                            Shape::Arrow(arrow) => arrow.stroke_style = pattern,
+                                            _ => {}
+                                        }
+                                    }
                                 }
                             }
                             UiAction::SetStrokeWidth(width) => {
@@ -4077,15 +4162,25 @@ impl ApplicationHandler for App {
                                 original_source,
                                 original_latex,
                                 is_new,
+                                source,
+                                latex,
                             ) => {
-                                let current = state.canvas.document.get_shape(shape_id).and_then(
-                                    |shape| match shape {
-                                        Shape::Math(math) => {
-                                            Some((math.source.clone(), math.latex.clone()))
+                                // Commit the field contents even when typing and Escape
+                                // are delivered within the same animation frame.
+                                if let Some(Shape::Math(math)) =
+                                    state.canvas.document.get_shape_mut(shape_id)
+                                {
+                                    math.set_formula(source, latex);
+                                }
+                                let current =
+                                    state.canvas.document.get_shape(shape_id).and_then(|shape| {
+                                        match shape {
+                                            Shape::Math(math) => {
+                                                Some((math.source.clone(), math.latex.clone()))
+                                            }
+                                            _ => None,
                                         }
-                                        _ => None,
-                                    },
-                                );
+                                    });
 
                                 if let Some((current_source, current_latex)) = current {
                                     if current_source.trim().is_empty() {
@@ -4586,7 +4681,11 @@ impl ApplicationHandler for App {
                 surface_texture.present();
 
                 // Request redraw if needed
-                if state.needs_redraw || ui_action_taken || state.egui_ctx.has_requested_repaint() {
+                if state.needs_redraw
+                    || ui_action_taken
+                    || state.egui_ctx.has_requested_repaint()
+                    || state.ui_state.math_editor.is_some()
+                {
                     state.needs_redraw = false;
                     state.window.request_redraw();
                 }
@@ -4868,7 +4967,10 @@ impl ApplicationHandler for App {
                                             original_latex: math.latex.clone(),
                                             is_new: false,
                                         });
-                                        log::info!("Opening inline math editor for shape {:?}", math_id);
+                                        log::info!(
+                                            "Opening inline math editor for shape {:?}",
+                                            math_id
+                                        );
                                     }
                                 }
                             }
@@ -4894,7 +4996,9 @@ impl ApplicationHandler for App {
 
                             // A newly placed math object opens its formula editor immediately.
                             if let Some(math_id) = state.event_handler.pending_math_edit.take() {
-                                if let Some(Shape::Math(math)) = state.canvas.document.get_shape(math_id) {
+                                if let Some(Shape::Math(math)) =
+                                    state.canvas.document.get_shape(math_id)
+                                {
                                     state.ui_state.math_editor = Some(MathEditorState {
                                         shape_id: math_id,
                                         input: math.edit_source().to_string(),
@@ -5055,8 +5159,11 @@ impl ApplicationHandler for App {
                                     state.ui_state.grid_snap_enabled,
                                     state.ui_state.angle_snap_enabled,
                                 );
-                                if let Some(math_id) = state.event_handler.pending_math_edit.take() {
-                                    if let Some(Shape::Math(math)) = state.canvas.document.get_shape(math_id) {
+                                if let Some(math_id) = state.event_handler.pending_math_edit.take()
+                                {
+                                    if let Some(Shape::Math(math)) =
+                                        state.canvas.document.get_shape(math_id)
+                                    {
                                         state.ui_state.math_editor = Some(MathEditorState {
                                             shape_id: math_id,
                                             input: math.edit_source().to_string(),
@@ -5078,54 +5185,6 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::KeyboardInput { event, .. } => {
-                // French layouts expose ^ as a dead key. When the inline math
-                // editor has focus, translate it explicitly into the structured
-                // exponent marker. Ctrl+ArrowUp / Ctrl+ArrowDown are layout-
-                // independent exponent/subscript shortcuts.
-                if event.state == ElementState::Pressed && state.ui_state.math_editor.is_some() {
-                    let math_marker = match &event.logical_key {
-                        Key::Dead(Some('^')) => Some('^'),
-                        Key::Character(c) if c == "^" => Some('^'),
-                        _ if state.input.ctrl()
-                            && matches!(event.physical_key, PhysicalKey::Code(KeyCode::ArrowUp)) =>
-                        {
-                            Some('^')
-                        }
-                        _ if state.input.ctrl()
-                            && matches!(event.physical_key, PhysicalKey::Code(KeyCode::ArrowDown)) =>
-                        {
-                            Some('_')
-                        }
-                        _ if state.input.ctrl()
-                            && state.input.shift()
-                            && matches!(event.physical_key, PhysicalKey::Code(KeyCode::Equal)) =>
-                        {
-                            Some('^')
-                        }
-                        _ if state.input.ctrl()
-                            && matches!(event.physical_key, PhysicalKey::Code(KeyCode::Equal)) =>
-                        {
-                            Some('_')
-                        }
-                        _ => None,
-                    };
-
-                    if let Some(marker) = math_marker {
-                        if let Some(editor) = state.ui_state.math_editor.as_mut() {
-                            editor.input.push(marker);
-                            let latex = crate::math_input::friendly_math_to_latex(&editor.input);
-                            if let Some(Shape::Math(math)) =
-                                state.canvas.document.get_shape_mut(editor.shape_id)
-                            {
-                                math.set_formula(editor.input.clone(), latex);
-                            }
-                        }
-                        state.needs_redraw = true;
-                        state.window.request_redraw();
-                        return;
-                    }
-                }
-
                 // Skip canvas processing if egui wants keyboard
                 if egui_wants_input {
                     state.needs_redraw = true;
@@ -5876,7 +5935,8 @@ impl ApplicationHandler for App {
                                     } else {
                                         let mut result: Option<kurbo::Rect> = None;
                                         for &id in &state.canvas.selection {
-                                            if let Some(shape) = state.canvas.document.get_shape(id) {
+                                            if let Some(shape) = state.canvas.document.get_shape(id)
+                                            {
                                                 let b = shape.bounds();
                                                 result = Some(match result {
                                                     Some(r) => r.union(b),
@@ -5895,13 +5955,13 @@ impl ApplicationHandler for App {
                                         state.ui_state.zoom_level = state.canvas.camera.zoom;
                                     }
                                 }
-                                key
-                                    if state.ui_state.settings.tool_for_key(key).is_some() =>
-                                {
+                                key if state.ui_state.settings.tool_for_key(key).is_some() => {
                                     if let Some(tool) = state.ui_state.settings.tool_for_key(key) {
                                         if tool != ToolKind::Text {
                                             if state.event_handler.editing_text.is_some() {
-                                                state.event_handler.exit_text_edit(&mut state.canvas);
+                                                state
+                                                    .event_handler
+                                                    .exit_text_edit(&mut state.canvas);
                                                 state.text_edit_state = None;
                                             }
                                             let selected_text = state
@@ -5909,7 +5969,9 @@ impl ApplicationHandler for App {
                                                 .selection
                                                 .first()
                                                 .and_then(|id| state.canvas.document.get_shape(*id))
-                                                .is_some_and(|shape| matches!(shape, Shape::Text(_)));
+                                                .is_some_and(|shape| {
+                                                    matches!(shape, Shape::Text(_))
+                                                });
                                             if selected_text {
                                                 state.canvas.clear_selection();
                                             }
@@ -5919,7 +5981,9 @@ impl ApplicationHandler for App {
                                                 .selection
                                                 .first()
                                                 .and_then(|id| state.canvas.document.get_shape(*id))
-                                                .is_some_and(|shape| !matches!(shape, Shape::Text(_)));
+                                                .is_some_and(|shape| {
+                                                    !matches!(shape, Shape::Text(_))
+                                                });
                                             if selected_non_text {
                                                 state.canvas.clear_selection();
                                             }

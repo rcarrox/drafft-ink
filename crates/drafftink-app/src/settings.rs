@@ -145,7 +145,11 @@ impl UserSettings {
             let value = self.shortcut_for_mut(tool);
             *value = normalized_key(value);
             if value.chars().count() > 1 {
-                *value = value.chars().next().map(|c| c.to_string()).unwrap_or_default();
+                *value = value
+                    .chars()
+                    .next()
+                    .map(|c| c.to_string())
+                    .unwrap_or_default();
             }
         }
     }

@@ -538,6 +538,7 @@ fn style_from_loro(map: &LoroMapValue) -> Option<ShapeStyle> {
     Some(ShapeStyle {
         stroke_color: SerializableColor::new(stroke_r, stroke_g, stroke_b, stroke_a),
         stroke_width,
+        stroke_style: StrokeStyle::default(),
         fill_color,
         fill_pattern,
         sloppiness,
@@ -587,6 +588,7 @@ fn stroke_style_to_i64(s: StrokeStyle) -> i64 {
         StrokeStyle::Solid => 0,
         StrokeStyle::Dashed => 1,
         StrokeStyle::Dotted => 2,
+        StrokeStyle::DashedShort => 3,
     }
 }
 
@@ -594,6 +596,7 @@ fn i64_to_stroke_style(v: i64) -> StrokeStyle {
     match v {
         0 => StrokeStyle::Solid,
         1 => StrokeStyle::Dashed,
+        3 => StrokeStyle::DashedShort,
         _ => StrokeStyle::Dotted,
     }
 }

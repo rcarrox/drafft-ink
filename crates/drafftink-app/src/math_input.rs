@@ -75,9 +75,7 @@ fn render_call(name: &str, body: &str) -> Option<String> {
     let args = split_top_level_args(body);
     match name {
         "sqrt" if args.len() == 1 => Some(format!(r"\sqrt{{{}}}", convert_expr(&args[0]))),
-        "vec" | "vector" if args.len() == 1 => {
-            Some(format!(r"\vec{{{}}}", convert_expr(&args[0])))
-        }
+        "vec" | "vector" if args.len() == 1 => Some(format!(r"\vec{{{}}}", convert_expr(&args[0]))),
         "abs" if args.len() == 1 => Some(format!(r"\left|{}\right|", convert_expr(&args[0]))),
         "frac" if args.len() == 2 => Some(format!(
             r"\frac{{{}}}{{{}}}",
@@ -124,7 +122,11 @@ fn render_call(name: &str, body: &str) -> Option<String> {
         // lim(x->0, sin(x)/x)
         "lim" | "limit" if args.len() == 2 => {
             let spec = args[0].replace("->", r"\to ");
-            Some(format!(r"\lim_{{{}}} {}", convert_expr(&spec), convert_expr(&args[1])))
+            Some(format!(
+                r"\lim_{{{}}} {}",
+                convert_expr(&spec),
+                convert_expr(&args[1])
+            ))
         }
         // lim(sin(x)/x,x,0)
         "lim" | "limit" if args.len() == 3 => Some(format!(
@@ -138,15 +140,12 @@ fn render_call(name: &str, body: &str) -> Option<String> {
             convert_expr(&args[1]),
             convert_expr(&args[0])
         )),
-        "sin" | "cos" | "tan" | "ln" | "log" | "exp" if args.len() == 1 => Some(format!(
-            r"\{}\left({}\right)",
-            name,
-            convert_expr(&args[0])
-        )),
+        "sin" | "cos" | "tan" | "ln" | "log" | "exp" if args.len() == 1 => {
+            Some(format!(r"\{}\left({}\right)", name, convert_expr(&args[0])))
+        }
         _ => None,
     }
 }
-
 
 fn convert_atom_text(input: &str) -> String {
     let mut out = input.to_string();
@@ -256,7 +255,11 @@ fn parse_structured_row(chars: &[char], mut i: usize, stop_on_space: bool) -> St
                     items.push((rendered, true));
                 } else {
                     items.push((
-                        format!(r"{}\left({}\right)", convert_atom_text(&ident), convert_expr(&body)),
+                        format!(
+                            r"{}\left({}\right)",
+                            convert_atom_text(&ident),
+                            convert_expr(&body)
+                        ),
                         true,
                     ));
                 }
@@ -352,17 +355,33 @@ fn convert_expr(input: &str) -> String {
 pub fn normalize_friendly_math_input(input: &str) -> String {
     fn super_digit(ch: char) -> Option<char> {
         match ch {
-            '⁰' => Some('0'), '¹' => Some('1'), '²' => Some('2'), '³' => Some('3'),
-            '⁴' => Some('4'), '⁵' => Some('5'), '⁶' => Some('6'), '⁷' => Some('7'),
-            '⁸' => Some('8'), '⁹' => Some('9'), 'ⁿ' => Some('n'),
+            '⁰' => Some('0'),
+            '¹' => Some('1'),
+            '²' => Some('2'),
+            '³' => Some('3'),
+            '⁴' => Some('4'),
+            '⁵' => Some('5'),
+            '⁶' => Some('6'),
+            '⁷' => Some('7'),
+            '⁸' => Some('8'),
+            '⁹' => Some('9'),
+            'ⁿ' => Some('n'),
             _ => None,
         }
     }
     fn sub_digit(ch: char) -> Option<char> {
         match ch {
-            '₀' => Some('0'), '₁' => Some('1'), '₂' => Some('2'), '₃' => Some('3'),
-            '₄' => Some('4'), '₅' => Some('5'), '₆' => Some('6'), '₇' => Some('7'),
-            '₈' => Some('8'), '₉' => Some('9'), 'ₙ' => Some('n'),
+            '₀' => Some('0'),
+            '₁' => Some('1'),
+            '₂' => Some('2'),
+            '₃' => Some('3'),
+            '₄' => Some('4'),
+            '₅' => Some('5'),
+            '₆' => Some('6'),
+            '₇' => Some('7'),
+            '₈' => Some('8'),
+            '₉' => Some('9'),
+            'ₙ' => Some('n'),
             _ => None,
         }
     }
@@ -477,4 +496,25 @@ mod tests {
         assert_eq!(open_structured_depth("1/2/3 "), 1);
         assert_eq!(open_structured_depth("1/2/3  "), 0);
     }
+}
+
+/// The dead key has already opened an exponent block. Browser composition may
+/// echo its caret or compose a circumflex vowel; retain only the intended text.
+pub fn dead_caret_text(text: &str) -> String {
+    let text = text.strip_prefix('^').unwrap_or(text);
+    text.chars()
+        .map(|c| match c {
+            'â' => 'a',
+            'ê' => 'e',
+            'î' => 'i',
+            'ô' => 'o',
+            'û' => 'u',
+            'Â' => 'A',
+            'Ê' => 'E',
+            'Î' => 'I',
+            'Ô' => 'O',
+            'Û' => 'U',
+            c => c,
+        })
+        .collect()
 }

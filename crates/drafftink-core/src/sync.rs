@@ -41,15 +41,24 @@ pub enum SyncEvent {
         peer_count: usize,
         initial_sync: Option<Vec<u8>>,
     },
-    PeerJoined { peer_id: String },
-    PeerLeft { peer_id: String },
-    SyncReceived { from: String, data: Vec<u8> },
+    PeerJoined {
+        peer_id: String,
+    },
+    PeerLeft {
+        peer_id: String,
+    },
+    SyncReceived {
+        from: String,
+        data: Vec<u8>,
+    },
     AwarenessReceived {
         from: String,
         peer_id: u64,
         state: AwarenessState,
     },
-    Error { message: String },
+    Error {
+        message: String,
+    },
 }
 
 macro_rules! disabled_socket {

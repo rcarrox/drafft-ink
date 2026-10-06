@@ -83,8 +83,15 @@ pub struct Image {
     /// Rotation angle in radians (around center).
     #[serde(default)]
     pub rotation: f64,
+    /// Visible source rectangle in normalized source coordinates.
+    #[serde(default = "full_crop")]
+    pub crop: Rect,
     /// Style properties (stroke used for optional border).
     pub style: ShapeStyle,
+}
+
+pub fn full_crop() -> Rect {
+    Rect::new(0.0, 0.0, 1.0, 1.0)
 }
 
 impl Image {
@@ -115,6 +122,7 @@ impl Image {
             format,
             data_base64: STANDARD.encode(data),
             rotation: 0.0,
+            crop: full_crop(),
             style: ShapeStyle::default(),
         }
     }
@@ -143,6 +151,7 @@ impl Image {
             format,
             data_base64,
             rotation,
+            crop: full_crop(),
             style,
         }
     }
