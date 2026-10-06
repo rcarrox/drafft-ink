@@ -1335,11 +1335,11 @@ fn render_properties_panel(ctx: &Context, ui_state: &mut UiState) -> Option<UiAc
                         let label = patterns.iter().find(|(p, _)| *p == ui_state.stroke_style)
                             .map(|(_, label)| *label).unwrap_or("Solid");
                         egui::ComboBox::from_id_salt("outline_pattern")
-                            .selected_text(egui::RichText::new(label).color(Color32::BLACK))
+                            .selected_text(label)
                             .show_ui(ui, |ui| {
                                 for (pattern, label) in patterns {
                                     if ui.selectable_label(ui_state.stroke_style == pattern,
-                                        egui::RichText::new(label).color(Color32::BLACK)).clicked() {
+                                        label).clicked() {
                                         action = Some(UiAction::SetOutlinePattern(pattern));
                                     }
                                 }
