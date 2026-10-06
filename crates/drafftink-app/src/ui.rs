@@ -11,6 +11,8 @@ use egui::{
 
 #[cfg(target_arch = "wasm32")]
 use crate::app::file_ops;
+use crate::math_input::friendly_math_to_latex;
+use crate::settings::UserSettings;
 
 // Re-export from widgets crate for consistent styling
 use drafftink_widgets::{
@@ -223,6 +225,15 @@ pub struct PeerInfo {
     pub has_cursor: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct MathEditorState {
+    pub shape_id: ShapeId,
+    pub input: String,
+    pub original_source: String,
+    pub original_latex: String,
+    pub is_new: bool,
+}
+
 /// UI state and actions.
 pub struct UiState {
     /// Currently selected tool (mirrored from canvas).
@@ -284,6 +295,10 @@ pub struct UiState {
     pub collab_modal_open: bool,
     /// Whether the keyboard shortcuts modal is open.
     pub shortcuts_modal_open: bool,
+    /// Whether the settings dialog is open.
+    pub settings_open: bool,
+    /// Persistent user settings.
+    pub settings: UserSettings,
     /// Whether the save dialog is open.
     pub save_dialog_open: bool,
     /// Whether the open dialog is open.
@@ -302,8 +317,10 @@ pub struct UiState {
     pub last_picked_stroke: Option<Color32>,
     /// Last picked fill color from color grid.
     pub last_picked_fill: Option<Color32>,
-    /// Math editor state: (shape_id, latex_input)
-    pub math_editor: Option<(ShapeId, String)>,
+    /// Inline math editor state.
+    pub math_editor: Option<MathEditorState>,
+    /// Screen position of the math object currently being edited.
+    pub math_editor_screen_pos: Option<Pos2>,
     /// Names of the open tabs, in order (synced from the app each frame).
     pub tab_names: Vec<String>,
     /// Index of the active tab within `tab_names`.
@@ -312,6 +329,7 @@ pub struct UiState {
 
 impl Default for UiState {
     fn default() -> Self {
+        let settings = crate::settings::load_settings();
         Self {
             current_tool: ToolKind::Select,
             eraser_mode: EraserMode::Classic,
@@ -343,6 +361,8 @@ impl Default for UiState {
             bg_color: Color32::WHITE,
             collab_modal_open: false,
             shortcuts_modal_open: false,
+            settings_open: false,
+            settings,
             save_dialog_open: false,
             open_dialog_open: false,
             open_recent_dialog_open: false,
@@ -353,6 +373,7 @@ impl Default for UiState {
             last_picked_stroke: None,
             last_picked_fill: None,
             math_editor: None,
+            math_editor_screen_pos: None,
             tab_names: Vec::new(),
             active_tab: 0,
         }
@@ -529,6 +550,14 @@ pub enum UiAction {
     AlignCenterV,
     /// Show keyboard shortcuts help.
     ShowShortcuts,
+    /// Persist the current settings.
+    SaveSettings,
+    /// Import a JSON document as the startup intro.
+    ImportIntroJson,
+    /// Clear the startup intro document.
+    ClearIntro,
+    /// Choose a persistent export folder (Chrome/Edge).
+    ChooseExportFolder,
     /// Toggle calligraphy mode for freehand tool.
     ToggleCalligraphy,
     /// Toggle pressure simulation for freehand tool.
@@ -539,15 +568,19 @@ pub enum UiAction {
     FlipVertical,
     /// Set opacity for selected shapes.
     SetOpacity(f32),
-    /// Update math shape LaTeX.
-    UpdateMathLatex(ShapeId, String),
+    /// Live preview of a friendly math expression (source, translated LaTeX).
+    PreviewMath(ShapeId, String, String),
+    /// Commit/close the current inline math editor.
+    /// Carries the pre-edit state so undo can be created only when the edit is accepted.
+    FinishMath(ShapeId, String, String, bool),
+    /// Cancel math editing and restore the previous content, deleting a new formula.
+    CancelMath(ShapeId, String, String, bool),
 }
 
 /// Tool definitions with SVG icons
 struct Tool {
     kind: ToolKind,
     label: &'static str,
-    shortcut: &'static str,
     icon: ImageSource<'static>,
 }
 
@@ -556,73 +589,61 @@ fn get_tools() -> Vec<Tool> {
         Tool {
             kind: ToolKind::Select,
             label: "Select",
-            shortcut: "S / 1",
             icon: include_image!("../assets/select.svg"),
         },
         Tool {
             kind: ToolKind::Pan,
             label: "Pan",
-            shortcut: "M",
             icon: include_image!("../assets/pan.svg"),
         },
         Tool {
             kind: ToolKind::Rectangle,
             label: "Rectangle",
-            shortcut: "R / 2",
             icon: include_image!("../assets/rectangle.svg"),
         },
         Tool {
             kind: ToolKind::Ellipse,
             label: "Ellipse",
-            shortcut: "O / 4",
             icon: include_image!("../assets/ellipse.svg"),
         },
         Tool {
             kind: ToolKind::Arrow,
             label: "Arrow",
-            shortcut: "A / 5",
             icon: include_image!("../assets/arrow.svg"),
         },
         Tool {
             kind: ToolKind::Line,
             label: "Line",
-            shortcut: "L / 6",
             icon: include_image!("../assets/line.svg"),
         },
         Tool {
             kind: ToolKind::Freehand,
             label: "Draw",
-            shortcut: "B / 7",
             icon: include_image!("../assets/freehand.svg"),
         },
         Tool {
             kind: ToolKind::Highlighter,
             label: "Highlighter",
-            shortcut: "K",
             icon: include_image!("../assets/highlighter.svg"),
         },
         Tool {
             kind: ToolKind::Eraser,
             label: "Eraser",
-            shortcut: "E",
             icon: include_image!("../assets/eraser.svg"),
         },
         Tool {
             kind: ToolKind::Text,
             label: "Text",
-            shortcut: "T / 8",
             icon: include_image!("../assets/text.svg"),
         },
         Tool {
             kind: ToolKind::Math,
             label: "Math",
-            shortcut: "9",
             icon: include_image!("../assets/math.svg"),
         },
         Tool {
             kind: ToolKind::LaserPointer,
             label: "Laser",
-            shortcut: "Z",
             icon: include_image!("../assets/laser.svg"),
         },
     ]
@@ -642,6 +663,7 @@ pub fn render_ui(
     let bottom_action = render_bottom_toolbar(ctx, ui_state);
     let right_panel_action = render_right_panel(ctx, selected_props);
     let math_action = render_math_editor(ctx, ui_state);
+    let settings_action = render_settings_dialog(ctx, ui_state);
     let tab_action = render_tab_bar(ctx, ui_state);
 
     // Render presence panel (no actions returned)
@@ -654,6 +676,7 @@ pub fn render_ui(
         .or(bottom_action)
         .or(right_panel_action)
         .or(math_action)
+        .or(settings_action)
         .or(tab_action)
 }
 
@@ -742,7 +765,7 @@ fn render_toolbar(ctx: &Context, ui_state: &UiState) -> Option<UiAction> {
                     for tool in &tools {
                         let is_selected = ui_state.current_tool == tool.kind;
                         if IconButton::new(tool.icon.clone(), tool.label)
-                            .shortcut(tool.shortcut)
+                            .shortcut(ui_state.settings.shortcut_for(tool.kind))
                             .selected(is_selected)
                             .tool()
                             .show(ui)
@@ -2022,6 +2045,10 @@ fn render_file_menu(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                             action = Some(UiAction::ShowShortcuts);
                             ui_state.menu_open = false;
                         }
+                        if menu_item(ui, "Settings", "") {
+                            ui_state.settings_open = true;
+                            ui_state.menu_open = false;
+                        }
                     });
                 });
             });
@@ -2617,9 +2644,27 @@ fn render_shortcuts_modal(ctx: &Context, ui_state: &mut UiState) {
                         .max_height(400.0)
                         .show(ui, |ui| {
                             for shortcut in ShortcutRegistry::all() {
+                                let configured_key = match shortcut.description {
+                                    "Selection tool" => Some(ui_state.settings.shortcut_select.as_str()),
+                                    "Pan tool" => Some(ui_state.settings.shortcut_pan.as_str()),
+                                    "Draw tool" => Some(ui_state.settings.shortcut_draw.as_str()),
+                                    "Highlighter tool" => Some(ui_state.settings.shortcut_highlighter.as_str()),
+                                    "Eraser tool (Classic / Manual)" => Some(ui_state.settings.shortcut_eraser.as_str()),
+                                    "Text tool" => Some(ui_state.settings.shortcut_text.as_str()),
+                                    "Math formula tool" => Some(ui_state.settings.shortcut_math.as_str()),
+                                    "Rectangle tool" => Some(ui_state.settings.shortcut_rectangle.as_str()),
+                                    "Ellipse tool" => Some(ui_state.settings.shortcut_ellipse.as_str()),
+                                    "Arrow tool" => Some(ui_state.settings.shortcut_arrow.as_str()),
+                                    "Line tool" => Some(ui_state.settings.shortcut_line.as_str()),
+                                    "Laser pointer" => Some(ui_state.settings.shortcut_laser.as_str()),
+                                    _ => None,
+                                };
+                                let shortcut_text = configured_key
+                                    .map(|key| key.to_uppercase())
+                                    .unwrap_or_else(|| shortcut.format());
                                 ui.horizontal(|ui| {
                                     ui.label(
-                                        egui::RichText::new(shortcut.format())
+                                        egui::RichText::new(shortcut_text)
                                             .size(12.0)
                                             .family(egui::FontFamily::Monospace)
                                             .color(Color32::from_rgb(100, 116, 139)),
@@ -2923,146 +2968,181 @@ fn render_open_recent_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<Ui
     action
 }
 
-/// Render the math equation editor dialog.
-fn render_math_editor(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
-    let (shape_id, latex_input) = ui_state.math_editor.as_mut()?;
-    let shape_id = *shape_id;
+/// Render persistent application settings.
+fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
+    if !ui_state.settings_open {
+        return None;
+    }
+
     let mut action = None;
     let mut close = false;
 
-    // Backdrop
-    egui::Area::new(egui::Id::new("math_editor_backdrop"))
+    egui::Area::new(egui::Id::new("settings_backdrop"))
         .fixed_pos(Pos2::ZERO)
-        .order(egui::Order::Background)
+        .order(egui::Order::Middle)
         .show(ctx, |ui| {
-            let screen_rect = ctx.input(|i| i.content_rect());
-            let response = ui.allocate_rect(screen_rect, egui::Sense::click());
-            ui.painter()
-                .rect_filled(screen_rect, 0.0, Color32::from_black_alpha(80));
-            if response.clicked() {
-                close = true;
-            }
+            let rect = ctx.input(|i| i.content_rect());
+            ui.painter().rect_filled(rect, 0.0, Color32::from_black_alpha(65));
         });
 
-    // Modal window
-    egui::Area::new(egui::Id::new("math_editor_dialog"))
+    egui::Area::new(egui::Id::new("settings_dialog"))
         .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
             Frame::new()
-                .fill(Color32::WHITE)
+                .fill(Color32::from_rgb(252, 252, 253))
                 .corner_radius(CornerRadius::same(12))
-                .stroke(Stroke::new(1.0, Color32::from_gray(200)))
-                .inner_margin(Margin::same(20))
+                .stroke(Stroke::new(1.0, Color32::from_gray(205)))
+                .inner_margin(Margin::same(18))
                 .show(ui, |ui| {
                     ui.set_width(520.0);
-                    ui.vertical(|ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                egui::RichText::new("Formule mathématique")
-                                    .size(16.0)
-                                    .strong()
-                                    .color(Color32::from_gray(30)),
-                            );
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    if default_btn(ui, "X") {
-                                        close = true;
-                                    }
-                                },
-                            );
-                        });
-
-                        ui.add_space(12.0);
-
+                    ui.set_max_height(650.0);
+                    ui.horizontal(|ui| {
                         ui.label(
-                            egui::RichText::new("LaTeX")
-                                .size(12.0)
-                                .color(Color32::from_gray(60)),
-                        );
-                        ui.add_space(4.0);
-
-                        let text_edit = egui::TextEdit::multiline(latex_input)
-                            .desired_width(f32::INFINITY)
-                            .desired_rows(3)
-                            .font(egui::TextStyle::Monospace);
-                        let response = ui.add(text_edit);
-
-                        // Request focus on first frame
-                        response.request_focus();
-
-                        ui.add_space(4.0);
-                        ui.horizontal(|ui| {
-                            if ui.small_button("Copy").clicked() {
-                                #[cfg(not(target_arch = "wasm32"))]
-                                if let Ok(mut cb) = arboard::Clipboard::new() {
-                                    let _ = cb.set_text(latex_input.as_str());
-                                }
-                                #[cfg(target_arch = "wasm32")]
-                                file_ops::copy_text_to_clipboard(latex_input);
-                            }
-                            if ui.small_button("Paste").clicked() {
-                                #[cfg(not(target_arch = "wasm32"))]
-                                if let Ok(mut cb) = arboard::Clipboard::new() {
-                                    if let Ok(text) = cb.get_text() {
-                                        *latex_input = text;
-                                    }
-                                }
-                                #[cfg(target_arch = "wasm32")]
-                                file_ops::request_clipboard_text_for_math();
-                            }
-                        });
-
-                        ui.add_space(10.0);
-                        ui.label(
-                            egui::RichText::new("Insérer")
-                                .size(12.0)
+                            egui::RichText::new("Settings")
+                                .size(17.0)
                                 .strong()
-                                .color(Color32::from_gray(60)),
+                                .color(Color32::from_gray(25)),
                         );
-                        ui.add_space(4.0);
-                        ui.horizontal_wrapped(|ui| {
-                            let snippets = [
-                                ("x²", "^{ }"),
-                                ("xₙ", "_{ }"),
-                                ("a/b", "\\frac{ }{ }"),
-                                ("√", "\\sqrt{ }"),
-                                ("∫", "\\int_{ }^{ } \\, dx"),
-                                ("∑", "\\sum_{ }^{ } "),
-                                ("vect", "\\vec{ }"),
-                                ("lim", "\\lim_{ } "),
-                                ("( )", "\\left( \\right)"),
-                                ("π", "\\pi"),
-                                ("θ", "\\theta"),
-                                ("∞", "\\infty"),
-                            ];
-                            for (label, snippet) in snippets {
-                                if ui.small_button(label).clicked() {
-                                    latex_input.push_str(snippet);
+                        ui.with_layout(
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                if default_btn(ui, "X") {
+                                    close = true;
                                 }
+                            },
+                        );
+                    });
+                    ui.add_space(10.0);
+
+                    egui::ScrollArea::vertical().max_height(560.0).show(ui, |ui| {
+                        widgets_section_label(ui, "Raccourcis des outils");
+                        ui.add_space(5.0);
+                        let tools = [
+                            ("Sélection", ToolKind::Select),
+                            ("Pan", ToolKind::Pan),
+                            ("Draw", ToolKind::Freehand),
+                            ("Highlighter", ToolKind::Highlighter),
+                            ("Eraser", ToolKind::Eraser),
+                            ("Text", ToolKind::Text),
+                            ("Math", ToolKind::Math),
+                            ("Rectangle", ToolKind::Rectangle),
+                            ("Ellipse", ToolKind::Ellipse),
+                            ("Arrow", ToolKind::Arrow),
+                            ("Line", ToolKind::Line),
+                            ("Laser", ToolKind::LaserPointer),
+                        ];
+                        egui::Grid::new("settings_shortcuts_grid")
+                            .num_columns(2)
+                            .spacing(Vec2::new(18.0, 5.0))
+                            .show(ui, |ui| {
+                                for (label, tool) in tools {
+                                    ui.label(
+                                        egui::RichText::new(label)
+                                            .color(Color32::from_gray(45)),
+                                    );
+                                    let value = ui_state.settings.shortcut_for_mut(tool);
+                                    ui.add(
+                                        egui::TextEdit::singleline(value)
+                                            .desired_width(52.0)
+                                            .char_limit(1)
+                                            .text_color(Color32::BLACK),
+                                    );
+                                    ui.end_row();
+                                }
+                            });
+
+                        ui.add_space(16.0);
+                        ui.separator();
+                        ui.add_space(10.0);
+                        widgets_section_label(ui, "Document d'introduction");
+                        ui.add_space(5.0);
+                        ui.horizontal(|ui| {
+                            let label = if ui_state.settings.intro_json.trim().is_empty() {
+                                "Aucun document".to_string()
+                            } else if ui_state.settings.intro_name.is_empty() {
+                                "Document configuré".to_string()
+                            } else {
+                                ui_state.settings.intro_name.clone()
+                            };
+                            ui.label(
+                                egui::RichText::new(label)
+                                    .color(Color32::from_gray(55)),
+                            );
+                            if secondary_btn(ui, "Importer JSON") {
+                                action = Some(UiAction::ImportIntroJson);
+                            }
+                            if !ui_state.settings.intro_json.trim().is_empty()
+                                && default_btn(ui, "Effacer")
+                            {
+                                action = Some(UiAction::ClearIntro);
                             }
                         });
+                        ui.label(
+                            egui::RichText::new("Vide = aucun document d'introduction.")
+                                .size(11.0)
+                                .color(Color32::from_gray(120)),
+                        );
 
-                        ui.add_space(6.0);
+                        ui.add_space(16.0);
+                        ui.separator();
+                        ui.add_space(10.0);
+                        widgets_section_label(ui, "Export");
+                        ui.add_space(5.0);
+                        ui.horizontal(|ui| {
+                            let folder = if ui_state.settings.export_folder_name.is_empty() {
+                                "Téléchargements du navigateur"
+                            } else {
+                                ui_state.settings.export_folder_name.as_str()
+                            };
+                            ui.label(
+                                egui::RichText::new(folder)
+                                    .color(Color32::from_gray(55)),
+                            );
+                            if secondary_btn(ui, "Choisir le dossier") {
+                                action = Some(UiAction::ChooseExportFolder);
+                            }
+                        });
                         ui.label(
                             egui::RichText::new(
-                                "Exemples : x^2, \\frac{a}{b}, \\sqrt{x}, \\sum_{i=1}^n, \\vec{AB}",
+                                "Chrome/Edge : le dossier choisi est mémorisé. Le navigateur peut redemander l'autorisation après un redémarrage.",
                             )
                             .size(11.0)
                             .color(Color32::from_gray(120)),
                         );
 
                         ui.add_space(16.0);
-
+                        ui.separator();
+                        ui.add_space(10.0);
+                        widgets_section_label(ui, "Sauvegarde automatique");
+                        ui.add_space(5.0);
+                        ui.checkbox(
+                            &mut ui_state.settings.autosave_enabled,
+                            "Activer la sauvegarde automatique",
+                        );
                         ui.horizontal(|ui| {
-                            if primary_btn(ui, "Apply") {
-                                let latex: String = latex_input.clone();
-                                action = Some(UiAction::UpdateMathLatex(shape_id, latex));
+                            ui.label("Intervalle");
+                            ui.add(
+                                egui::DragValue::new(
+                                    &mut ui_state.settings.autosave_interval_secs,
+                                )
+                                .range(1..=3600)
+                                .suffix(" s"),
+                            );
+                        });
+                        ui.checkbox(
+                            &mut ui_state.settings.restore_last_document,
+                            "Restaurer la dernière feuille au démarrage",
+                        );
+
+                        ui.add_space(18.0);
+                        ui.horizontal(|ui| {
+                            if primary_btn(ui, "Enregistrer") {
+                                ui_state.settings.sanitize();
+                                action = Some(UiAction::SaveSettings);
                                 close = true;
                             }
-                            ui.add_space(8.0);
-                            if default_btn(ui, "Cancel") {
+                            if default_btn(ui, "Fermer") {
                                 close = true;
                             }
                         });
@@ -3071,7 +3151,88 @@ fn render_math_editor(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction>
         });
 
     if close {
+        ui_state.settings_open = false;
+    }
+
+    action
+}
+
+/// Render a compact inline formula editor next to the formula on the canvas.
+/// The formula itself is updated live, so there is no blocking modal/panel.
+fn render_math_editor(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
+    let screen_rect = ctx.input(|i| i.content_rect());
+    let pos = ui_state.math_editor_screen_pos.unwrap_or(screen_rect.center());
+    let x = pos.x.clamp(12.0, (screen_rect.right() - 390.0).max(12.0));
+    let y = (pos.y + 28.0).clamp(12.0, (screen_rect.bottom() - 72.0).max(12.0));
+
+    let mut action = None;
+    let mut close = false;
+
+    {
+        let editor = ui_state.math_editor.as_mut()?;
+        let shape_id = editor.shape_id;
+
+        egui::Area::new(egui::Id::new("math_inline_editor"))
+            .fixed_pos(Pos2::new(x, y))
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                Frame::new()
+                    .fill(Color32::from_rgb(250, 250, 252))
+                    .corner_radius(CornerRadius::same(8))
+                    .stroke(Stroke::new(1.0, Color32::from_gray(205)))
+                    .inner_margin(Margin::symmetric(10, 8))
+                    .show(ui, |ui| {
+                        let response = Frame::new()
+                            .fill(Color32::WHITE)
+                            .corner_radius(CornerRadius::same(6))
+                            .stroke(Stroke::new(1.0, Color32::from_gray(210)))
+                            .inner_margin(Margin::symmetric(8, 5))
+                            .show(ui, |ui| {
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut editor.input)
+                                        .desired_width(350.0)
+                                        .font(egui::TextStyle::Monospace)
+                                        .text_color(Color32::BLACK)
+                                        .frame(false)
+                                        .hint_text("ex. sqrt(x), (a+b)/(c+d), int(x^2,x,0,1)"),
+                                )
+                            })
+                            .inner;
+                        response.request_focus();
+
+                        if response.changed() {
+                            let latex = friendly_math_to_latex(&editor.input);
+                            action = Some(UiAction::PreviewMath(
+                                shape_id,
+                                editor.input.clone(),
+                                latex,
+                            ));
+                        }
+
+                        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                            action = Some(UiAction::CancelMath(
+                                shape_id,
+                                editor.original_source.clone(),
+                                editor.original_latex.clone(),
+                                editor.is_new,
+                            ));
+                            close = true;
+                        } else if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            action = Some(UiAction::FinishMath(
+                                shape_id,
+                                editor.original_source.clone(),
+                                editor.original_latex.clone(),
+                                editor.is_new,
+                            ));
+                            close = true;
+                        }
+                    });
+            });
+    }
+
+    if close {
         ui_state.math_editor = None;
+        ui_state.math_editor_screen_pos = None;
     }
 
     action

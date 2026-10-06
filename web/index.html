@@ -81,11 +81,92 @@
 
         // Chrome/Edge expose precision-touchpad pinch as Ctrl+wheel. Prevent
         // browser page zoom so DrafftInk receives the gesture instead.
+        window.__drafftinkPinchGesture = null;
         window.addEventListener('wheel', function(e) {
             if (e.ctrlKey || e.metaKey) {
+                // Chrome/Edge represent a precision-touchpad pinch as Ctrl+wheel.
+                // Preserve the real DOM modifier + focal point because winit's
+                // generic MouseWheel event does not expose wheel modifiers.
+                window.__drafftinkPinchGesture = {
+                    factor: Math.max(0.80, Math.min(1.25, Math.exp(-e.deltaY * 0.0025))),
+                    x: e.clientX,
+                    y: e.clientY
+                };
                 e.preventDefault();
             }
         }, { passive: false });
+
+        // Persistent export folder using the File System Access API (Chrome/Edge).
+        // Directory handles are structured-cloneable and are kept in IndexedDB.
+        const DRAFFTINK_FS_DB = 'drafftink-file-handles';
+        const DRAFFTINK_FS_STORE = 'handles';
+
+        function openDrafftInkFsDb() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(DRAFFTINK_FS_DB, 1);
+                request.onupgradeneeded = () => {
+                    const db = request.result;
+                    if (!db.objectStoreNames.contains(DRAFFTINK_FS_STORE)) {
+                        db.createObjectStore(DRAFFTINK_FS_STORE);
+                    }
+                };
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        async function putExportDirectoryHandle(handle) {
+            const db = await openDrafftInkFsDb();
+            await new Promise((resolve, reject) => {
+                const tx = db.transaction(DRAFFTINK_FS_STORE, 'readwrite');
+                tx.objectStore(DRAFFTINK_FS_STORE).put(handle, 'exportDirectory');
+                tx.oncomplete = resolve;
+                tx.onerror = () => reject(tx.error);
+            });
+            db.close();
+        }
+
+        async function getExportDirectoryHandle() {
+            const db = await openDrafftInkFsDb();
+            const value = await new Promise((resolve, reject) => {
+                const tx = db.transaction(DRAFFTINK_FS_STORE, 'readonly');
+                const req = tx.objectStore(DRAFFTINK_FS_STORE).get('exportDirectory');
+                req.onsuccess = () => resolve(req.result || null);
+                req.onerror = () => reject(req.error);
+            });
+            db.close();
+            return value;
+        }
+
+        async function ensureReadWritePermission(handle) {
+            if (!handle) return false;
+            const options = { mode: 'readwrite' };
+            if ((await handle.queryPermission(options)) === 'granted') return true;
+            return (await handle.requestPermission(options)) === 'granted';
+        }
+
+        window.drafftinkPickExportDirectory = async function() {
+            if (!window.showDirectoryPicker) return '';
+            const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+            if (!(await ensureReadWritePermission(handle))) return '';
+            await putExportDirectoryHandle(handle);
+            return handle.name || 'Dossier sélectionné';
+        };
+
+        window.drafftinkSaveBlobToExportDirectory = async function(filename, blob) {
+            try {
+                const handle = await getExportDirectoryHandle();
+                if (!handle || !(await ensureReadWritePermission(handle))) return false;
+                const fileHandle = await handle.getFileHandle(filename, { create: true });
+                const writable = await fileHandle.createWritable();
+                await writable.write(blob);
+                await writable.close();
+                return true;
+            } catch (error) {
+                console.warn('DrafftInk export folder unavailable:', error);
+                return false;
+            }
+        };
 
         // The app uses WebGPU. Give a clear message before fetching the WASM
         // rather than failing later with an opaque renderer error.

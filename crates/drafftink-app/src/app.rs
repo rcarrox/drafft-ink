@@ -27,7 +27,7 @@ use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
 use winit::window::{CursorIcon, Window, WindowId};
 
 use crate::event_handler::EventHandler;
-use crate::ui::{SelectedShapeProps, UiAction, UiState, render_ui};
+use crate::ui::{MathEditorState, SelectedShapeProps, UiAction, UiState, render_ui};
 
 #[cfg(feature = "native")]
 pub mod file_ops {
@@ -262,6 +262,7 @@ pub mod file_ops {
 pub mod file_ops {
     use drafftink_core::canvas::CanvasDocument;
     use drafftink_core::storage::{IndexedDbStorage, Storage};
+    use crate::settings::UserSettings;
     use std::cell::RefCell;
     use std::rc::Rc;
     use wasm_bindgen::prelude::*;
@@ -273,6 +274,8 @@ pub mod file_ops {
         static PENDING_CLIPBOARD_TEXT: RefCell<Option<String>> = const { RefCell::new(None) };
         static PENDING_MATH_CLIPBOARD: RefCell<Option<String>> = const { RefCell::new(None) };
         static PENDING_LIBRARY: RefCell<Option<(String, CanvasDocument)>> = const { RefCell::new(None) };
+        static PENDING_INTRO_JSON: RefCell<Option<(String, String)>> = const { RefCell::new(None) };
+        static PENDING_EXPORT_FOLDER: RefCell<Option<String>> = const { RefCell::new(None) };
     }
 
     /// Request clipboard text read (async). Result will be available via take_pending_clipboard_text().
@@ -396,9 +399,32 @@ pub mod file_ops {
         });
     }
 
-    /// Try to load the last document on startup.
-    pub fn try_load_last_document() {
-        load_document_async();
+    /// Restore the last autosaved document, or the configured intro document.
+    /// An empty intro setting deliberately leaves a blank canvas.
+    pub fn try_load_last_document(settings: &UserSettings) {
+        let settings = settings.clone();
+        STORAGE.with(|storage| {
+            let storage = storage.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                if settings.restore_last_document {
+                    if let Ok(doc) = storage.load("__last__").await {
+                        log::info!("Restored last autosaved document: {}", doc.name);
+                        set_pending_document(doc);
+                        return;
+                    }
+                }
+
+                if !settings.intro_json.trim().is_empty() {
+                    match CanvasDocument::from_json(&settings.intro_json) {
+                        Ok(doc) => {
+                            log::info!("Loading configured intro document");
+                            set_pending_document(doc);
+                        }
+                        Err(e) => log::warn!("Configured intro document is invalid: {}", e),
+                    }
+                }
+            });
+        });
     }
 
     /// Load document by name from IndexedDB - triggers async load.
@@ -460,6 +486,101 @@ pub mod file_ops {
     /// Use `take_pending_document()` to retrieve the loaded document.
     pub fn upload_document_async() {
         trigger_file_input_async();
+    }
+
+    /// Pick a JSON document to use as the startup intro.
+    pub fn import_intro_json_async() {
+        wasm_bindgen_futures::spawn_local(async {
+            if let Err(e) = import_intro_json_impl().await {
+                log::warn!("Failed to import intro JSON: {:?}", e);
+            }
+        });
+    }
+
+    pub fn take_pending_intro_json() -> Option<(String, String)> {
+        PENDING_INTRO_JSON.with(|cell| cell.borrow_mut().take())
+    }
+
+    async fn import_intro_json_impl() -> Result<(), JsValue> {
+        let window = web_sys::window().ok_or("No window")?;
+        let document = window.document().ok_or("No document")?;
+        let input: web_sys::HtmlInputElement = document.create_element("input")?.dyn_into()?;
+        input.set_type("file");
+        input.set_accept(".json");
+        input.style().set_property("display", "none").ok();
+        document.body().ok_or("No body")?.append_child(&input)?;
+
+        let file = wait_for_file_selection(&input).await;
+        input.remove();
+        let file = file?;
+        let name = file.name();
+        let text = wasm_bindgen_futures::JsFuture::from(file.text())
+            .await?
+            .as_string()
+            .ok_or("Failed to read intro JSON")?;
+
+        CanvasDocument::from_json(&text)
+            .map_err(|e| JsValue::from_str(&format!("Invalid DrafftInk JSON: {}", e)))?;
+
+        PENDING_INTRO_JSON.with(|cell| *cell.borrow_mut() = Some((name, text)));
+        Ok(())
+    }
+
+    /// Consume a precision-touchpad pinch captured at the DOM level.
+    /// Returns (zoom_factor, client_x, client_y).
+    pub fn take_browser_pinch() -> Option<(f64, f64, f64)> {
+        let window = web_sys::window()?;
+        let key = JsValue::from_str("__drafftinkPinchGesture");
+        let value = js_sys::Reflect::get(window.as_ref(), &key).ok()?;
+        if value.is_null() || value.is_undefined() {
+            return None;
+        }
+        let _ = js_sys::Reflect::set(window.as_ref(), &key, &JsValue::NULL);
+        let factor = js_sys::Reflect::get(&value, &JsValue::from_str("factor"))
+            .ok()?
+            .as_f64()?;
+        let x = js_sys::Reflect::get(&value, &JsValue::from_str("x"))
+            .ok()?
+            .as_f64()?;
+        let y = js_sys::Reflect::get(&value, &JsValue::from_str("y"))
+            .ok()?
+            .as_f64()?;
+        Some((factor, x, y))
+    }
+
+    /// Open Chrome/Edge's directory picker for the default export folder.
+    pub fn choose_export_directory() {
+        wasm_bindgen_futures::spawn_local(async {
+            let Some(window) = web_sys::window() else {
+                return;
+            };
+            let Ok(value) = js_sys::Reflect::get(
+                window.as_ref(),
+                &JsValue::from_str("drafftinkPickExportDirectory"),
+            ) else {
+                return;
+            };
+            let Ok(function) = value.dyn_into::<js_sys::Function>() else {
+                return;
+            };
+            let Ok(result) = function.call0(window.as_ref()) else {
+                return;
+            };
+            let Ok(promise) = result.dyn_into::<js_sys::Promise>() else {
+                return;
+            };
+            if let Ok(value) = wasm_bindgen_futures::JsFuture::from(promise).await {
+                if let Some(name) = value.as_string() {
+                    if !name.is_empty() {
+                        PENDING_EXPORT_FOLDER.with(|cell| *cell.borrow_mut() = Some(name));
+                    }
+                }
+            }
+        });
+    }
+
+    pub fn take_pending_export_folder() -> Option<String> {
+        PENDING_EXPORT_FOLDER.with(|cell| cell.borrow_mut().take())
     }
 
     /// Take the pending document loaded from async operations.
@@ -525,68 +646,87 @@ pub mod file_ops {
     }
 
     fn download_file(filename: &str, content: &str, mime_type: &str) {
-        let window = web_sys::window().expect("No window");
-        let document = window.document().expect("No document");
-
-        // Create blob
         let blob_parts = js_sys::Array::new();
         blob_parts.push(&JsValue::from_str(content));
-
         let options = web_sys::BlobPropertyBag::new();
         options.set_type(mime_type);
-
-        let blob = web_sys::Blob::new_with_str_sequence_and_options(&blob_parts, &options)
-            .expect("Failed to create blob");
-
-        // Create download URL
-        let url = web_sys::Url::create_object_url_with_blob(&blob).expect("Failed to create URL");
-
-        // Create and click download link
-        let a = document
-            .create_element("a")
-            .expect("Failed to create element")
-            .dyn_into::<web_sys::HtmlAnchorElement>()
-            .expect("Failed to cast to anchor");
-
-        a.set_href(&url);
-        a.set_download(filename);
-        a.click();
-
-        // Clean up
-        web_sys::Url::revoke_object_url(&url).ok();
+        if let Ok(blob) = web_sys::Blob::new_with_str_sequence_and_options(&blob_parts, &options) {
+            export_blob_or_download(filename.to_string(), blob);
+        }
     }
 
     fn download_binary_file(filename: &str, data: &[u8], mime_type: &str) {
-        let window = web_sys::window().expect("No window");
-        let document = window.document().expect("No document");
-
-        // Create Uint8Array from data
         let uint8_array = js_sys::Uint8Array::from(data);
         let blob_parts = js_sys::Array::new();
         blob_parts.push(&uint8_array);
-
         let options = web_sys::BlobPropertyBag::new();
         options.set_type(mime_type);
+        if let Ok(blob) =
+            web_sys::Blob::new_with_u8_array_sequence_and_options(&blob_parts, &options)
+        {
+            export_blob_or_download(filename.to_string(), blob);
+        }
+    }
 
-        let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&blob_parts, &options)
-            .expect("Failed to create blob");
+    fn export_blob_or_download(filename: String, blob: web_sys::Blob) {
+        wasm_bindgen_futures::spawn_local(async move {
+            if try_save_blob_to_export_folder(&filename, &blob)
+                .await
+                .unwrap_or(false)
+            {
+                log::info!("Exported '{}' to configured folder", filename);
+                return;
+            }
+            fallback_download_blob(&filename, &blob);
+        });
+    }
 
-        // Create download URL
-        let url = web_sys::Url::create_object_url_with_blob(&blob).expect("Failed to create URL");
+    async fn try_save_blob_to_export_folder(
+        filename: &str,
+        blob: &web_sys::Blob,
+    ) -> Result<bool, JsValue> {
+        let window = web_sys::window().ok_or("No window")?;
+        let value = js_sys::Reflect::get(
+            window.as_ref(),
+            &JsValue::from_str("drafftinkSaveBlobToExportDirectory"),
+        )?;
+        let function: js_sys::Function = match value.dyn_into() {
+            Ok(f) => f,
+            Err(_) => return Ok(false),
+        };
+        let result = function.call2(
+            window.as_ref(),
+            &JsValue::from_str(filename),
+            blob.as_ref(),
+        )?;
+        let promise: js_sys::Promise = match result.dyn_into() {
+            Ok(p) => p,
+            Err(_) => return Ok(false),
+        };
+        let value = wasm_bindgen_futures::JsFuture::from(promise).await?;
+        Ok(value.as_bool().unwrap_or(false))
+    }
 
-        // Create and click download link
-        let a = document
-            .create_element("a")
-            .expect("Failed to create element")
-            .dyn_into::<web_sys::HtmlAnchorElement>()
-            .expect("Failed to cast to anchor");
-
+    fn fallback_download_blob(filename: &str, blob: &web_sys::Blob) {
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let Some(document) = window.document() else {
+            return;
+        };
+        let Ok(url) = web_sys::Url::create_object_url_with_blob(blob) else {
+            return;
+        };
+        let Ok(element) = document.create_element("a") else {
+            return;
+        };
+        let Ok(a) = element.dyn_into::<web_sys::HtmlAnchorElement>() else {
+            return;
+        };
         a.set_href(&url);
         a.set_download(filename);
         a.click();
-
-        // Clean up
-        web_sys::Url::revoke_object_url(&url).ok();
+        let _ = web_sys::Url::revoke_object_url(&url);
     }
 
     fn trigger_file_input_async() {
@@ -1913,7 +2053,9 @@ impl App {
         // Try to restore last saved document on WASM
         #[cfg(target_arch = "wasm32")]
         {
-            file_ops::try_load_last_document();
+            if let Some(ref state) = self.state {
+                file_ops::try_load_last_document(&state.ui_state.settings);
+            }
         }
 
         // Setup drag-drop handlers on WASM
@@ -2306,6 +2448,19 @@ impl ApplicationHandler for App {
                     state.ui_state.recent_documents = docs;
                 }
 
+                #[cfg(target_arch = "wasm32")]
+                if let Some((name, json)) = file_ops::take_pending_intro_json() {
+                    state.ui_state.settings.intro_name = name;
+                    state.ui_state.settings.intro_json = json;
+                    crate::settings::save_settings(&state.ui_state.settings);
+                }
+
+                #[cfg(target_arch = "wasm32")]
+                if let Some(folder_name) = file_ops::take_pending_export_folder() {
+                    state.ui_state.settings.export_folder_name = folder_name;
+                    crate::settings::save_settings(&state.ui_state.settings);
+                }
+
                 // Check for pending pasted image (WASM)
                 #[cfg(target_arch = "wasm32")]
                 if let Some(image_shape) = file_ops::take_pending_image() {
@@ -2397,8 +2552,14 @@ impl ApplicationHandler for App {
                 // Check for pending math clipboard paste (WASM async)
                 #[cfg(target_arch = "wasm32")]
                 if let Some(clipboard_text) = file_ops::take_pending_math_clipboard() {
-                    if let Some((_, ref mut latex)) = state.ui_state.math_editor {
-                        *latex = clipboard_text;
+                    if let Some(editor) = state.ui_state.math_editor.as_mut() {
+                        editor.input = clipboard_text;
+                        let latex = crate::math_input::friendly_math_to_latex(&editor.input);
+                        if let Some(Shape::Math(math)) =
+                            state.canvas.document.get_shape_mut(editor.shape_id)
+                        {
+                            math.set_formula(editor.input.clone(), latex);
+                        }
                     }
                 }
 
@@ -2498,6 +2659,19 @@ impl ApplicationHandler for App {
                 state.ui_state.zoom_level = state.canvas.camera.zoom;
                 state.ui_state.grid_style = state.config.grid_style;
 
+                state.ui_state.math_editor_screen_pos = state
+                    .ui_state
+                    .math_editor
+                    .as_ref()
+                    .and_then(|editor| state.canvas.document.get_shape(editor.shape_id))
+                    .and_then(|shape| match shape {
+                        Shape::Math(math) => {
+                            let p = state.canvas.camera.world_to_screen(math.position);
+                            Some(egui::Pos2::new(p.x as f32, p.y as f32))
+                        }
+                        _ => None,
+                    });
+
                 // Update UI state from first selected shape's style
                 if let Some(&shape_id) = state.canvas.selection.first() {
                     if let Some(shape) = state.canvas.document.get_shape(shape_id) {
@@ -2564,17 +2738,15 @@ impl ApplicationHandler for App {
                     })
                     .collect();
 
-                // Auto-save to IndexedDB (WASM only) - every 5 seconds if document changed
+                // Configurable silent autosave to IndexedDB.
                 #[cfg(target_arch = "wasm32")]
                 {
-                    let doc_version = state.canvas.document.shapes.len() as u64
-                        + state.canvas.document.z_order.len() as u64;
-                    if doc_version != state.last_doc_version
-                        && state.last_autosave.elapsed().as_secs() >= 5
+                    if state.ui_state.settings.autosave_enabled
+                        && state.last_autosave.elapsed().as_secs()
+                            >= state.ui_state.settings.autosave_interval_secs.max(1)
                     {
                         file_ops::autosave_document(&state.canvas.document);
                         state.last_autosave = web_time::Instant::now();
-                        state.last_doc_version = doc_version;
                     }
                 }
 
@@ -2860,14 +3032,16 @@ impl ApplicationHandler for App {
                                 }
                             }
                             UiAction::ShowIntro => {
-                                static INTRO_JSON: &str = include_str!("../assets/intro.json");
-                                if let Ok(doc) =
-                                    drafftink_core::canvas::CanvasDocument::from_json(INTRO_JSON)
-                                {
-                                    state.canvas.document = doc;
-                                    state.canvas.clear_selection();
-                                    state.canvas.camera.reset();
-                                    log::info!("Loaded intro document");
+                                let intro = state.ui_state.settings.intro_json.clone();
+                                if !intro.trim().is_empty() {
+                                    if let Ok(doc) =
+                                        drafftink_core::canvas::CanvasDocument::from_json(&intro)
+                                    {
+                                        state.canvas.document = doc;
+                                        state.canvas.clear_selection();
+                                        state.canvas.camera.reset();
+                                        log::info!("Loaded configured intro document");
+                                    }
                                 }
                             }
                             UiAction::ExportPng | UiAction::CopyPng => {
@@ -3613,6 +3787,24 @@ impl ApplicationHandler for App {
                                 state.ui_state.shortcuts_modal_open =
                                     !state.ui_state.shortcuts_modal_open;
                             }
+                            UiAction::SaveSettings => {
+                                state.ui_state.settings.sanitize();
+                                crate::settings::save_settings(&state.ui_state.settings);
+                                log::info!("Settings saved");
+                            }
+                            UiAction::ImportIntroJson => {
+                                #[cfg(target_arch = "wasm32")]
+                                file_ops::import_intro_json_async();
+                            }
+                            UiAction::ClearIntro => {
+                                state.ui_state.settings.intro_json.clear();
+                                state.ui_state.settings.intro_name.clear();
+                                crate::settings::save_settings(&state.ui_state.settings);
+                            }
+                            UiAction::ChooseExportFolder => {
+                                #[cfg(target_arch = "wasm32")]
+                                file_ops::choose_export_directory();
+                            }
                             UiAction::ToggleCalligraphy => {
                                 state.canvas.tool_manager.calligraphy_mode =
                                     !state.canvas.tool_manager.calligraphy_mode;
@@ -3655,13 +3847,65 @@ impl ApplicationHandler for App {
                                     log::info!("Set opacity to {}%", (opacity * 100.0) as i32);
                                 }
                             }
-                            UiAction::UpdateMathLatex(shape_id, latex) => {
-                                state.canvas.document.push_undo();
+                            UiAction::PreviewMath(shape_id, source, latex) => {
                                 if let Some(Shape::Math(math)) =
                                     state.canvas.document.get_shape_mut(shape_id)
                                 {
-                                    math.set_latex(latex);
-                                    log::info!("Updated math LaTeX");
+                                    math.set_formula(source, latex);
+                                }
+                            }
+                            UiAction::FinishMath(
+                                shape_id,
+                                original_source,
+                                original_latex,
+                                is_new,
+                            ) => {
+                                let current = state.canvas.document.get_shape(shape_id).and_then(
+                                    |shape| match shape {
+                                        Shape::Math(math) => {
+                                            Some((math.source.clone(), math.latex.clone()))
+                                        }
+                                        _ => None,
+                                    },
+                                );
+
+                                if let Some((current_source, current_latex)) = current {
+                                    if current_source.trim().is_empty() {
+                                        state.canvas.remove_shape(shape_id);
+                                    } else if !is_new
+                                        && (current_source != original_source
+                                            || current_latex != original_latex)
+                                    {
+                                        // Build one clean undo step for the entire inline edit.
+                                        if let Some(Shape::Math(math)) =
+                                            state.canvas.document.get_shape_mut(shape_id)
+                                        {
+                                            math.set_formula(
+                                                original_source.clone(),
+                                                original_latex.clone(),
+                                            );
+                                        }
+                                        state.canvas.document.push_undo();
+                                        if let Some(Shape::Math(math)) =
+                                            state.canvas.document.get_shape_mut(shape_id)
+                                        {
+                                            math.set_formula(current_source, current_latex);
+                                        }
+                                    }
+                                }
+                            }
+                            UiAction::CancelMath(
+                                shape_id,
+                                original_source,
+                                original_latex,
+                                is_new,
+                            ) => {
+                                if is_new {
+                                    state.canvas.remove_shape(shape_id);
+                                } else if let Some(Shape::Math(math)) =
+                                    state.canvas.document.get_shape_mut(shape_id)
+                                {
+                                    math.set_formula(original_source, original_latex);
                                 }
                             }
                         }
@@ -4376,9 +4620,14 @@ impl ApplicationHandler for App {
                                     if let Some(Shape::Math(math)) =
                                         state.canvas.document.get_shape(math_id)
                                     {
-                                        state.ui_state.math_editor =
-                                            Some((math_id, math.latex.clone()));
-                                        log::info!("Opening math editor for shape {:?}", math_id);
+                                        state.ui_state.math_editor = Some(MathEditorState {
+                                            shape_id: math_id,
+                                            input: math.edit_source().to_string(),
+                                            original_source: math.edit_source().to_string(),
+                                            original_latex: math.latex.clone(),
+                                            is_new: false,
+                                        });
+                                        log::info!("Opening inline math editor for shape {:?}", math_id);
                                     }
                                 }
                             }
@@ -4405,7 +4654,13 @@ impl ApplicationHandler for App {
                             // A newly placed math object opens its formula editor immediately.
                             if let Some(math_id) = state.event_handler.pending_math_edit.take() {
                                 if let Some(Shape::Math(math)) = state.canvas.document.get_shape(math_id) {
-                                    state.ui_state.math_editor = Some((math_id, math.latex.clone()));
+                                    state.ui_state.math_editor = Some(MathEditorState {
+                                        shape_id: math_id,
+                                        input: math.edit_source().to_string(),
+                                        original_source: String::new(),
+                                        original_latex: String::new(),
+                                        is_new: true,
+                                    });
                                 }
                             }
 
@@ -4470,12 +4725,21 @@ impl ApplicationHandler for App {
 
                 let position = state.input.mouse_position();
 
-                if state.input.ctrl() {
-                    // Ctrl/Cmd + wheel, and two-finger pinch on precision touchpads = zoom.
+                #[cfg(target_arch = "wasm32")]
+                let browser_pinch = file_ops::take_browser_pinch();
+                #[cfg(not(target_arch = "wasm32"))]
+                let browser_pinch: Option<(f64, f64, f64)> = None;
+
+                if let Some((factor, x, y)) = browser_pinch {
+                    // Real Chrome/Edge precision-touchpad pinch, centered at the fingers.
+                    state.canvas.camera.zoom_at(Point::new(x, y), factor);
+                    state.ui_state.zoom_level = state.canvas.camera.zoom;
+                } else if state.input.ctrl() {
+                    // Physical Ctrl/Cmd + wheel = zoom.
                     state.canvas.camera.zoom_at(position, zoom_factor);
                     state.ui_state.zoom_level = state.canvas.camera.zoom;
                 } else {
-                    // Two-finger trackpad scroll / normal wheel = pan.
+                    // Two-finger precision-touchpad scroll / normal wheel = pan.
                     state.canvas.camera.pan(scroll);
                 }
                 state.needs_redraw = true;
@@ -4552,7 +4816,13 @@ impl ApplicationHandler for App {
                                 );
                                 if let Some(math_id) = state.event_handler.pending_math_edit.take() {
                                     if let Some(Shape::Math(math)) = state.canvas.document.get_shape(math_id) {
-                                        state.ui_state.math_editor = Some((math_id, math.latex.clone()));
+                                        state.ui_state.math_editor = Some(MathEditorState {
+                                            shape_id: math_id,
+                                            input: math.edit_source().to_string(),
+                                            original_source: String::new(),
+                                            original_latex: String::new(),
+                                            is_new: true,
+                                        });
                                     }
                                 }
                             }
@@ -5292,65 +5562,14 @@ impl ApplicationHandler for App {
                                         state.ui_state.zoom_level = state.canvas.camera.zoom;
                                     }
                                 }
-                                // Selection: S or 1
-                                "s" | "S" | "1" => {
-                                    state.canvas.set_tool(ToolKind::Select);
-                                    log::info!("Tool: Select");
-                                }
-                                // Pan: M
-                                "m" | "M" => {
-                                    state.canvas.set_tool(ToolKind::Pan);
-                                    log::info!("Tool: Pan");
-                                }
-                                // Rectangle: R or 2
-                                "r" | "R" | "2" => {
-                                    state.canvas.set_tool(ToolKind::Rectangle);
-                                    log::info!("Tool: Rectangle");
-                                }
-                                // Ellipse: O or 4
-                                "o" | "O" | "4" => {
-                                    state.canvas.set_tool(ToolKind::Ellipse);
-                                    log::info!("Tool: Ellipse");
-                                }
-                                // Arrow: A or 5
-                                "a" | "A" | "5" => {
-                                    state.canvas.set_tool(ToolKind::Arrow);
-                                    log::info!("Tool: Arrow");
-                                }
-                                // Line: L or 6
-                                "l" | "L" | "6" => {
-                                    state.canvas.set_tool(ToolKind::Line);
-                                    log::info!("Tool: Line");
-                                }
-                                // Draw/Pen: B or 7
-                                "b" | "B" | "7" => {
-                                    state.canvas.set_tool(ToolKind::Freehand);
-                                    log::info!("Tool: Draw");
-                                }
-                                // Text: T or 8
-                                "t" | "T" | "8" => {
-                                    state.canvas.set_tool(ToolKind::Text);
-                                    log::info!("Tool: Text");
-                                }
-                                // Math formula: 9 (M is reserved for Pan)
-                                "9" => {
-                                    state.canvas.set_tool(ToolKind::Math);
-                                    log::info!("Tool: Math");
-                                }
-                                // Highlighter: K
-                                "k" | "K" => {
-                                    state.canvas.set_tool(ToolKind::Highlighter);
-                                    log::info!("Tool: Highlighter");
-                                }
-                                // Eraser: E
-                                "e" | "E" => {
-                                    state.canvas.set_tool(ToolKind::Eraser);
-                                    log::info!("Tool: Eraser");
-                                }
-                                // Laser Pointer: Z
-                                "z" | "Z" => {
-                                    state.canvas.set_tool(ToolKind::LaserPointer);
-                                    log::info!("Tool: Laser Pointer");
+                                key
+                                    if state.ui_state.settings.tool_for_key(key).is_some() =>
+                                {
+                                    if let Some(tool) = state.ui_state.settings.tool_for_key(key) {
+                                        state.canvas.set_tool(tool);
+                                        state.ui_state.current_tool = tool;
+                                        log::info!("Tool shortcut {:?}: {}", tool, key);
+                                    }
                                 }
                                 "Delete" | "Backspace" => {
                                     if !state.canvas.selection.is_empty() {
@@ -5369,6 +5588,7 @@ impl ApplicationHandler for App {
                                         || state.ui_state.menu_open
                                         || state.ui_state.collab_modal_open
                                         || state.ui_state.shortcuts_modal_open
+                                        || state.ui_state.settings_open
                                         || state.ui_state.save_dialog_open
                                         || state.ui_state.open_dialog_open
                                         || state.ui_state.open_recent_dialog_open;
@@ -5379,6 +5599,7 @@ impl ApplicationHandler for App {
                                         state.ui_state.menu_open = false;
                                         state.ui_state.collab_modal_open = false;
                                         state.ui_state.shortcuts_modal_open = false;
+                                        state.ui_state.settings_open = false;
                                         state.ui_state.save_dialog_open = false;
                                         state.ui_state.open_dialog_open = false;
                                         state.ui_state.open_recent_dialog_open = false;

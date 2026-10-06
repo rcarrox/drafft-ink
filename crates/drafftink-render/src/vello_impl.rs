@@ -1110,6 +1110,12 @@ impl VelloRenderer {
 
     /// Render a math (LaTeX) shape using ReX.
     fn render_math(&mut self, math: &drafftink_core::shapes::Math, transform: Affine) {
+        // A newly inserted formula is intentionally invisible until the user types.
+        // The inline editor is shown at the insertion point.
+        if math.latex.trim().is_empty() {
+            return;
+        }
+
         use crate::rex_backend::VelloBackend;
         use rex::font::backend::ttf_parser::TtfMathFont;
         use rex::layout::engine::LayoutBuilder;

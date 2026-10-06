@@ -12,8 +12,11 @@ pub struct Math {
     pub(crate) id: ShapeId,
     /// Position (baseline origin).
     pub position: Point,
-    /// LaTeX source.
+    /// LaTeX source used by the renderer.
     pub latex: String,
+    /// User-facing source. May use the friendly Maple/GeoGebra-like syntax.
+    #[serde(default)]
+    pub source: String,
     /// Font size in pixels.
     pub font_size: f64,
     /// Rotation angle in radians (around center).
@@ -32,6 +35,7 @@ impl Clone for Math {
             id: self.id,
             position: self.position,
             latex: self.latex.clone(),
+            source: self.source.clone(),
             font_size: self.font_size,
             rotation: self.rotation,
             style: self.style.clone(),
@@ -47,6 +51,7 @@ impl Math {
         Self {
             id: Uuid::new_v4(),
             position,
+            source: latex.clone(),
             latex,
             font_size: Self::DEFAULT_FONT_SIZE,
             rotation: 0.0,
@@ -66,6 +71,7 @@ impl Math {
         Self {
             id,
             position,
+            source: latex.clone(),
             latex,
             font_size,
             rotation,
@@ -91,8 +97,23 @@ impl Math {
     }
 
     pub fn set_latex(&mut self, latex: String) {
+        self.source = latex.clone();
         self.latex = latex;
         self.invalidate_cache();
+    }
+
+    pub fn set_formula(&mut self, source: String, latex: String) {
+        self.source = source;
+        self.latex = latex;
+        self.invalidate_cache();
+    }
+
+    pub fn edit_source(&self) -> &str {
+        if self.source.trim().is_empty() {
+            &self.latex
+        } else {
+            &self.source
+        }
     }
 }
 

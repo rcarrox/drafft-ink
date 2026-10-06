@@ -83,7 +83,7 @@ jobs:
           cp windows/serve-local.ps1 dist/windows-portable/windows/
           cp VERSION_LOCAL.txt dist/windows-portable/
           cp README_LOCAL_FR.md dist/windows-portable/
-          (cd dist/windows-portable && zip -qr ../DrafftInk_Windows_Portable_0.2.0.zip .)
+          (cd dist/windows-portable && zip -qr ../DrafftInk_Windows_Portable_0.3.0.zip .)
 
       - name: Assemble web package
         shell: bash
@@ -91,20 +91,20 @@ jobs:
           set -euo pipefail
           mkdir -p dist/web
           cp -a web/. dist/web/
-          (cd dist/web && zip -qr ../DrafftInk_Web_0.2.0.zip .)
+          (cd dist/web && zip -qr ../DrafftInk_Web_0.3.0.zip .)
 
       - name: Upload Windows portable ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: DrafftInk-Windows-Portable-0.2.0
-          path: dist/DrafftInk_Windows_Portable_0.2.0.zip
+          name: DrafftInk-Windows-Portable-0.3.0
+          path: dist/DrafftInk_Windows_Portable_0.3.0.zip
           if-no-files-found: error
           retention-days: 30
 
       - name: Upload web ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: DrafftInk-Web-0.2.0
-          path: dist/DrafftInk_Web_0.2.0.zip
+          name: DrafftInk-Web-0.3.0
+          path: dist/DrafftInk_Web_0.3.0.zip
           if-no-files-found: error
           retention-days: 30

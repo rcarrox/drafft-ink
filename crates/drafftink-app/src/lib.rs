@@ -5,6 +5,8 @@
 
 mod app;
 mod event_handler;
+mod math_input;
+mod settings;
 mod shortcuts;
 mod ui;
 
