@@ -2819,7 +2819,7 @@ impl ApplicationHandler for App {
                 while let Some((family, postscript, bytes)) =
                     file_ops::take_pending_local_font_bytes()
                 {
-                    if postscript == "GoogleSans-Medium" {
+                    if postscript == "GoogleSans-Medium" && !state.ui_state.math_input_font_ready {
                         let mut fonts = egui::FontDefinitions::default();
                         fonts.font_data.insert(
                             "noto_sans".into(),

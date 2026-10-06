@@ -77,7 +77,7 @@ function Get-LocalFontCatalog {
                 $identifier = [System.IO.Path]::GetFileNameWithoutExtension($fontPath)
                 $family = $displayName -replace '\s*\((TrueType|OpenType)\)\s*$', ''
                 $script:LocalFontFiles[$identifier] = $fontPath
-                $records.Add([ordered]@{ family = $family; fullName = $family; postscriptName = $identifier; style = ''; source = 'local-server' })
+                $records.Add([pscustomobject][ordered]@{ family = $family; fullName = $family; postscriptName = $identifier; style = ''; source = 'local-server' })
                 break
             }
         }
@@ -169,3 +169,4 @@ try {
     $listener.Stop()
     Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
 }
+

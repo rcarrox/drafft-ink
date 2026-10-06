@@ -76,7 +76,7 @@ Chrome et Edge recents sont les cibles prioritaires car DrafftInk utilise WebGPU
 - fractions imbriquees possibles sans parenthese, avec un espace par niveau de sortie.
 
 
-## Nouveautes 0.6.0
+## Nouveautes 0.5.0
 
 - champs de raccourcis Settings lisibles : texte noir sur fond blanc ;
 - raccourcis par defaut : D = Draw, M = Math, H = Pan ;
@@ -99,10 +99,10 @@ Chrome et Edge recents sont les cibles prioritaires car DrafftInk utilise WebGPU
 ## Nouveautes 0.7.0
 
 - La police choisie est conservee pour les prochains textes, y compris apres redemarrage. Settings permet de choisir la police par defaut (Google Sans Medium initialement).
-- Les polices locales sont activees dans Settings, avec l'autorisation Chrome/Edge. Le bouton "Polices installees sur le PC" disparait des Properties Text. Les fontes sont mises en cache uniquement sur le PC, sans redistribution.
-- Google Sans Medium est utilise pour les lettres/chiffres Math et pour son champ de saisie ; les symboles mathematiques absents utilisent XITS. Sans activation de la police locale, Noto Sans sert de secours.
+- Le lanceur Windows rend automatiquement disponibles les polices installees sur le PC, via son serveur loopback existant. Settings permet de choisir la police par defaut et d'actualiser la liste. La version web statique utilise Local Font Access si necessaire. Le bouton "Polices installees sur le PC" disparait des Properties Text. Les fontes sont mises en cache uniquement sur le PC, sans redistribution.
+- Google Sans Medium est utilise pour les lettres/chiffres Math et pour son champ de saisie ; les symboles mathematiques absents utilisent XITS. Si la police locale est absente ou inaccessible, Noto Sans sert de secours.
 - Clic droit sur Laser : palette de couleur. La couleur est memorisee.
-- Panneaux Outils, Properties, couleurs/traits, zoom et palettes deplacables ; leurs positions sont memorisees et peuvent etre reinitialisees dans Settings.
+- Panneaux Outils, Properties, couleurs/traits, zoom et palettes deplacables ; les positions des panneaux principaux sont memorisees et peuvent etre reinitialisees dans Settings.
 - Panneau couleurs/traits sur deux colonnes et deux rangees, avec quatre styles de contour illustres.
 - Curseurs SVG personnalises : fleche blanche avec ombre/contour configurable et curseur Text/Math.
 - Poignees au centre des quatre bords : resize sur un seul axe, y compris apres rotation. Le crop Ctrl des images fonctionne aussi avec les poignees des bords. Text/Math conservent leur geometrie et leur source lors du redimensionnement.

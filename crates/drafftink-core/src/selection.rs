@@ -1047,7 +1047,7 @@ mod edge_handle_regressions {
     use super::*;
     use crate::shapes::{Ellipse, Image, ImageFormat, Math, Rectangle, Text};
     fn shapes(angle: f64) -> Vec<Shape> {
-        let mut text = Text::new(Point::new(20.0, 30.0), "Example".into());
+        let text = Text::new(Point::new(20.0, 30.0), "Example".into());
         text.set_cached_size(100.0, 40.0);
         let math = Math::new(Point::new(20.0, 60.0), "x^{3}".into());
         math.set_cached_size(100.0, 30.0, -10.0);

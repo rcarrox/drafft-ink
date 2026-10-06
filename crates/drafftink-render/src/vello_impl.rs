@@ -977,7 +977,10 @@ impl VelloRenderer {
         let (font_name, parley_weight, is_italic) =
             if let Some(custom) = text.custom_font.as_deref() {
                 (
-                    custom,
+                    self.font_aliases
+                        .get(custom)
+                        .map(String::as_str)
+                        .unwrap_or(custom),
                     parley::FontWeight::new(text.font_weight.value()),
                     false,
                 )
@@ -1378,7 +1381,10 @@ impl VelloRenderer {
             text.custom_font.as_deref()
         {
             (
-                custom,
+                self.font_aliases
+                    .get(custom)
+                    .map(String::as_str)
+                    .unwrap_or(custom),
                 parley::FontWeight::new(text.font_weight.value()),
                 false,
             )

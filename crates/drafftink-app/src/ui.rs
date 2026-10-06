@@ -888,7 +888,7 @@ fn render_tab_bar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
     action
 }
 
-fn floating_area(ctx: &Context, state: &UiState, id: &str, default: Pos2) -> egui::Area {
+fn floating_area(_ctx: &Context, state: &UiState, id: &str, default: Pos2) -> egui::Area {
     let pos = state
         .settings
         .panel_positions
@@ -1685,10 +1685,16 @@ fn render_right_panel(
                                 .color(Color32::from_gray(100)),
                         );
 
-                        let current_font = props
-                            .custom_font
-                            .clone()
-                            .unwrap_or_else(|| props.font_family.display_name().to_string());
+                        let current_font = if props.custom_font_postscript.as_deref()
+                            == Some("GoogleSans-Medium")
+                        {
+                            "Google Sans Medium".to_string()
+                        } else {
+                            props
+                                .custom_font
+                                .clone()
+                                .unwrap_or_else(|| props.font_family.display_name().to_string())
+                        };
 
                         egui::ComboBox::from_id_salt("text_builtin_font")
                             .selected_text(current_font)
@@ -3343,7 +3349,7 @@ fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAct
                         let label = if ui_state.settings.default_font_postscript == "GoogleSans-Medium" {
                             "Google Sans Medium".to_string()
                         } else { ui_state.settings.default_font.clone() };
-                        ui.add(input_text(&mut ui_state.font_search).hint_text("Rechercher une police"));
+                        input_text(ui, &mut ui_state.font_search, 280.0, "Rechercher une police");
                         egui::ComboBox::from_id_salt("default_font_picker")
                             .selected_text(label).width(280.0).height(250.0).show_ui(ui, |ui| {
                                 if ui.selectable_label(ui_state.settings.default_font_postscript == "GoogleSans-Medium", "Google Sans Medium").clicked() {
