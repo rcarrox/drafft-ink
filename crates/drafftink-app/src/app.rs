@@ -2822,8 +2822,16 @@ impl ApplicationHandler for App {
                     }
                 }
 
-                // Sync current style to tool manager for preview shapes
-                state.canvas.tool_manager.current_style = state.ui_state.to_shape_style();
+                // Sync current style to tool manager for preview shapes.
+                // Geometric tools always start in Architect mode.
+                let mut tool_style = state.ui_state.to_shape_style();
+                if matches!(
+                    state.canvas.tool_manager.current_tool,
+                    ToolKind::Rectangle | ToolKind::Ellipse | ToolKind::Line | ToolKind::Arrow
+                ) {
+                    tool_style.sloppiness = drafftink_core::shapes::Sloppiness::Architect;
+                }
+                state.canvas.tool_manager.current_style = tool_style;
                 state.canvas.tool_manager.corner_radius = state.ui_state.corner_radius as f64;
 
                 // Get selected shape properties for the right panel
@@ -2851,6 +2859,7 @@ impl ApplicationHandler for App {
                         | ToolKind::Arrow
                         | ToolKind::Freehand
                         | ToolKind::Highlighter
+                        | ToolKind::Text
                 );
 
                 if is_drawing_tool && !selected_props.has_selection {
@@ -2920,6 +2929,17 @@ impl ApplicationHandler for App {
                         match action.clone() {
                             UiAction::SetTool(tool) => {
                                 state.canvas.set_tool(tool);
+                                state.ui_state.current_tool = tool;
+                                if matches!(
+                                    tool,
+                                    ToolKind::Rectangle
+                                        | ToolKind::Ellipse
+                                        | ToolKind::Line
+                                        | ToolKind::Arrow
+                                ) {
+                                    state.ui_state.sloppiness =
+                                        drafftink_core::shapes::Sloppiness::Architect;
+                                }
                             }
                             UiAction::SetEraserMode(mode) => {
                                 state.ui_state.eraser_mode = mode;
@@ -5734,6 +5754,16 @@ impl ApplicationHandler for App {
                                     if let Some(tool) = state.ui_state.settings.tool_for_key(key) {
                                         state.canvas.set_tool(tool);
                                         state.ui_state.current_tool = tool;
+                                        if matches!(
+                                            tool,
+                                            ToolKind::Rectangle
+                                                | ToolKind::Ellipse
+                                                | ToolKind::Line
+                                                | ToolKind::Arrow
+                                        ) {
+                                            state.ui_state.sloppiness =
+                                                drafftink_core::shapes::Sloppiness::Architect;
+                                        }
                                         log::info!("Tool shortcut {:?}: {}", tool, key);
                                     }
                                 }
