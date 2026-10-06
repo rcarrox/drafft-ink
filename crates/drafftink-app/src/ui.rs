@@ -2,7 +2,7 @@
 
 use drafftink_core::shapes::{FillPattern, FontFamily, FontWeight, Shape, ShapeId, ShapeStyle};
 use drafftink_core::sync::ConnectionState;
-use drafftink_core::tools::ToolKind;
+use drafftink_core::tools::{EraserMode, ToolKind};
 use drafftink_render::GridStyle;
 use egui::{
     Align2, Color32, Context, CornerRadius, Frame, ImageSource, Margin, Pos2, Rect, Stroke, Vec2,
@@ -227,6 +227,8 @@ pub struct PeerInfo {
 pub struct UiState {
     /// Currently selected tool (mirrored from canvas).
     pub current_tool: ToolKind,
+    /// Eraser behavior (whole object vs manual stroke trimming).
+    pub eraser_mode: EraserMode,
     /// Current stroke color for new shapes.
     pub stroke_color: Color32,
     /// Current fill color for new shapes (None = no fill).
@@ -312,6 +314,7 @@ impl Default for UiState {
     fn default() -> Self {
         Self {
             current_tool: ToolKind::Select,
+            eraser_mode: EraserMode::Classic,
             stroke_color: TAILWIND_COLORS[11].shades[6], // Indigo 500
             fill_color: None,
             stroke_width: 2.0,
@@ -396,6 +399,8 @@ impl UiState {
 pub enum UiAction {
     /// Change the current tool.
     SetTool(ToolKind),
+    /// Change eraser behavior.
+    SetEraserMode(EraserMode),
     /// Change stroke color.
     SetStrokeColor(Color32),
     /// Change fill color.
@@ -551,13 +556,13 @@ fn get_tools() -> Vec<Tool> {
         Tool {
             kind: ToolKind::Select,
             label: "Select",
-            shortcut: "V / 1",
+            shortcut: "S / 1",
             icon: include_image!("../assets/select.svg"),
         },
         Tool {
             kind: ToolKind::Pan,
             label: "Pan",
-            shortcut: "H",
+            shortcut: "M",
             icon: include_image!("../assets/pan.svg"),
         },
         Tool {
@@ -587,7 +592,7 @@ fn get_tools() -> Vec<Tool> {
         Tool {
             kind: ToolKind::Freehand,
             label: "Draw",
-            shortcut: "P / 7",
+            shortcut: "B / 7",
             icon: include_image!("../assets/freehand.svg"),
         },
         Tool {
@@ -611,7 +616,7 @@ fn get_tools() -> Vec<Tool> {
         Tool {
             kind: ToolKind::Math,
             label: "Math",
-            shortcut: "M / 9",
+            shortcut: "9",
             icon: include_image!("../assets/math.svg"),
         },
         Tool {
@@ -1030,6 +1035,32 @@ fn render_properties_panel(ctx: &Context, ui_state: &mut UiState) -> Option<UiAc
             panel_frame().show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing = Vec2::new(12.0, 0.0);
+
+                    // Eraser mode selector. Manual mode trims only the touched
+                    // portion of Draw/Highlighter strokes; Classic deletes whole objects.
+                    if ui_state.current_tool == ToolKind::Eraser {
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing = Vec2::new(4.0, 4.0);
+                            widgets_section_label(ui, "Eraser");
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .selectable_label(ui_state.eraser_mode == EraserMode::Classic, "Classic")
+                                    .on_hover_text("Delete the whole object touched by the eraser")
+                                    .clicked()
+                                {
+                                    action = Some(UiAction::SetEraserMode(EraserMode::Classic));
+                                }
+                                if ui
+                                    .selectable_label(ui_state.eraser_mode == EraserMode::Manual, "Manual")
+                                    .on_hover_text("Erase only the touched portion of Draw/Highlighter strokes")
+                                    .clicked()
+                                {
+                                    action = Some(UiAction::SetEraserMode(EraserMode::Manual));
+                                }
+                            });
+                        });
+                        widgets_vertical_separator(ui);
+                    }
 
                     // Stroke color section
                     ui.vertical(|ui| {
@@ -2924,11 +2955,11 @@ fn render_math_editor(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction>
                 .stroke(Stroke::new(1.0, Color32::from_gray(200)))
                 .inner_margin(Margin::same(20))
                 .show(ui, |ui| {
-                    ui.set_width(400.0);
+                    ui.set_width(520.0);
                     ui.vertical(|ui| {
                         ui.horizontal(|ui| {
                             ui.label(
-                                egui::RichText::new("Edit Equation")
+                                egui::RichText::new("Formule mathématique")
                                     .size(16.0)
                                     .strong()
                                     .color(Color32::from_gray(30)),
@@ -2946,7 +2977,7 @@ fn render_math_editor(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction>
                         ui.add_space(12.0);
 
                         ui.label(
-                            egui::RichText::new("LaTeX:")
+                            egui::RichText::new("LaTeX")
                                 .size(12.0)
                                 .color(Color32::from_gray(60)),
                         );
@@ -2983,10 +3014,40 @@ fn render_math_editor(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction>
                             }
                         });
 
+                        ui.add_space(10.0);
+                        ui.label(
+                            egui::RichText::new("Insérer")
+                                .size(12.0)
+                                .strong()
+                                .color(Color32::from_gray(60)),
+                        );
                         ui.add_space(4.0);
+                        ui.horizontal_wrapped(|ui| {
+                            let snippets = [
+                                ("x²", "^{ }"),
+                                ("xₙ", "_{ }"),
+                                ("a/b", "\\frac{ }{ }"),
+                                ("√", "\\sqrt{ }"),
+                                ("∫", "\\int_{ }^{ } \\, dx"),
+                                ("∑", "\\sum_{ }^{ } "),
+                                ("vect", "\\vec{ }"),
+                                ("lim", "\\lim_{ } "),
+                                ("( )", "\\left( \\right)"),
+                                ("π", "\\pi"),
+                                ("θ", "\\theta"),
+                                ("∞", "\\infty"),
+                            ];
+                            for (label, snippet) in snippets {
+                                if ui.small_button(label).clicked() {
+                                    latex_input.push_str(snippet);
+                                }
+                            }
+                        });
+
+                        ui.add_space(6.0);
                         ui.label(
                             egui::RichText::new(
-                                "Examples: x^2, \\frac{a}{b}, \\sqrt{x}, \\sum_{i=1}^n",
+                                "Exemples : x^2, \\frac{a}{b}, \\sqrt{x}, \\sum_{i=1}^n, \\vec{AB}",
                             )
                             .size(11.0)
                             .color(Color32::from_gray(120)),
