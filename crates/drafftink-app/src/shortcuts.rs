@@ -46,16 +46,16 @@ impl ShortcutRegistry {
     pub fn all() -> Vec<Shortcut> {
         vec![
             Shortcut::new("S / 1", false, false, "Selection tool"),
-            Shortcut::new("M", false, false, "Pan tool"),
+            Shortcut::new("H", false, false, "Pan tool"),
             Shortcut::new("R / 2", false, false, "Rectangle tool"),
             Shortcut::new("O / 4", false, false, "Ellipse tool"),
             Shortcut::new("A / 5", false, false, "Arrow tool"),
             Shortcut::new("L / 6", false, false, "Line tool"),
-            Shortcut::new("B / 7", false, false, "Draw tool"),
+            Shortcut::new("D", false, false, "Draw tool"),
             Shortcut::new("K", false, false, "Highlighter tool"),
             Shortcut::new("E", false, false, "Eraser tool (Classic / Manual)"),
             Shortcut::new("T / 8", false, false, "Text tool"),
-            Shortcut::new("9", false, false, "Math formula tool"),
+            Shortcut::new("M", false, false, "Math formula tool"),
             Shortcut::new("Z", false, false, "Laser pointer"),
             Shortcut::new("Space (hold)", false, false, "Temporary pan; release to return to previous tool"),
             Shortcut::new("+ / =", false, false, "Zoom in"),
@@ -80,7 +80,10 @@ impl ShortcutRegistry {
             Shortcut::new("Delete", false, false, "Delete selected shapes"),
             Shortcut::new("Backspace", false, false, "Delete selected shapes"),
             Shortcut::new("Escape", false, false, "Cancel current action / return to selection"),
-            Shortcut::new("Shift+Drag", false, false, "Maintain aspect ratio while resizing"),
+            Shortcut::new("Shift+Drag", false, false, "Rectangle → square; Ellipse → circle; Line/Arrow → angle snap"),
+            Shortcut::new("^", false, false, "Text superscript mode"),
+            Shortcut::new("Ctrl+ArrowUp", false, false, "Text/Math superscript shortcut"),
+            Shortcut::new("Ctrl+ArrowDown", false, false, "Text/Math subscript shortcut"),
         ]
     }
 
