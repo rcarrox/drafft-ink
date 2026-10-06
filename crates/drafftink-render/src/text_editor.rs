@@ -296,6 +296,7 @@ impl TextEditState {
 
         match key {
             TextKey::Escape => {
+                self.script_mode = ScriptMode::Normal;
                 return TextEditResult::ExitEdit;
             }
             TextKey::Backspace => {
@@ -329,6 +330,12 @@ impl TextEditState {
                 }
             }
             TextKey::Right => {
+                if self.script_mode != ScriptMode::Normal && !action_mod && !shift {
+                    self.script_mode = ScriptMode::Normal;
+                    drop(drv);
+                    self.update_layout_cache(font_cx, layout_cx);
+                    return TextEditResult::Handled;
+                }
                 if action_mod {
                     if shift {
                         drv.select_word_right();
@@ -405,6 +412,42 @@ impl TextEditState {
             TextKey::Paste(ref text) => {
                 drv.insert_or_replace_selection(text);
             }
+            TextKey::ToggleSuperscript => {
+                drop(drv);
+                if let Some(selected) = self.editor.selected_text().map(str::to_string) {
+                    let converted = convert_script_text(&selected, ScriptMode::Superscript);
+                    let mut drv = self.editor.driver(font_cx, layout_cx);
+                    drv.insert_or_replace_selection(&converted);
+                    drop(drv);
+                    self.script_mode = ScriptMode::Normal;
+                } else {
+                    self.script_mode = if self.script_mode == ScriptMode::Superscript {
+                        ScriptMode::Normal
+                    } else {
+                        ScriptMode::Superscript
+                    };
+                }
+                self.update_layout_cache(font_cx, layout_cx);
+                return TextEditResult::Handled;
+            }
+            TextKey::ToggleSubscript => {
+                drop(drv);
+                if let Some(selected) = self.editor.selected_text().map(str::to_string) {
+                    let converted = convert_script_text(&selected, ScriptMode::Subscript);
+                    let mut drv = self.editor.driver(font_cx, layout_cx);
+                    drv.insert_or_replace_selection(&converted);
+                    drop(drv);
+                    self.script_mode = ScriptMode::Normal;
+                } else {
+                    self.script_mode = if self.script_mode == ScriptMode::Subscript {
+                        ScriptMode::Normal
+                    } else {
+                        ScriptMode::Subscript
+                    };
+                }
+                self.update_layout_cache(font_cx, layout_cx);
+                return TextEditResult::Handled;
+            }
             TextKey::Character(ref c) => {
                 // Handle Ctrl+A for select all
                 if action_mod && (c == "a" || c == "A") {
@@ -414,8 +457,17 @@ impl TextEditState {
                         drv.select_all();
                     }
                 } else if !action_mod {
-                    // Insert character (including space)
-                    drv.insert_or_replace_selection(c);
+                    if self.script_mode != ScriptMode::Normal {
+                        if c == " " {
+                            self.script_mode = ScriptMode::Normal;
+                            drv.insert_or_replace_selection(" ");
+                        } else {
+                            let converted = convert_script_text(c, self.script_mode);
+                            drv.insert_or_replace_selection(&converted);
+                        }
+                    } else {
+                        drv.insert_or_replace_selection(c);
+                    }
                 }
             }
         }
