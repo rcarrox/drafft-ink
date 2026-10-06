@@ -81,8 +81,17 @@
 
         // Chrome/Edge expose precision-touchpad pinch as Ctrl+wheel. Prevent
         // browser page zoom so DrafftInk receives the gesture instead.
+        window.__drafftinkPinchGesture = null;
         window.addEventListener('wheel', function(e) {
             if (e.ctrlKey || e.metaKey) {
+                // Chrome/Edge represent a precision-touchpad pinch as Ctrl+wheel.
+                // Preserve the real DOM modifier + focal point because winit's
+                // generic MouseWheel event does not expose wheel modifiers.
+                window.__drafftinkPinchGesture = {
+                    factor: Math.max(0.80, Math.min(1.25, Math.exp(-e.deltaY * 0.0025))),
+                    x: e.clientX,
+                    y: e.clientY
+                };
                 e.preventDefault();
             }
         }, { passive: false });
