@@ -526,6 +526,28 @@ pub mod file_ops {
         Ok(())
     }
 
+    /// Consume a precision-touchpad pinch captured at the DOM level.
+    /// Returns (zoom_factor, client_x, client_y).
+    pub fn take_browser_pinch() -> Option<(f64, f64, f64)> {
+        let window = web_sys::window()?;
+        let key = JsValue::from_str("__drafftinkPinchGesture");
+        let value = js_sys::Reflect::get(window.as_ref(), &key).ok()?;
+        if value.is_null() || value.is_undefined() {
+            return None;
+        }
+        let _ = js_sys::Reflect::set(window.as_ref(), &key, &JsValue::NULL);
+        let factor = js_sys::Reflect::get(&value, &JsValue::from_str("factor"))
+            .ok()?
+            .as_f64()?;
+        let x = js_sys::Reflect::get(&value, &JsValue::from_str("x"))
+            .ok()?
+            .as_f64()?;
+        let y = js_sys::Reflect::get(&value, &JsValue::from_str("y"))
+            .ok()?
+            .as_f64()?;
+        Some((factor, x, y))
+    }
+
     /// Open Chrome/Edge's directory picker for the default export folder.
     pub fn choose_export_directory() {
         wasm_bindgen_futures::spawn_local(async {
@@ -4703,12 +4725,21 @@ impl ApplicationHandler for App {
 
                 let position = state.input.mouse_position();
 
-                if state.input.ctrl() {
-                    // Ctrl/Cmd + wheel, and two-finger pinch on precision touchpads = zoom.
+                #[cfg(target_arch = "wasm32")]
+                let browser_pinch = file_ops::take_browser_pinch();
+                #[cfg(not(target_arch = "wasm32"))]
+                let browser_pinch: Option<(f64, f64, f64)> = None;
+
+                if let Some((factor, x, y)) = browser_pinch {
+                    // Real Chrome/Edge precision-touchpad pinch, centered at the fingers.
+                    state.canvas.camera.zoom_at(Point::new(x, y), factor);
+                    state.ui_state.zoom_level = state.canvas.camera.zoom;
+                } else if state.input.ctrl() {
+                    // Physical Ctrl/Cmd + wheel = zoom.
                     state.canvas.camera.zoom_at(position, zoom_factor);
                     state.ui_state.zoom_level = state.canvas.camera.zoom;
                 } else {
-                    // Two-finger trackpad scroll / normal wheel = pan.
+                    // Two-finger precision-touchpad scroll / normal wheel = pan.
                     state.canvas.camera.pan(scroll);
                 }
                 state.needs_redraw = true;
