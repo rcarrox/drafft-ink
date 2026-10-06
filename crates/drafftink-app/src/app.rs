@@ -3,7 +3,9 @@
 use drafftink_core::canvas::Canvas;
 use drafftink_core::collaboration::CollaborationManager;
 use drafftink_core::input::InputState;
-use drafftink_core::shapes::{Shape, ShapeId};
+use drafftink_core::shapes::Shape;
+#[cfg(target_arch = "wasm32")]
+use drafftink_core::shapes::ShapeId;
 use drafftink_core::sync::{AwarenessState, ConnectionState, SyncEvent};
 use drafftink_core::tools::ToolKind;
 #[cfg(not(target_arch = "wasm32"))]
@@ -1820,6 +1822,10 @@ struct AppState {
     /// Remote peers in the current room (for cursor rendering).
     remote_peers: std::collections::HashMap<String, RemotePeer>,
 
+    // Local font request target selection (WASM / Chrome-Edge only).
+    #[cfg(target_arch = "wasm32")]
+    pending_local_font_targets: Vec<ShapeId>,
+
     // Auto-save (WASM only)
     #[cfg(target_arch = "wasm32")]
     last_autosave: web_time::Instant,
@@ -2075,8 +2081,25 @@ impl App {
         // but the surface format on WebGPU is typically Bgra8Unorm
         let texture_blitter = vello::wgpu::util::TextureBlitter::new(device, surface.config.format);
 
-        // Initialize egui
+        // Initialize egui. Noto Sans is added to the UI fallback stack so
+        // Unicode superscripts/subscripts typed by text expanders render cleanly.
         let egui_ctx = egui::Context::default();
+        {
+            let mut fonts = egui::FontDefinitions::default();
+            fonts.font_data.insert(
+                "DrafftInk Noto Sans".to_string(),
+                egui::FontData::from_static(include_bytes!(
+                    "../../drafftink-render/assets/NotoSans-Regular.ttf"
+                ))
+                .into(),
+            );
+            fonts
+                .families
+                .entry(egui::FontFamily::Proportional)
+                .or_default()
+                .insert(0, "DrafftInk Noto Sans".to_string());
+            egui_ctx.set_fonts(fonts);
+        }
         let egui_state = egui_winit::State::new(
             egui_ctx.clone(),
             egui::ViewportId::ROOT,
@@ -2137,6 +2160,8 @@ impl App {
             collab: CollaborationManager::new(),
             websocket: None,
             remote_peers: std::collections::HashMap::new(),
+            #[cfg(target_arch = "wasm32")]
+            pending_local_font_targets: Vec::new(),
             #[cfg(target_arch = "wasm32")]
             last_autosave: web_time::Instant::now(),
             #[cfg(target_arch = "wasm32")]
@@ -2555,6 +2580,28 @@ impl ApplicationHandler for App {
                 if let Some(folder_name) = file_ops::take_pending_export_folder() {
                     state.ui_state.settings.export_folder_name = folder_name;
                     crate::settings::save_settings(&state.ui_state.settings);
+                }
+
+                #[cfg(target_arch = "wasm32")]
+                if let Some(fonts) = file_ops::take_pending_local_fonts() {
+                    state.ui_state.local_fonts = fonts;
+                    state.ui_state.local_fonts_loading = false;
+                    state.needs_redraw = true;
+                }
+
+                #[cfg(target_arch = "wasm32")]
+                if let Some((family, bytes)) = file_ops::take_pending_local_font_bytes() {
+                    state.shape_renderer.register_custom_font(bytes);
+                    let targets = std::mem::take(&mut state.pending_local_font_targets);
+                    for shape_id in targets {
+                        if let Some(Shape::Text(text)) =
+                            state.canvas.document.get_shape_mut(shape_id)
+                        {
+                            text.custom_font = Some(family.clone());
+                            text.invalidate_cache();
+                        }
+                    }
+                    state.needs_redraw = true;
                 }
 
                 // Check for pending pasted image (WASM)
@@ -3219,14 +3266,37 @@ impl ApplicationHandler for App {
                                     0 => FontFamily::GelPen,
                                     1 => FontFamily::NotoSans,
                                     2 => FontFamily::GelPenSerif,
-                                    _ => FontFamily::VanillaExtract,
+                                    3 => FontFamily::VanillaExtract,
+                                    _ => FontFamily::XitsMath,
                                 };
                                 for &shape_id in &state.canvas.selection.clone() {
                                     if let Some(Shape::Text(text)) =
                                         state.canvas.document.get_shape_mut(shape_id)
                                     {
                                         text.font_family = family;
+                                        text.custom_font = None;
+                                        text.invalidate_cache();
                                     }
+                                }
+                            }
+                            UiAction::ScanLocalFonts => {
+                                #[cfg(target_arch = "wasm32")]
+                                file_ops::query_local_fonts_async();
+                                #[cfg(not(target_arch = "wasm32"))]
+                                {
+                                    state.ui_state.local_fonts_loading = false;
+                                }
+                            }
+                            UiAction::SetLocalFont(family, postscript) => {
+                                #[cfg(target_arch = "wasm32")]
+                                {
+                                    state.pending_local_font_targets =
+                                        state.canvas.selection.iter().copied().collect();
+                                    file_ops::load_local_font_async(family, postscript);
+                                }
+                                #[cfg(not(target_arch = "wasm32"))]
+                                {
+                                    let _ = (family, postscript);
                                 }
                             }
                             UiAction::SetFontWeight(weight_idx) => {
