@@ -24,6 +24,7 @@ pub struct UserSettings {
     pub autosave_enabled: bool,
     pub autosave_interval_secs: u64,
     pub restore_last_document: bool,
+    pub show_properties_for_tools: bool,
 }
 
 impl Default for UserSettings {
@@ -47,6 +48,7 @@ impl Default for UserSettings {
             autosave_enabled: true,
             autosave_interval_secs: 5,
             restore_last_document: true,
+            show_properties_for_tools: false,
         }
     }
 }
