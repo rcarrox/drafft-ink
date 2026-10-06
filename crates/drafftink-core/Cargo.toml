@@ -23,6 +23,10 @@ pathfinding = "4"
 dirs = "5"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+# Removing the collaboration stack also removed a transitive feature that
+# enabled JavaScript entropy for getrandom 0.2. Enable it explicitly for
+# wasm32-unknown-unknown so UUID/random users continue to compile in browsers.
+getrandom = { version = "0.2", features = ["js"] }
 web-sys = { workspace = true, features = [
     "Window",
     "Storage",

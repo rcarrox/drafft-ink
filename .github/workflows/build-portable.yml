@@ -1,0 +1,110 @@
+name: Build DrafftInk Portable
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  WASM_PACK_VERSION: 0.15.0
+  WASM_PACK_SHA256: c09f971ecaed9a2efc80fdcea7a00ef6b53c7fadc8c57d1f61b53a6aa66b668a
+
+jobs:
+  build:
+    name: Build and package
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust 1.91.1 with WebAssembly target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.91.1
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-drafftink-wasm-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-drafftink-wasm-
+
+      - name: Install verified wasm-pack binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="wasm-pack-v${WASM_PACK_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          url="https://github.com/wasm-bindgen/wasm-pack/releases/download/v${WASM_PACK_VERSION}/${archive}"
+          curl --fail --location --retry 4 --retry-delay 3 --output "$archive" "$url"
+          echo "${WASM_PACK_SHA256}  ${archive}" | sha256sum --check --strict
+          tar -xzf "$archive"
+          install -m 0755 "wasm-pack-v${WASM_PACK_VERSION}-x86_64-unknown-linux-musl/wasm-pack" "$HOME/.cargo/bin/wasm-pack"
+          wasm-pack --version
+
+      - name: Build WebAssembly
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd crates/drafftink-app
+          wasm-pack build --target web --out-dir ../../web/pkg --release --no-default-features
+
+      - name: Verify generated files
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s web/pkg/drafftink_app.js
+          test -s web/pkg/drafftink_app_bg.wasm
+          test -s web/index.html
+          echo "WASM size: $(du -h web/pkg/drafftink_app_bg.wasm | cut -f1)"
+
+      - name: Assemble Windows portable package
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf dist
+          mkdir -p dist/windows-portable/windows dist/windows-portable/web
+          cp -a web/. dist/windows-portable/web/
+          cp "Lancer DrafftInk.cmd" dist/windows-portable/
+          cp "Arreter DrafftInk.cmd" dist/windows-portable/
+          cp "Ouvrir avec Edge.cmd" dist/windows-portable/
+          cp "Ouvrir avec Chrome.cmd" dist/windows-portable/
+          cp windows/serve-local.ps1 dist/windows-portable/windows/
+          cp VERSION_LOCAL.txt dist/windows-portable/
+          cp README_LOCAL_FR.md dist/windows-portable/
+          (cd dist/windows-portable && zip -qr ../DrafftInk_Windows_Portable_0.2.0.zip .)
+
+      - name: Assemble web package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/web
+          cp -a web/. dist/web/
+          (cd dist/web && zip -qr ../DrafftInk_Web_0.2.0.zip .)
+
+      - name: Upload Windows portable ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: DrafftInk-Windows-Portable-0.2.0
+          path: dist/DrafftInk_Windows_Portable_0.2.0.zip
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload web ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: DrafftInk-Web-0.2.0
+          path: dist/DrafftInk_Web_0.2.0.zip
+          if-no-files-found: error
+          retention-days: 30
