@@ -147,38 +147,10 @@ fn render_call(name: &str, body: &str) -> Option<String> {
     }
 }
 
-fn convert_expr(input: &str) -> String {
-    let s = input.trim();
-    if s.is_empty() {
-        return String::new();
-    }
 
-    if find_matching_outer_parens(s) {
-        return format!(r"\left({}\right)", convert_expr(&s[1..s.len() - 1]));
-    }
+fn convert_atom_text(input: &str) -> String {
+    let mut out = input.to_string();
 
-    if let Some(idx) = find_top_level_slash(s) {
-        let left = &s[..idx];
-        let right = &s[idx + 1..];
-        return format!(
-            r"\frac{{{}}}{{{}}}",
-            convert_expr(left),
-            convert_expr(right)
-        );
-    }
-
-    for name in [
-        "sqrt", "vec", "vector", "abs", "frac", "sum", "prod", "int", "integral", "lim",
-        "limit", "diff", "derivative", "sin", "cos", "tan", "ln", "log", "exp",
-    ] {
-        if let Some(body) = call_body(s, name) {
-            if let Some(rendered) = render_call(name, body) {
-                return rendered;
-            }
-        }
-    }
-
-    let mut out = s.to_string();
     for (from, to) in [
         ("sqrt", r"\sqrt"),
         ("pi", r"\pi"),
@@ -197,18 +169,6 @@ fn convert_expr(input: &str) -> String {
         }
     }
 
-    // Common Unicode powers/subscripts typed or pasted from course material.
-    for (from, to) in [
-        ("⁰", "^{0}"), ("¹", "^{1}"), ("²", "^{2}"), ("³", "^{3}"),
-        ("⁴", "^{4}"), ("⁵", "^{5}"), ("⁶", "^{6}"), ("⁷", "^{7}"),
-        ("⁸", "^{8}"), ("⁹", "^{9}"),
-        ("₀", "_{0}"), ("₁", "_{1}"), ("₂", "_{2}"), ("₃", "_{3}"),
-        ("₄", "_{4}"), ("₅", "_{5}"), ("₆", "_{6}"), ("₇", "_{7}"),
-        ("₈", "_{8}"), ("₉", "_{9}"),
-    ] {
-        out = out.replace(from, to);
-    }
-
     out = out
         .replace('π', r"\pi")
         .replace('θ', r"\theta")
@@ -220,28 +180,255 @@ fn convert_expr(input: &str) -> String {
         .replace('×', r"\times")
         .replace('·', r"\cdot");
 
-    // GeoGebra/Maple-style parenthesized exponents/subscripts: x^(n+1), a_(i+1)
-    out = out.replace("^(", "^{").replace("_(", "_{");
-    if out.contains("^{") || out.contains("_{") {
-        let mut rebuilt = String::new();
-        let chars: Vec<char> = out.chars().collect();
-        let mut i = 0usize;
-        while i < chars.len() {
-            if i >= 2
-                && chars[i] == ')'
-                && ((chars[i - 1] != '\\') || i == chars.len() - 1)
-                && rebuilt.matches('{').count() > rebuilt.matches('}').count()
-            {
-                rebuilt.push('}');
-            } else {
-                rebuilt.push(chars[i]);
-            }
+    out
+}
+
+#[derive(Debug)]
+struct StructuredRow {
+    latex: String,
+    next: usize,
+}
+
+/// Parse the friendly input as a tiny structured editor language.
+/// Slash, caret and underscore open a child block. One SPACE closes exactly
+/// one block, so nested fractions/exponents can be left one level at a time.
+fn parse_structured_row(chars: &[char], mut i: usize, stop_on_space: bool) -> StructuredRow {
+    let mut items: Vec<(String, bool)> = Vec::new();
+
+    while i < chars.len() {
+        let ch = chars[i];
+
+        if ch.is_whitespace() {
             i += 1;
+            if stop_on_space {
+                break;
+            }
+            continue;
         }
-        out = rebuilt;
+
+        if ch == '(' {
+            let start = i + 1;
+            let mut depth = 1i32;
+            i += 1;
+            while i < chars.len() && depth > 0 {
+                match chars[i] {
+                    '(' => depth += 1,
+                    ')' => depth -= 1,
+                    _ => {}
+                }
+                if depth > 0 {
+                    i += 1;
+                }
+            }
+            let inner: String = chars[start..i.min(chars.len())].iter().collect();
+            if i < chars.len() && chars[i] == ')' {
+                i += 1;
+            }
+            items.push((format!(r"\left({}\right)", convert_expr(&inner)), true));
+            continue;
+        }
+
+        if ch.is_alphabetic() {
+            let ident_start = i;
+            while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                i += 1;
+            }
+            let ident: String = chars[ident_start..i].iter().collect();
+            if i < chars.len() && chars[i] == '(' {
+                let body_start = i + 1;
+                let mut depth = 1i32;
+                i += 1;
+                while i < chars.len() && depth > 0 {
+                    match chars[i] {
+                        '(' => depth += 1,
+                        ')' => depth -= 1,
+                        _ => {}
+                    }
+                    if depth > 0 {
+                        i += 1;
+                    }
+                }
+                let body: String = chars[body_start..i.min(chars.len())].iter().collect();
+                if i < chars.len() && chars[i] == ')' {
+                    i += 1;
+                }
+                if let Some(rendered) = render_call(&ident, &body) {
+                    items.push((rendered, true));
+                } else {
+                    items.push((
+                        format!(r"{}\left({}\right)", convert_atom_text(&ident), convert_expr(&body)),
+                        true,
+                    ));
+                }
+                continue;
+            }
+
+            items.push((convert_atom_text(&ident), true));
+            continue;
+        }
+
+        if ch.is_ascii_digit() || ch == '.' {
+            let start = i;
+            i += 1;
+            while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') {
+                i += 1;
+            }
+            let atom: String = chars[start..i].iter().collect();
+            items.push((atom, true));
+            continue;
+        }
+
+        match ch {
+            '/' => {
+                i += 1;
+                let numerator = items
+                    .iter()
+                    .rposition(|(_, is_operand)| *is_operand)
+                    .map(|idx| items.remove(idx).0)
+                    .unwrap_or_else(|| r"\;".to_string());
+                let denom = parse_structured_row(chars, i, true);
+                i = denom.next;
+                let denominator = if denom.latex.trim().is_empty() {
+                    r"\;".to_string()
+                } else {
+                    denom.latex
+                };
+                items.push((format!(r"\frac{{{}}}{{{}}}", numerator, denominator), true));
+            }
+            '^' | '_' => {
+                let op = ch;
+                i += 1;
+                let base = items
+                    .iter()
+                    .rposition(|(_, is_operand)| *is_operand)
+                    .map(|idx| items.remove(idx).0)
+                    .unwrap_or_else(|| r"\;".to_string());
+                let child = parse_structured_row(chars, i, true);
+                i = child.next;
+                let body = if child.latex.trim().is_empty() {
+                    r"\;".to_string()
+                } else {
+                    child.latex
+                };
+                if op == '^' {
+                    items.push((format!(r"{}^{{{}}}", base, body), true));
+                } else {
+                    items.push((format!(r"{}_{{{}}}", base, body), true));
+                }
+            }
+            '+' | '-' | '=' => {
+                items.push((ch.to_string(), false));
+                i += 1;
+            }
+            '*' => {
+                items.push((r"\cdot ".to_string(), false));
+                i += 1;
+            }
+            ',' => {
+                items.push((", ".to_string(), false));
+                i += 1;
+            }
+            ')' => break,
+            _ => {
+                items.push((convert_atom_text(&ch.to_string()), true));
+                i += 1;
+            }
+        }
+    }
+
+    StructuredRow {
+        latex: items.into_iter().map(|(s, _)| s).collect::<String>(),
+        next: i,
+    }
+}
+
+fn convert_expr(input: &str) -> String {
+    let chars: Vec<char> = input.chars().collect();
+    parse_structured_row(&chars, 0, false).latex
+}
+
+/// Normalize Unicode powers/subscripts (including text expanders such as
+/// Beeptexte) into ASCII structured notation. The added SPACE closes the block.
+pub fn normalize_friendly_math_input(input: &str) -> String {
+    fn super_digit(ch: char) -> Option<char> {
+        match ch {
+            '⁰' => Some('0'), '¹' => Some('1'), '²' => Some('2'), '³' => Some('3'),
+            '⁴' => Some('4'), '⁵' => Some('5'), '⁶' => Some('6'), '⁷' => Some('7'),
+            '⁸' => Some('8'), '⁹' => Some('9'), 'ⁿ' => Some('n'),
+            _ => None,
+        }
+    }
+    fn sub_digit(ch: char) -> Option<char> {
+        match ch {
+            '₀' => Some('0'), '₁' => Some('1'), '₂' => Some('2'), '₃' => Some('3'),
+            '₄' => Some('4'), '₅' => Some('5'), '₆' => Some('6'), '₇' => Some('7'),
+            '₈' => Some('8'), '₉' => Some('9'), 'ₙ' => Some('n'),
+            _ => None,
+        }
+    }
+
+    let chars: Vec<char> = input.chars().collect();
+    let mut out = String::with_capacity(input.len() + 8);
+    let mut i = 0usize;
+
+    while i < chars.len() {
+        if let Some(d) = super_digit(chars[i]) {
+            out.push('^');
+            out.push(d);
+            i += 1;
+            while i < chars.len() {
+                if let Some(next) = super_digit(chars[i]) {
+                    out.push(next);
+                    i += 1;
+                } else {
+                    break;
+                }
+            }
+            out.push(' ');
+            continue;
+        }
+
+        if let Some(d) = sub_digit(chars[i]) {
+            out.push('_');
+            out.push(d);
+            i += 1;
+            while i < chars.len() {
+                if let Some(next) = sub_digit(chars[i]) {
+                    out.push(next);
+                    i += 1;
+                } else {
+                    break;
+                }
+            }
+            out.push(' ');
+            continue;
+        }
+
+        match chars[i] {
+            '⁺' => out.push_str("^+ "),
+            '⁻' => out.push_str("^- "),
+            '₊' => out.push_str("_+ "),
+            '₋' => out.push_str("_- "),
+            ch => out.push(ch),
+        }
+        i += 1;
     }
 
     out
+}
+
+/// Number of structured blocks still open at the end of the source.
+pub fn open_structured_depth(input: &str) -> usize {
+    let mut depth = 0usize;
+    for ch in input.chars() {
+        match ch {
+            '/' | '^' | '_' => depth += 1,
+            ' ' | '\t' if depth > 0 => depth -= 1,
+            ',' | ')' => depth = 0,
+            _ => {}
+        }
+    }
+    depth
 }
 
 pub fn friendly_math_to_latex(input: &str) -> String {
@@ -249,7 +436,8 @@ pub fn friendly_math_to_latex(input: &str) -> String {
     if trimmed.starts_with('\\') || trimmed.contains(r"\frac") || trimmed.contains(r"\sum") {
         return trimmed.to_string();
     }
-    convert_expr(trimmed)
+    let normalized = normalize_friendly_math_input(input);
+    convert_expr(normalized.trim())
 }
 
 #[cfg(test)]
@@ -277,5 +465,16 @@ mod tests {
             r"\lim_{x\to 0} \frac{\sin\left(x\right)}{x}"
         );
         assert_eq!(friendly_math_to_latex("x²"), r"x^{2}");
+        assert_eq!(normalize_friendly_math_input("x⁴+1"), "x^4 +1");
+        assert_eq!(friendly_math_to_latex("x⁴+1"), r"x^{4}+1");
+        assert_eq!(friendly_math_to_latex("x^2 +3"), r"x^{2}+3");
+        assert_eq!(friendly_math_to_latex("1/2 +3"), r"\frac{1}{2}+3");
+        assert_eq!(
+            friendly_math_to_latex("1/2/3 +4 +5"),
+            r"\frac{1}{\frac{2}{3}+4}+5"
+        );
+        assert_eq!(open_structured_depth("1/2/3"), 2);
+        assert_eq!(open_structured_depth("1/2/3 "), 1);
+        assert_eq!(open_structured_depth("1/2/3  "), 0);
     }
 }
