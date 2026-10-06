@@ -349,6 +349,11 @@ impl VelloRenderer {
             vello::peniko::Blob::new(std::sync::Arc::new(NOTO_SANS_ITALIC)),
             None,
         );
+        // Register XITS Math as a plain-text option for broad symbol coverage.
+        font_cx.collection.register_fonts(
+            vello::peniko::Blob::new(std::sync::Arc::new(XITS_MATH)),
+            None,
+        );
 
         Self {
             scene: Scene::new(),
@@ -375,6 +380,20 @@ impl VelloRenderer {
     /// Get mutable references to both font and layout contexts for text editing.
     pub fn contexts_mut(&mut self) -> (&mut FontContext, &mut LayoutContext<Brush>) {
         (&mut self.font_cx, &mut self.layout_cx)
+    }
+
+    /// Register a font selected from the user's computer (Chrome/Edge Local Font Access).
+    /// Parley reads the family name from the font tables, so the text shape only needs
+    /// to remember that family name.
+    pub fn register_custom_font(&mut self, bytes: Vec<u8>) {
+        if bytes.is_empty() {
+            return;
+        }
+        self.font_cx.collection.register_fonts(
+            vello::peniko::Blob::new(std::sync::Arc::new(bytes)),
+            None,
+        );
+        self.text_cache.clear();
     }
 
     /// Build a scene for export (shapes only, no grid/selection/guides).
@@ -822,6 +841,7 @@ impl VelloRenderer {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         text.content.hash(&mut hasher);
         (text.font_family as u8).hash(&mut hasher);
+        text.custom_font.hash(&mut hasher);
         (text.font_weight as u8).hash(&mut hasher);
         text.font_size.to_bits().hash(&mut hasher);
         text.char_colors.len().hash(&mut hasher);
@@ -861,36 +881,43 @@ impl VelloRenderer {
         let brush = Brush::Solid(style.stroke_with_opacity());
         let font_size = text.font_size as f32;
 
-        let (font_name, parley_weight, is_italic) = match (&text.font_family, &text.font_weight) {
-            (FontFamily::GelPen, FontWeight::Light) => {
-                ("GelPenLight", parley::FontWeight::NORMAL, false)
-            }
-            (FontFamily::GelPen, FontWeight::Regular) => {
-                ("GelPen", parley::FontWeight::NORMAL, false)
-            }
-            (FontFamily::GelPen, FontWeight::Heavy) => {
-                ("GelPenHeavy", parley::FontWeight::NORMAL, false)
-            }
-            (FontFamily::NotoSans, FontWeight::Light) => {
-                ("Noto Sans", parley::FontWeight::NORMAL, true)
-            }
-            (FontFamily::NotoSans, FontWeight::Regular) => {
-                ("Noto Sans", parley::FontWeight::NORMAL, false)
-            }
-            (FontFamily::NotoSans, FontWeight::Heavy) => {
-                ("Noto Sans", parley::FontWeight::BOLD, false)
-            }
-            (FontFamily::GelPenSerif, FontWeight::Light) => {
-                ("GelPenSerifLight", parley::FontWeight::NORMAL, false)
-            }
-            (FontFamily::GelPenSerif, FontWeight::Regular) => {
-                ("GelPenSerif", parley::FontWeight::NORMAL, false)
-            }
-            (FontFamily::GelPenSerif, FontWeight::Heavy) => {
-                ("GelPenSerifHeavy", parley::FontWeight::NORMAL, false)
-            }
-            (FontFamily::VanillaExtract, _) => {
-                ("Vanilla Extract", parley::FontWeight::NORMAL, false)
+        let (font_name, parley_weight, is_italic) = if let Some(custom) = text.custom_font.as_deref() {
+            (custom, parley::FontWeight::NORMAL, false)
+        } else {
+            match (&text.font_family, &text.font_weight) {
+                (FontFamily::GelPen, FontWeight::Light) => {
+                    ("GelPenLight", parley::FontWeight::NORMAL, false)
+                }
+                (FontFamily::GelPen, FontWeight::Regular) => {
+                    ("GelPen", parley::FontWeight::NORMAL, false)
+                }
+                (FontFamily::GelPen, FontWeight::Heavy) => {
+                    ("GelPenHeavy", parley::FontWeight::NORMAL, false)
+                }
+                (FontFamily::NotoSans, FontWeight::Light) => {
+                    ("Noto Sans", parley::FontWeight::NORMAL, true)
+                }
+                (FontFamily::NotoSans, FontWeight::Regular) => {
+                    ("Noto Sans", parley::FontWeight::NORMAL, false)
+                }
+                (FontFamily::NotoSans, FontWeight::Heavy) => {
+                    ("Noto Sans", parley::FontWeight::BOLD, false)
+                }
+                (FontFamily::GelPenSerif, FontWeight::Light) => {
+                    ("GelPenSerifLight", parley::FontWeight::NORMAL, false)
+                }
+                (FontFamily::GelPenSerif, FontWeight::Regular) => {
+                    ("GelPenSerif", parley::FontWeight::NORMAL, false)
+                }
+                (FontFamily::GelPenSerif, FontWeight::Heavy) => {
+                    ("GelPenSerifHeavy", parley::FontWeight::NORMAL, false)
+                }
+                (FontFamily::VanillaExtract, _) => {
+                    ("Vanilla Extract", parley::FontWeight::NORMAL, false)
+                }
+                (FontFamily::XitsMath, _) => {
+                    ("XITS Math", parley::FontWeight::NORMAL, false)
+                }
             }
         };
 
@@ -1216,36 +1243,43 @@ impl VelloRenderer {
 
         // Determine font name and parley weight based on family and weight
         // Use same logic as render_text - all Roboto variants use "Roboto" family with weight
-        let (font_name, parley_weight, is_italic) = match (&text.font_family, &text.font_weight) {
-            (ShapeFontFamily::GelPen, FontWeight::Light) => {
-                ("GelPenLight", parley::FontWeight::NORMAL, false)
-            }
-            (ShapeFontFamily::GelPen, FontWeight::Regular) => {
-                ("GelPen", parley::FontWeight::NORMAL, false)
-            }
-            (ShapeFontFamily::GelPen, FontWeight::Heavy) => {
-                ("GelPenHeavy", parley::FontWeight::NORMAL, false)
-            }
-            (ShapeFontFamily::NotoSans, FontWeight::Light) => {
-                ("Noto Sans", parley::FontWeight::NORMAL, true)
-            }
-            (ShapeFontFamily::NotoSans, FontWeight::Regular) => {
-                ("Noto Sans", parley::FontWeight::NORMAL, false)
-            }
-            (ShapeFontFamily::NotoSans, FontWeight::Heavy) => {
-                ("Noto Sans", parley::FontWeight::BOLD, false)
-            }
-            (ShapeFontFamily::GelPenSerif, FontWeight::Light) => {
-                ("GelPenSerifLight", parley::FontWeight::NORMAL, false)
-            }
-            (ShapeFontFamily::GelPenSerif, FontWeight::Regular) => {
-                ("GelPenSerif", parley::FontWeight::NORMAL, false)
-            }
-            (ShapeFontFamily::GelPenSerif, FontWeight::Heavy) => {
-                ("GelPenSerifHeavy", parley::FontWeight::NORMAL, false)
-            }
-            (ShapeFontFamily::VanillaExtract, _) => {
-                ("Vanilla Extract", parley::FontWeight::NORMAL, false)
+        let (font_name, parley_weight, is_italic) = if let Some(custom) = text.custom_font.as_deref() {
+            (custom, parley::FontWeight::NORMAL, false)
+        } else {
+            match (&text.font_family, &text.font_weight) {
+                (ShapeFontFamily::GelPen, FontWeight::Light) => {
+                    ("GelPenLight", parley::FontWeight::NORMAL, false)
+                }
+                (ShapeFontFamily::GelPen, FontWeight::Regular) => {
+                    ("GelPen", parley::FontWeight::NORMAL, false)
+                }
+                (ShapeFontFamily::GelPen, FontWeight::Heavy) => {
+                    ("GelPenHeavy", parley::FontWeight::NORMAL, false)
+                }
+                (ShapeFontFamily::NotoSans, FontWeight::Light) => {
+                    ("Noto Sans", parley::FontWeight::NORMAL, true)
+                }
+                (ShapeFontFamily::NotoSans, FontWeight::Regular) => {
+                    ("Noto Sans", parley::FontWeight::NORMAL, false)
+                }
+                (ShapeFontFamily::NotoSans, FontWeight::Heavy) => {
+                    ("Noto Sans", parley::FontWeight::BOLD, false)
+                }
+                (ShapeFontFamily::GelPenSerif, FontWeight::Light) => {
+                    ("GelPenSerifLight", parley::FontWeight::NORMAL, false)
+                }
+                (ShapeFontFamily::GelPenSerif, FontWeight::Regular) => {
+                    ("GelPenSerif", parley::FontWeight::NORMAL, false)
+                }
+                (ShapeFontFamily::GelPenSerif, FontWeight::Heavy) => {
+                    ("GelPenSerifHeavy", parley::FontWeight::NORMAL, false)
+                }
+                (ShapeFontFamily::VanillaExtract, _) => {
+                    ("Vanilla Extract", parley::FontWeight::NORMAL, false)
+                }
+                (ShapeFontFamily::XitsMath, _) => {
+                    ("XITS Math", parley::FontWeight::NORMAL, false)
+                }
             }
         };
 
