@@ -140,6 +140,10 @@ impl<'a> IconButton<'a> {
 
     /// Show the button and return true if clicked.
     pub fn show(self, ui: &mut Ui) -> bool {
+        self.show_response(ui).clicked()
+    }
+
+    pub fn show_response(self, ui: &mut Ui) -> egui::Response {
         let (rect, response) = ui.allocate_exact_size(self.style.size, Sense::click());
 
         if ui.is_rect_visible(rect) {
@@ -173,7 +177,6 @@ impl<'a> IconButton<'a> {
             image.paint_at(ui, icon_rect);
         }
 
-        let clicked = response.clicked();
         // Show tooltip with optional shortcut
         if let Some(shortcut) = self.shortcut {
             response.clone().on_hover_ui(|ui| {
@@ -189,8 +192,7 @@ impl<'a> IconButton<'a> {
         } else {
             response.clone().on_hover_text(self.tooltip);
         }
-        response.on_hover_cursor(CursorIcon::PointingHand);
-        clicked
+        response.on_hover_cursor(CursorIcon::PointingHand)
     }
 }
 

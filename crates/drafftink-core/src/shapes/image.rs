@@ -61,6 +61,57 @@ impl ImageFormat {
     }
 }
 
+/// Immutable encoded source shared by duplicates and every Undo/Redo snapshot.
+/// The JSON representation remains a plain base64 string for compatibility.
+#[derive(Debug, Clone)]
+pub struct SharedImageSource {
+    encoded: std::sync::Arc<str>,
+    key: std::sync::Arc<std::sync::OnceLock<u64>>,
+}
+impl From<String> for SharedImageSource {
+    fn from(encoded: String) -> Self {
+        Self {
+            encoded: encoded.into(),
+            key: Default::default(),
+        }
+    }
+}
+impl std::ops::Deref for SharedImageSource {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.encoded
+    }
+}
+impl PartialEq for SharedImageSource {
+    fn eq(&self, other: &Self) -> bool {
+        self.encoded == other.encoded
+    }
+}
+impl Eq for SharedImageSource {}
+impl SharedImageSource {
+    pub fn key(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        *self.key.get_or_init(|| {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            self.encoded.hash(&mut hasher);
+            hasher.finish()
+        })
+    }
+    pub fn shares_storage(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.encoded, &other.encoded)
+    }
+}
+impl Serialize for SharedImageSource {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.encoded)
+    }
+}
+impl<'de> Deserialize<'de> for SharedImageSource {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(String::deserialize(deserializer)?.into())
+    }
+}
+
 /// An image shape that displays a raster image.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Image {
@@ -79,7 +130,7 @@ pub struct Image {
     pub format: ImageFormat,
     /// Image data as base64-encoded string (for CRDT compatibility).
     /// We use base64 string instead of Vec<u8> for easier JSON/CRDT serialization.
-    pub data_base64: String,
+    pub data_base64: SharedImageSource,
     /// Rotation angle in radians (around center).
     #[serde(default)]
     pub rotation: f64,
@@ -120,7 +171,7 @@ impl Image {
             source_width,
             source_height,
             format,
-            data_base64: STANDARD.encode(data),
+            data_base64: STANDARD.encode(data).into(),
             rotation: 0.0,
             crop: full_crop(),
             style: ShapeStyle::default(),
@@ -149,7 +200,7 @@ impl Image {
             source_width,
             source_height,
             format,
-            data_base64,
+            data_base64: data_base64.into(),
             rotation,
             crop: full_crop(),
             style,
@@ -184,7 +235,7 @@ impl Image {
     /// Get the raw image data (decoded from base64).
     pub fn data(&self) -> Option<Vec<u8>> {
         use base64::{Engine, engine::general_purpose::STANDARD};
-        STANDARD.decode(&self.data_base64).ok()
+        STANDARD.decode(self.data_base64.as_bytes()).ok()
     }
 
     /// Get the bounding rectangle.
@@ -291,5 +342,30 @@ mod tests {
         assert!((bounds.y0 - 20.0).abs() < f64::EPSILON);
         assert!((bounds.x1 - 110.0).abs() < f64::EPSILON);
         assert!((bounds.y1 - 70.0).abs() < f64::EPSILON);
+    }
+}
+
+#[cfg(test)]
+mod shared_source_tests {
+    use super::*;
+    #[test]
+    fn snapshots_share_source_bytes_and_json_is_unchanged() {
+        let image = Image::new(
+            Point::ZERO,
+            &vec![42; 1024 * 1024],
+            600,
+            400,
+            ImageFormat::Png,
+        );
+        let clones: Vec<_> = (0..50).map(|_| image.clone()).collect();
+        for clone in &clones {
+            assert!(image.data_base64.shares_storage(&clone.data_base64));
+            assert_eq!(image.data_base64.key(), clone.data_base64.key());
+        }
+        let json = serde_json::to_value(&image).unwrap();
+        assert!(json["data_base64"].is_string());
+        let restored: Image = serde_json::from_value(json).unwrap();
+        assert_eq!(restored.data(), image.data());
+        assert_eq!(restored.data_base64.key(), image.data_base64.key());
     }
 }

@@ -30,6 +30,10 @@ use winit::window::{CursorIcon, Window, WindowId};
 
 use crate::event_handler::EventHandler;
 use crate::ui::{MathEditorState, SelectedShapeProps, UiAction, UiState, render_ui};
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant as FrameInstant;
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant as FrameInstant;
 
 #[cfg(feature = "native")]
 pub mod file_ops {
@@ -279,7 +283,8 @@ pub mod file_ops {
         static PENDING_INTRO_JSON: RefCell<Option<(String, String)>> = const { RefCell::new(None) };
         static PENDING_EXPORT_FOLDER: RefCell<Option<String>> = const { RefCell::new(None) };
         static PENDING_LOCAL_FONTS: RefCell<Option<Vec<(String, String)>>> = const { RefCell::new(None) };
-        static PENDING_LOCAL_FONT_BYTES: RefCell<Option<(String, Vec<u8>)>> = const { RefCell::new(None) };
+        static PENDING_LOCAL_FONT_BYTES: RefCell<std::collections::VecDeque<(String, String, Vec<u8>)>> = const { RefCell::new(std::collections::VecDeque::new()) };
+        static PENDING_FONT_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
     }
 
     /// Ask Chrome/Edge for the local fonts installed on this computer.
@@ -328,6 +333,7 @@ pub mod file_ops {
             PENDING_LOCAL_FONTS.with(|cell| {
                 *cell.borrow_mut() = Some(fonts);
             });
+            schedule_repaint(0);
         });
     }
 
@@ -335,46 +341,68 @@ pub mod file_ops {
         PENDING_LOCAL_FONTS.with(|cell| cell.borrow_mut().take())
     }
 
-    /// Load one selected local font into WASM memory so Parley/Vello can render it.
-    pub fn load_local_font_async(family: String, postscript: String) {
-        wasm_bindgen_futures::spawn_local(async move {
-            let Some(window) = web_sys::window() else {
-                return;
-            };
-            let Ok(value) = js_sys::Reflect::get(
+    pub fn schedule_repaint(delay_ms: i32) {
+        if let Some(window) = web_sys::window() {
+            if let Ok(value) = js_sys::Reflect::get(
                 window.as_ref(),
-                &JsValue::from_str("drafftinkReadLocalFont"),
-            ) else {
-                return;
-            };
-            let Ok(function) = value.dyn_into::<js_sys::Function>() else {
-                return;
-            };
-            let Ok(result) = function.call1(window.as_ref(), &JsValue::from_str(&postscript))
-            else {
-                return;
-            };
-            let Ok(promise) = result.dyn_into::<js_sys::Promise>() else {
-                return;
-            };
-            let Ok(value) = wasm_bindgen_futures::JsFuture::from(promise).await else {
-                return;
-            };
-            let Ok(bytes_value) = js_sys::Reflect::get(&value, &JsValue::from_str("bytes")) else {
-                return;
-            };
-            let bytes = js_sys::Uint8Array::new(&bytes_value).to_vec();
-            if bytes.is_empty() {
-                return;
+                &JsValue::from_str("drafftinkRequestRepaint"),
+            ) {
+                if let Ok(function) = value.dyn_into::<js_sys::Function>() {
+                    let _ = function.call1(window.as_ref(), &JsValue::from_f64(delay_ms as f64));
+                }
             }
-            PENDING_LOCAL_FONT_BYTES.with(|cell| {
-                *cell.borrow_mut() = Some((family, bytes));
-            });
+        }
+    }
+    pub fn load_local_font_async(family: String, postscript: String) {
+        load_font(family, postscript, true);
+    }
+    pub fn restore_local_font_async(family: String, postscript: String) {
+        load_font(family, postscript, false);
+    }
+    fn load_font(family: String, postscript: String, allow_prompt: bool) {
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = async {
+                let window = web_sys::window().ok_or(())?;
+                let function = js_sys::Reflect::get(
+                    window.as_ref(),
+                    &JsValue::from_str("drafftinkReadLocalFont"),
+                )
+                .map_err(|_| ())?
+                .dyn_into::<js_sys::Function>()
+                .map_err(|_| ())?;
+                let promise = function
+                    .call2(
+                        window.as_ref(),
+                        &JsValue::from_str(&postscript),
+                        &JsValue::from_bool(allow_prompt),
+                    )
+                    .map_err(|_| ())?
+                    .dyn_into::<js_sys::Promise>()
+                    .map_err(|_| ())?;
+                let value = wasm_bindgen_futures::JsFuture::from(promise)
+                    .await
+                    .map_err(|_| ())?;
+                let bytes =
+                    js_sys::Reflect::get(&value, &JsValue::from_str("bytes")).map_err(|_| ())?;
+                let bytes = js_sys::Uint8Array::new(&bytes).to_vec();
+                if bytes.is_empty() {
+                    return Err(());
+                }
+                Ok(bytes)
+            }
+            .await;
+            match result {
+                Ok(bytes) => PENDING_LOCAL_FONT_BYTES.with(|cell| cell.borrow_mut().push_back((family,postscript,bytes))),
+                Err(_) => PENDING_FONT_ERROR.with(|cell| *cell.borrow_mut()=Some("Police introuvable : vérifiez son installation et actualisez la liste dans Settings.".into())),
+            }
+            schedule_repaint(0);
         });
     }
-
-    pub fn take_pending_local_font_bytes() -> Option<(String, Vec<u8>)> {
-        PENDING_LOCAL_FONT_BYTES.with(|cell| cell.borrow_mut().take())
+    pub fn take_pending_local_font_bytes() -> Option<(String, String, Vec<u8>)> {
+        PENDING_LOCAL_FONT_BYTES.with(|cell| cell.borrow_mut().pop_front())
+    }
+    pub fn take_font_error() -> Option<String> {
+        PENDING_FONT_ERROR.with(|cell| cell.borrow_mut().take())
     }
 
     /// Request clipboard text read (async). Result will be available via take_pending_clipboard_text().
@@ -1777,6 +1805,46 @@ struct TabState {
 }
 
 /// Runtime state for the application.
+#[cfg(target_arch = "wasm32")]
+fn setup_browser_repaint(window: &std::sync::Arc<winit::window::Window>, ctx: &egui::Context) {
+    use wasm_bindgen::{JsCast, closure::Closure};
+    if let Some(browser) = web_sys::window() {
+        let window = window.clone();
+        let callback = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| window.request_redraw());
+        if browser
+            .add_event_listener_with_callback("drafftink-redraw", callback.as_ref().unchecked_ref())
+            .is_ok()
+        {
+            callback.forget();
+        }
+    }
+    ctx.set_request_repaint_callback(|info| {
+        file_ops::schedule_repaint(info.delay.as_millis().min(i32::MAX as u128) as i32)
+    });
+}
+#[cfg(target_arch = "wasm32")]
+fn apply_browser_cursor(state: &AppState) {
+    use wasm_bindgen::{JsCast, JsValue};
+    if let Some(browser) = web_sys::window() {
+        if let Ok(function) =
+            js_sys::Reflect::get(browser.as_ref(), &JsValue::from_str("drafftinkSetCursor"))
+                .and_then(|v| v.dyn_into::<js_sys::Function>())
+        {
+            let text = matches!(
+                state.canvas.tool_manager.current_tool,
+                ToolKind::Text | ToolKind::Math
+            );
+            let c = state.ui_state.settings.cursor_outline;
+            let color = format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2]);
+            let _ = function.call2(
+                browser.as_ref(),
+                &JsValue::from_bool(text),
+                &JsValue::from_str(&color),
+            );
+        }
+    }
+}
+
 struct AppState {
     // Windowing
     window: Arc<Window>,
@@ -1822,7 +1890,7 @@ struct AppState {
 
     // Local font request target selection (WASM / Chrome-Edge only).
     #[cfg(target_arch = "wasm32")]
-    pending_local_font_targets: Vec<ShapeId>,
+    pending_local_font_targets: std::collections::HashMap<String, Vec<(String, ShapeId)>>,
 
     // Auto-save (WASM only)
     #[cfg(target_arch = "wasm32")]
@@ -1832,6 +1900,7 @@ struct AppState {
 
     /// Flag to request a redraw on next frame
     needs_redraw: bool,
+    last_redraw: FrameInstant,
 }
 
 /// Sync the document to CRDT, broadcast to peers, and flush outgoing
@@ -2163,13 +2232,38 @@ impl App {
             websocket: None,
             remote_peers: std::collections::HashMap::new(),
             #[cfg(target_arch = "wasm32")]
-            pending_local_font_targets: Vec::new(),
+            pending_local_font_targets: Default::default(),
             #[cfg(target_arch = "wasm32")]
             last_autosave: web_time::Instant::now(),
             #[cfg(target_arch = "wasm32")]
             last_doc_version: 0,
             needs_redraw: true,
+            last_redraw: FrameInstant::now(),
         });
+
+        #[cfg(target_arch = "wasm32")]
+        if let Some(state) = self.state.as_ref() {
+            setup_browser_repaint(&state.window, &state.egui_ctx);
+            file_ops::query_local_fonts_async();
+            let ps = state.ui_state.current_text_postscript.clone();
+            if !ps.is_empty() {
+                file_ops::restore_local_font_async(
+                    state
+                        .ui_state
+                        .current_text_font
+                        .custom
+                        .clone()
+                        .unwrap_or_default(),
+                    ps.clone(),
+                );
+            }
+            if ps != "GoogleSans-Medium" {
+                file_ops::restore_local_font_async(
+                    "Google Sans".into(),
+                    "GoogleSans-Medium".into(),
+                );
+            }
+        }
 
         self.pending_window = None;
 
@@ -2516,6 +2610,7 @@ impl ApplicationHandler for App {
 
         // Process input events through WinitInputHelper
         state.input.process_window_event(&event);
+        state.event_handler.text_font = state.ui_state.current_text_font.clone();
 
         if let WindowEvent::KeyboardInput { event, .. } = &event {
             // French layouts expose ^ as a dead key. When the inline math
@@ -2622,12 +2717,16 @@ impl ApplicationHandler for App {
 
             WindowEvent::RedrawRequested => {
                 // Update laser trail (fade out)
-                state.event_handler.update_laser_trail(1.0 / 60.0);
+                let elapsed = state.last_redraw.elapsed().as_secs_f64();
+                state.last_redraw = FrameInstant::now();
+                state.event_handler.update_laser_trail(elapsed);
 
                 // Check for pending document from async file load
                 if let Some(doc) = file_ops::take_pending_document() {
                     state.canvas.document = doc;
                     state.canvas.clear_selection();
+                    #[cfg(target_arch = "wasm32")]
+                    file_ops::query_local_fonts_async();
                     state.needs_redraw = true;
                 }
 
@@ -2659,21 +2758,125 @@ impl ApplicationHandler for App {
                 if let Some(fonts) = file_ops::take_pending_local_fonts() {
                     state.ui_state.local_fonts = fonts;
                     state.ui_state.local_fonts_loading = false;
+                    let ps = state.ui_state.current_text_postscript.clone();
+                    if !ps.is_empty() {
+                        file_ops::restore_local_font_async(
+                            state
+                                .ui_state
+                                .current_text_font
+                                .custom
+                                .clone()
+                                .unwrap_or_default(),
+                            ps.clone(),
+                        );
+                    }
+                    if ps != "GoogleSans-Medium" {
+                        file_ops::restore_local_font_async(
+                            "Google Sans".into(),
+                            "GoogleSans-Medium".into(),
+                        );
+                    }
+                    fn used_fonts(
+                        shape: &Shape,
+                        fonts: &[(String, String)],
+                        result: &mut std::collections::HashSet<(String, String)>,
+                    ) {
+                        match shape {
+                            Shape::Text(text) => {
+                                if let Some(family) = text.custom_font.as_ref() {
+                                    if let Some(ps) = text.custom_font_postscript.as_ref() {
+                                        result.insert((family.clone(), ps.clone()));
+                                    } else if let Some((_, ps)) =
+                                        fonts.iter().find(|(name, _)| name == family)
+                                    {
+                                        result.insert((family.clone(), ps.clone()));
+                                    }
+                                }
+                            }
+                            Shape::Group(group) => {
+                                for child in group.children() {
+                                    used_fonts(child, fonts, result);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    let mut restore = std::collections::HashSet::new();
+                    for doc in std::iter::once(&state.canvas.document)
+                        .chain(state.tabs.iter().map(|tab| &tab.document))
+                    {
+                        for shape in doc.shapes_ordered() {
+                            used_fonts(shape, &state.ui_state.local_fonts, &mut restore);
+                        }
+                    }
+                    for (family, ps) in restore {
+                        file_ops::restore_local_font_async(family, ps);
+                    }
                     state.needs_redraw = true;
                 }
 
                 #[cfg(target_arch = "wasm32")]
-                if let Some((family, bytes)) = file_ops::take_pending_local_font_bytes() {
-                    state.shape_renderer.register_custom_font(bytes);
-                    let targets = std::mem::take(&mut state.pending_local_font_targets);
-                    for shape_id in targets {
-                        if let Some(Shape::Text(text)) =
-                            state.canvas.document.get_shape_mut(shape_id)
-                        {
-                            text.custom_font = Some(family.clone());
+                while let Some((family, postscript, bytes)) =
+                    file_ops::take_pending_local_font_bytes()
+                {
+                    if postscript == "GoogleSans-Medium" {
+                        let mut fonts = egui::FontDefinitions::default();
+                        fonts.font_data.insert(
+                            "noto_sans".into(),
+                            egui::FontData::from_static(include_bytes!(
+                                "../../drafftink-render/assets/NotoSans-Regular.ttf"
+                            ))
+                            .into(),
+                        );
+                        fonts
+                            .families
+                            .entry(egui::FontFamily::Proportional)
+                            .or_default()
+                            .insert(0, "noto_sans".into());
+                        fonts.font_data.insert(
+                            "math_medium".into(),
+                            egui::FontData::from_owned(bytes.clone()).into(),
+                        );
+                        fonts.families.insert(
+                            egui::FontFamily::Name("math_medium".into()),
+                            vec!["math_medium".into(), "noto_sans".into()],
+                        );
+                        state.egui_ctx.set_fonts(fonts);
+                        state.ui_state.math_input_font_ready = true;
+                    }
+                    let canonical =
+                        state
+                            .shape_renderer
+                            .register_custom_font(&family, &postscript, bytes);
+                    if state.ui_state.current_text_postscript == postscript {
+                        state.ui_state.current_text_font.custom = Some(canonical.clone());
+                    }
+                    let targets = state
+                        .pending_local_font_targets
+                        .remove(&postscript)
+                        .unwrap_or_default();
+                    for (doc_id, id) in targets {
+                        let doc = if state.canvas.document.id == doc_id {
+                            Some(&mut state.canvas.document)
+                        } else {
+                            state
+                                .tabs
+                                .iter_mut()
+                                .find(|tab| tab.document.id == doc_id)
+                                .map(|tab| &mut tab.document)
+                        };
+                        if let Some(Shape::Text(text)) = doc.and_then(|doc| doc.get_shape_mut(id)) {
+                            text.custom_font = Some(canonical.clone());
+                            text.custom_font_postscript = Some(postscript.clone());
                             text.invalidate_cache();
                         }
                     }
+                    state.ui_state.font_error.clear();
+                    state.needs_redraw = true;
+                }
+                #[cfg(target_arch = "wasm32")]
+                if let Some(error) = file_ops::take_font_error() {
+                    state.ui_state.font_error = error;
                     state.needs_redraw = true;
                 }
 
@@ -3424,6 +3627,33 @@ impl ApplicationHandler for App {
                                     }
                                 }
                             }
+                            UiAction::SetDefaultFont(family, postscript) => {
+                                state.ui_state.settings.default_font = family.clone();
+                                state.ui_state.settings.default_font_postscript =
+                                    postscript.clone();
+                                state.ui_state.settings.last_text_font = None;
+                                state.ui_state.settings.last_text_postscript = None;
+                                state.ui_state.current_text_font =
+                                    drafftink_core::shapes::TextFont::from_name(
+                                        &family,
+                                        &postscript,
+                                    );
+                                state.ui_state.current_text_postscript = postscript.clone();
+                                #[cfg(target_arch = "wasm32")]
+                                if !postscript.is_empty() {
+                                    file_ops::load_local_font_async(family, postscript);
+                                }
+                            }
+                            UiAction::SetLaserColor(color) => {
+                                state.ui_state.settings.laser_color =
+                                    [color.r(), color.g(), color.b()];
+                                crate::settings::save_settings(&state.ui_state.settings);
+                            }
+                            UiAction::ResetFloatingPanels => {
+                                state.ui_state.settings.panel_positions.clear();
+                                ctx.memory_mut(|memory| memory.reset_areas());
+                                crate::settings::save_settings(&state.ui_state.settings);
+                            }
                             UiAction::SetFontFamily(family_idx) => {
                                 use drafftink_core::shapes::{FontFamily, Shape};
                                 let family = match family_idx {
@@ -3433,12 +3663,21 @@ impl ApplicationHandler for App {
                                     3 => FontFamily::VanillaExtract,
                                     _ => FontFamily::XitsMath,
                                 };
+                                state.ui_state.current_text_font.family = family;
+                                state.ui_state.current_text_font.custom = None;
+                                state.ui_state.current_text_font.postscript = None;
+                                state.ui_state.current_text_postscript.clear();
+                                state.ui_state.settings.last_text_font =
+                                    Some(state.ui_state.current_text_font.clone());
+                                state.ui_state.settings.last_text_postscript = Some(String::new());
+                                crate::settings::save_settings(&state.ui_state.settings);
                                 for &shape_id in &state.canvas.selection.clone() {
                                     if let Some(Shape::Text(text)) =
                                         state.canvas.document.get_shape_mut(shape_id)
                                     {
                                         text.font_family = family;
                                         text.custom_font = None;
+                                        text.custom_font_postscript = None;
                                         text.invalidate_cache();
                                     }
                                 }
@@ -3452,15 +3691,41 @@ impl ApplicationHandler for App {
                                 }
                             }
                             UiAction::SetLocalFont(family, postscript) => {
+                                let preference = drafftink_core::shapes::TextFont::from_name(
+                                    &family,
+                                    &postscript,
+                                );
+                                state.ui_state.current_text_font = preference.clone();
+                                state.ui_state.current_text_postscript = postscript.clone();
+                                state.ui_state.settings.last_text_font = Some(preference.clone());
+                                state.ui_state.settings.last_text_postscript =
+                                    Some(postscript.clone());
+                                crate::settings::save_settings(&state.ui_state.settings);
+                                if !state.canvas.selection.is_empty() {
+                                    state.canvas.document.push_undo();
+                                }
+                                for &id in &state.canvas.selection.clone() {
+                                    if let Some(Shape::Text(text)) =
+                                        state.canvas.document.get_shape_mut(id)
+                                    {
+                                        preference.apply(text);
+                                    }
+                                }
                                 #[cfg(target_arch = "wasm32")]
                                 {
-                                    state.pending_local_font_targets =
-                                        state.canvas.selection.iter().copied().collect();
+                                    let doc_id = state.canvas.document.id.clone();
+                                    state
+                                        .pending_local_font_targets
+                                        .entry(postscript.clone())
+                                        .or_default()
+                                        .extend(
+                                            state
+                                                .canvas
+                                                .selection
+                                                .iter()
+                                                .map(|id| (doc_id.clone(), *id)),
+                                        );
                                     file_ops::load_local_font_async(family, postscript);
-                                }
-                                #[cfg(not(target_arch = "wasm32"))]
-                                {
-                                    let _ = (family, postscript);
                                 }
                             }
                             UiAction::SetFontWeight(weight_idx) => {
@@ -3468,8 +3733,13 @@ impl ApplicationHandler for App {
                                 let weight = match weight_idx {
                                     0 => FontWeight::Light,
                                     1 => FontWeight::Regular,
+                                    3 => FontWeight::Medium,
                                     _ => FontWeight::Heavy,
                                 };
+                                state.ui_state.current_text_font.weight = weight;
+                                state.ui_state.settings.last_text_font =
+                                    Some(state.ui_state.current_text_font.clone());
+                                crate::settings::save_settings(&state.ui_state.settings);
                                 for &shape_id in &state.canvas.selection.clone() {
                                     if let Some(Shape::Text(text)) =
                                         state.canvas.document.get_shape_mut(shape_id)
@@ -4507,8 +4777,24 @@ impl ApplicationHandler for App {
                     .with_rotation_info(rotation_info)
                     .with_smart_guides(smart_guides)
                     .with_eraser_cursor(eraser_cursor)
-                    .with_laser_pointer(laser_pointer);
+                    .with_laser_pointer(laser_pointer)
+                    .with_laser_color(Color::from_rgba8(
+                        state.ui_state.settings.laser_color[0],
+                        state.ui_state.settings.laser_color[1],
+                        state.ui_state.settings.laser_color[2],
+                        255,
+                    ));
 
+                state.shape_renderer.retain_open_document_caches(
+                    std::iter::once(&state.canvas.document).chain(
+                        state
+                            .tabs
+                            .iter()
+                            .enumerate()
+                            .filter(|(index, _)| *index != state.active_tab)
+                            .map(|(_, tab)| &tab.document),
+                    ),
+                );
                 state.shape_renderer.build_scene(&render_ctx);
 
                 // Render text in edit mode (with cursor and selection)
@@ -4709,11 +4995,33 @@ impl ApplicationHandler for App {
                 }
                 surface_texture.present();
 
+                if state.event_handler.editing_text.is_some() {
+                    state
+                        .egui_ctx
+                        .request_repaint_after(std::time::Duration::from_millis(500));
+                }
+                if !state.event_handler.laser_trail.is_empty() {
+                    state
+                        .egui_ctx
+                        .request_repaint_after(std::time::Duration::from_millis(16));
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    if state.ui_state.settings.autosave_enabled {
+                        let interval = std::time::Duration::from_secs(
+                            state.ui_state.settings.autosave_interval_secs.max(1),
+                        );
+                        state.egui_ctx.request_repaint_after(
+                            interval.saturating_sub(state.last_autosave.elapsed()),
+                        );
+                    }
+                    apply_browser_cursor(&state);
+                }
                 // Request redraw if needed
                 if state.needs_redraw
                     || ui_action_taken
                     || state.egui_ctx.has_requested_repaint()
-                    || state.ui_state.math_editor.is_some()
+                    || (cfg!(not(target_arch = "wasm32")) && state.ui_state.math_editor.is_some())
                 {
                     state.needs_redraw = false;
                     state.window.request_redraw();
@@ -4746,6 +5054,10 @@ impl ApplicationHandler for App {
                         Some(Some(HandleKind::Corner(Corner::TopRight | Corner::BottomLeft))) => {
                             CursorIcon::NeswResize
                         }
+                        Some(Some(HandleKind::Edge(
+                            drafftink_core::selection::Edge::Top
+                            | drafftink_core::selection::Edge::Bottom,
+                        ))) => CursorIcon::NsResize,
                         Some(Some(HandleKind::Edge(_))) => CursorIcon::EwResize,
                         Some(Some(
                             HandleKind::Endpoint(_)
@@ -4783,8 +5095,8 @@ impl ApplicationHandler for App {
                     if let Some(text_id) = state.event_handler.editing_text {
                         if let Some(Shape::Text(text)) = state.canvas.document.get_shape(text_id) {
                             // Convert drag position to text-local coordinates
-                            let local_x = (world_point.x - text.position.x) as f32;
-                            let local_y = (world_point.y - text.position.y) as f32;
+                            let local_x = text.editing_local_point(world_point).x as f32;
+                            let local_y = text.editing_local_point(world_point).y as f32;
 
                             // Extend selection during drag using new API
                             if let Some(edit_state) = &mut state.text_edit_state {
@@ -4912,8 +5224,10 @@ impl ApplicationHandler for App {
                                         state.canvas.document.get_shape(text_id)
                                     {
                                         // Convert click to text-local coordinates
-                                        let local_x = (world_point.x - text.position.x) as f32;
-                                        let local_y = (world_point.y - text.position.y) as f32;
+                                        let local_x =
+                                            text.editing_local_point(world_point).x as f32;
+                                        let local_y =
+                                            text.editing_local_point(world_point).y as f32;
 
                                         // Ensure edit state exists
                                         if state.text_edit_state.is_none() {

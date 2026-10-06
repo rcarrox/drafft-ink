@@ -255,6 +255,7 @@ pub struct EventHandler {
     selection_rect: Option<SelectionRect>,
     /// Shape ID being edited (for text editing).
     pub editing_text: Option<ShapeId>,
+    pub text_font: drafftink_core::shapes::TextFont,
     /// Original top-left handle position when editing started.
     pub text_edit_anchor: Option<Point>,
     /// Original size (width, height) when editing started.
@@ -306,6 +307,7 @@ impl EventHandler {
             multi_move: None,
             selection_rect: None,
             editing_text: None,
+            text_font: Default::default(),
             text_edit_anchor: None,
             text_edit_size: None,
             last_snap: None,
@@ -926,6 +928,7 @@ impl EventHandler {
                 // Text tool: create text at click position with empty content
                 let mut text = Text::new(world_point, String::new());
                 text.style = current_style.clone();
+                self.text_font.apply(&mut text);
                 let shape = Shape::Text(text);
                 let shape_id = shape.id();
                 canvas.document.push_undo();
@@ -1188,7 +1191,10 @@ impl EventHandler {
                 }
             } else {
                 // Non-line shape: corner resize or move
-                let is_corner_resize = matches!(manip.handle, Some(HandleKind::Corner(_)));
+                let is_corner_resize = matches!(
+                    manip.handle,
+                    Some(HandleKind::Corner(_) | HandleKind::Edge(_))
+                );
                 if is_corner_resize && smart_snap_enabled {
                     // Snap resize handle to other shapes' edges/centers
                     let snap_zone = Rect::from_center_size(
@@ -1253,8 +1259,10 @@ impl EventHandler {
             // Apply manipulation preview to the shape
             let new_shape = if input.ctrl()
                 && matches!(manip.original_shape, Shape::Image(_))
-                && matches!(manip.handle, Some(HandleKind::Corner(_)))
-            {
+                && matches!(
+                    manip.handle,
+                    Some(HandleKind::Corner(_) | HandleKind::Edge(_))
+                ) {
                 apply_image_crop(&manip.original_shape, manip.handle, adjusted_delta)
             } else {
                 apply_manipulation(
@@ -1542,5 +1550,41 @@ impl EventHandler {
 impl Default for EventHandler {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod future_font_regressions {
+    use super::*;
+    use drafftink_core::shapes::{FontWeight, TextFont};
+    #[test]
+    fn each_new_text_uses_the_last_explicit_font_choice() {
+        let mut canvas = Canvas::new();
+        let mut handler = EventHandler::new();
+        let wanted = TextFont::from_name("Google Sans", "GoogleSans-Medium");
+        handler.text_font = wanted.clone();
+        canvas.tool_manager.current_tool = ToolKind::Text;
+        let input = InputState::new();
+        for x in [10.0, 120.0] {
+            handler.handle_release(
+                &mut canvas,
+                Point::new(x, 20.0),
+                &input,
+                &ShapeStyle::default(),
+                false,
+                false,
+            );
+            let id = handler.editing_text.unwrap();
+            if let Some(Shape::Text(text)) = canvas.document.get_shape_mut(id) {
+                assert_eq!(text.custom_font.as_deref(), Some("Google Sans"));
+                assert_eq!(text.font_weight, FontWeight::Medium);
+                text.content = "kept".into();
+            } else {
+                panic!()
+            }
+            handler.exit_text_edit(&mut canvas);
+        }
+        assert_eq!(canvas.document.len(), 2);
+        assert_eq!(handler.text_font, wanted);
     }
 }

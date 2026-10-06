@@ -818,7 +818,8 @@ impl<'a> ColorGrid<'a> {
         };
 
         egui::Area::new(egui::Id::new("color_grid"))
-            .fixed_pos(pos)
+            .default_pos(pos)
+            .movable(true)
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
                 crate::menu::panel_frame().show(ui, |ui| {

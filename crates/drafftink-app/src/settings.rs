@@ -25,6 +25,13 @@ pub struct UserSettings {
     pub autosave_interval_secs: u64,
     pub restore_last_document: bool,
     pub show_properties_for_tools: bool,
+    pub default_font: String,
+    pub default_font_postscript: String,
+    pub last_text_font: Option<drafftink_core::shapes::TextFont>,
+    pub last_text_postscript: Option<String>,
+    pub cursor_outline: [u8; 3],
+    pub laser_color: [u8; 3],
+    pub panel_positions: std::collections::BTreeMap<String, [f32; 2]>,
 }
 
 impl Default for UserSettings {
@@ -49,6 +56,13 @@ impl Default for UserSettings {
             autosave_interval_secs: 5,
             restore_last_document: true,
             show_properties_for_tools: false,
+            default_font: "Google Sans".into(),
+            default_font_postscript: "GoogleSans-Medium".into(),
+            last_text_font: None,
+            last_text_postscript: None,
+            cursor_outline: [0, 0, 0],
+            laser_color: [255, 0, 0],
+            panel_positions: Default::default(),
         }
     }
 }
@@ -201,5 +215,35 @@ mod tests {
         let mut settings = UserSettings::default();
         settings.shortcut_draw = "q".into();
         assert_eq!(settings.tool_for_key("Q"), Some(ToolKind::Freehand));
+    }
+}
+
+#[cfg(test)]
+mod font_settings_regressions {
+    use super::*;
+    #[test]
+    fn old_settings_receive_google_medium_defaults() {
+        let settings: UserSettings =
+            serde_json::from_str(r#"{"shortcut_pan":"h","autosave_interval_secs":15}"#).unwrap();
+        assert_eq!(settings.default_font, "Google Sans");
+        assert_eq!(settings.default_font_postscript, "GoogleSans-Medium");
+        assert_eq!(settings.cursor_outline, [0, 0, 0]);
+        assert_eq!(settings.autosave_interval_secs, 15);
+    }
+    #[test]
+    fn font_color_and_panel_preferences_survive_reload() {
+        let mut settings = UserSettings::default();
+        settings.last_text_font =
+            Some(drafftink_core::shapes::TextFont::from_name("Noto Sans", ""));
+        settings.last_text_postscript = Some(String::new());
+        settings.laser_color = [4, 100, 220];
+        settings
+            .panel_positions
+            .insert("properties".into(), [150.0, 210.0]);
+        let restored: UserSettings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(restored.last_text_font, settings.last_text_font);
+        assert_eq!(restored.laser_color, settings.laser_color);
+        assert_eq!(restored.panel_positions, settings.panel_positions);
     }
 }

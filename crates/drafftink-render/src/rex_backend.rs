@@ -50,7 +50,7 @@ pub struct VelloBackend<'a, 'f, 'p> {
     math_font: &'f TtfMathFont<'f>,
     primary_font: Option<&'p ttf_parser::Face<'p>>,
     /// Maps math font glyph IDs to codepoints for fallback lookup.
-    glyph_to_codepoint: HashMap<u16, char>,
+    glyph_to_codepoint: &'static HashMap<u16, char>,
     transform: Affine,
     color_stack: Vec<Color>,
     current_color: Color,
@@ -64,9 +64,11 @@ impl<'a, 'f, 'p> VelloBackend<'a, 'f, 'p> {
         transform: Affine,
         color: Color,
     ) -> Self {
-        // Build reverse map from glyph ID to codepoint
-        let mut glyph_to_codepoint = HashMap::new();
-        if primary_font.is_some() {
+        // The MATH font is the fixed bundled XITS face. Build its reverse cmap
+        // once instead of scanning thousands of glyphs for every formula/frame.
+        static CODEPOINTS: std::sync::OnceLock<HashMap<u16, char>> = std::sync::OnceLock::new();
+        let glyph_to_codepoint = CODEPOINTS.get_or_init(|| {
+            let mut map = HashMap::new();
             for subtable in math_font
                 .font()
                 .tables()
@@ -76,15 +78,15 @@ impl<'a, 'f, 'p> VelloBackend<'a, 'f, 'p> {
             {
                 if subtable.is_unicode() {
                     subtable.codepoints(|cp| {
-                        if let Some(c) = char::from_u32(cp) {
-                            if let Some(gid) = subtable.glyph_index(cp) {
-                                glyph_to_codepoint.insert(gid.0, c);
-                            }
+                        if let (Some(c), Some(gid)) = (char::from_u32(cp), subtable.glyph_index(cp))
+                        {
+                            map.insert(gid.0, c);
                         }
                     });
                 }
             }
-        }
+            map
+        });
 
         Self {
             scene,

@@ -116,6 +116,7 @@ pub struct RenderContext<'a> {
     pub eraser_cursor: Option<(kurbo::Point, f64)>,
     /// Laser pointer position and trail.
     pub laser_pointer: Option<(kurbo::Point, Vec<(kurbo::Point, f64)>)>,
+    pub laser_color: Color,
 }
 
 impl<'a> RenderContext<'a> {
@@ -136,6 +137,7 @@ impl<'a> RenderContext<'a> {
             smart_guides: Vec::new(),
             eraser_cursor: None,
             laser_pointer: None,
+            laser_color: Color::from_rgba8(255, 0, 0, 255),
         }
     }
 
@@ -196,6 +198,11 @@ impl<'a> RenderContext<'a> {
     /// Set eraser cursor position and radius.
     pub fn with_eraser_cursor(mut self, cursor: Option<(kurbo::Point, f64)>) -> Self {
         self.eraser_cursor = cursor;
+        self
+    }
+
+    pub fn with_laser_color(mut self, color: Color) -> Self {
+        self.laser_color = color;
         self
     }
 

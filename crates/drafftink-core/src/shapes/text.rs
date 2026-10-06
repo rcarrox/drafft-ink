@@ -67,21 +67,98 @@ pub enum FontWeight {
     Regular,
     /// Heavy/Bold weight.
     Heavy,
+    Medium,
 }
 
 impl FontWeight {
+    pub fn value(self) -> f32 {
+        match self {
+            Self::Light => 300.0,
+            Self::Regular => 400.0,
+            Self::Medium => 500.0,
+            Self::Heavy => 700.0,
+        }
+    }
     /// Get display name for UI.
     pub fn display_name(&self) -> &'static str {
         match self {
             FontWeight::Light => "Light",
             FontWeight::Regular => "Regular",
             FontWeight::Heavy => "Heavy",
+            FontWeight::Medium => "Medium",
         }
     }
 
     /// Get all available font weights.
     pub fn all() -> &'static [FontWeight] {
-        &[FontWeight::Light, FontWeight::Regular, FontWeight::Heavy]
+        &[
+            FontWeight::Light,
+            FontWeight::Regular,
+            FontWeight::Medium,
+            FontWeight::Heavy,
+        ]
+    }
+}
+
+/// Font preference used for future text objects, separate from selected objects.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TextFont {
+    pub family: FontFamily,
+    pub custom: Option<String>,
+    pub weight: FontWeight,
+    #[serde(default)]
+    pub postscript: Option<String>,
+}
+impl Default for TextFont {
+    fn default() -> Self {
+        Self {
+            family: FontFamily::NotoSans,
+            custom: Some("Google Sans".into()),
+            weight: FontWeight::Medium,
+            postscript: Some("GoogleSans-Medium".into()),
+        }
+    }
+}
+impl TextFont {
+    pub fn from_name(name: &str, postscript: &str) -> Self {
+        if postscript.is_empty() {
+            if let Some(family) = FontFamily::all().iter().copied().find(|f| f.name() == name) {
+                return Self {
+                    family,
+                    custom: None,
+                    weight: FontWeight::Regular,
+                    postscript: None,
+                };
+            }
+        }
+        let face = format!("{} {}", name, postscript).to_lowercase();
+        let weight = if face.contains("medium") {
+            FontWeight::Medium
+        } else if face.contains("bold") || face.contains("heavy") {
+            FontWeight::Heavy
+        } else if face.contains("light") {
+            FontWeight::Light
+        } else {
+            FontWeight::Regular
+        };
+        let canonical = if name.eq_ignore_ascii_case("Google Sans Medium") {
+            "Google Sans"
+        } else {
+            name
+        };
+        Self {
+            family: FontFamily::NotoSans,
+            custom: Some(canonical.to_string()),
+            weight,
+            postscript: (!postscript.is_empty()).then(|| postscript.to_string()),
+        }
+    }
+    pub fn apply(&self, text: &mut Text) {
+        text.font_family = self.family;
+        text.font_weight = self.weight;
+        text.custom_font = self.custom.clone();
+        text.custom_font_postscript = self.postscript.clone();
+        text.invalidate_cache();
     }
 }
 
@@ -102,9 +179,13 @@ pub struct Text {
     /// Optional local/system font family loaded from the user's computer.
     #[serde(default)]
     pub custom_font: Option<String>,
+    #[serde(default)]
+    pub custom_font_postscript: Option<String>,
     /// Rotation angle in radians (around center).
     #[serde(default)]
     pub rotation: f64,
+    #[serde(default = "super::unit_display_scale")]
+    pub display_scale: [f64; 2],
     /// Style properties.
     pub style: ShapeStyle,
     /// Per-character colors (one per char, None = use default style color).
@@ -128,7 +209,9 @@ impl Clone for Text {
             font_family: self.font_family,
             font_weight: self.font_weight,
             custom_font: self.custom_font.clone(),
+            custom_font_postscript: self.custom_font_postscript.clone(),
             rotation: self.rotation,
+            display_scale: self.display_scale,
             style: self.style.clone(),
             char_colors: self.char_colors.clone(),
             // Clone the cached size value, not the lock
@@ -138,6 +221,14 @@ impl Clone for Text {
 }
 
 impl Text {
+    pub fn editing_local_point(&self, world: Point) -> Point {
+        let local = Affine::rotate_about(-self.rotation, self.bounds().center()) * world;
+        Point::new(
+            (local.x - self.position.x) / self.display_scale[0],
+            (local.y - self.position.y) / self.display_scale[1],
+        )
+    }
+
     /// Default font size (M = Medium).
     pub const DEFAULT_FONT_SIZE: f64 = 20.0;
 
@@ -152,7 +243,9 @@ impl Text {
             font_family: FontFamily::default(),
             font_weight: FontWeight::default(),
             custom_font: None,
+            custom_font_postscript: None,
             rotation: 0.0,
+            display_scale: [1.0, 1.0],
             style: ShapeStyle::default(),
             char_colors: vec![None; char_count],
             cached_size: RwLock::new(None),
@@ -251,7 +344,9 @@ impl Text {
             font_family,
             font_weight,
             custom_font: None,
+            custom_font_postscript: None,
             rotation,
+            display_scale: [1.0, 1.0],
             style,
             char_colors,
             cached_size: RwLock::new(None),
@@ -303,15 +398,15 @@ impl Text {
         let char_width_factor = match (&self.font_family, &self.font_weight) {
             // GelPen is a handwritten-style font with medium width
             (FontFamily::GelPen, FontWeight::Light) => 0.50,
-            (FontFamily::GelPen, FontWeight::Regular) => 0.55,
+            (FontFamily::GelPen, FontWeight::Regular | FontWeight::Medium) => 0.55,
             (FontFamily::GelPen, FontWeight::Heavy) => 0.60,
             // Noto Sans is a clean sans-serif font
             (FontFamily::NotoSans, FontWeight::Light) => 0.50,
-            (FontFamily::NotoSans, FontWeight::Regular) => 0.52,
+            (FontFamily::NotoSans, FontWeight::Regular | FontWeight::Medium) => 0.52,
             (FontFamily::NotoSans, FontWeight::Heavy) => 0.55,
             // GelPen Serif is a handwritten font with wider characters
             (FontFamily::GelPenSerif, FontWeight::Light) => 0.55,
-            (FontFamily::GelPenSerif, FontWeight::Regular) => 0.58,
+            (FontFamily::GelPenSerif, FontWeight::Regular | FontWeight::Medium) => 0.58,
             (FontFamily::GelPenSerif, FontWeight::Heavy) => 0.60,
             // Vanilla Extract is a handwritten font
             (FontFamily::VanillaExtract, _) => 0.50,
@@ -359,8 +454,8 @@ impl ShapeTrait for Text {
         Rect::new(
             self.position.x,
             self.position.y,
-            self.position.x + width,
-            self.position.y + height,
+            self.position.x + width * self.display_scale[0],
+            self.position.y + height * self.display_scale[1],
         )
     }
 
@@ -392,12 +487,9 @@ impl ShapeTrait for Text {
 
     fn transform(&mut self, affine: Affine) {
         self.position = affine * self.position;
-        // Scale font size if there's uniform scaling
-        let coeffs = affine.as_coeffs();
-        let scale = (coeffs[0].abs() + coeffs[3].abs()) / 2.0;
-        if (scale - 1.0).abs() > 0.01 {
-            self.font_size *= scale;
-        }
+        let c = affine.as_coeffs();
+        self.display_scale[0] *= c[0].hypot(c[1]);
+        self.display_scale[1] *= c[2].hypot(c[3]);
     }
 
     fn clone_box(&self) -> Box<dyn ShapeTrait + Send + Sync> {
