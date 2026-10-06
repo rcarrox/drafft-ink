@@ -13,7 +13,7 @@ vello-renderer = ["dep:vello", "dep:parley"]
 # rough-style = ["vello-renderer", "dep:roughr", "dep:rough_vello"]
 
 [dependencies]
-drafftink-core = { path = "../drafftink-core", version = "0.1.0" }
+drafftink-core = { path = "../drafftink-core", version = "0.2.0" }
 kurbo.workspace = true
 peniko.workspace = true
 thiserror.workspace = true
@@ -30,7 +30,6 @@ parley = { version = "0.7", optional = true, default-features = false, features 
 # the revision requested by the upstream contributor.
 rex = { git = "https://github.com/KenyC/ReX", rev = "aeccdba38f3fa54195c469319b65c423e17a77ae", features = ["ttfparser-fontparser"] }
 ttf-parser = "0.25"
-
 
 # Rough style rendering (rough_vello requires vello 0.5, we use 0.6)
 roughr = { workspace = true }
