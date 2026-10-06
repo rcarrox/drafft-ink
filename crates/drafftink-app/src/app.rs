@@ -2606,6 +2606,10 @@ impl ApplicationHandler for App {
                             UiAction::SetTool(tool) => {
                                 state.canvas.set_tool(tool);
                             }
+                            UiAction::SetEraserMode(mode) => {
+                                state.ui_state.eraser_mode = mode;
+                                state.event_handler.eraser_mode = mode;
+                            }
                             UiAction::SetStrokeColor(color) => {
                                 // Update UI state
                                 state.ui_state.stroke_color = color;
@@ -4398,6 +4402,13 @@ impl ApplicationHandler for App {
                                 state.ui_state.angle_snap_enabled,
                             );
 
+                            // A newly placed math object opens its formula editor immediately.
+                            if let Some(math_id) = state.event_handler.pending_math_edit.take() {
+                                if let Some(Shape::Math(math)) = state.canvas.document.get_shape(math_id) {
+                                    state.ui_state.math_editor = Some((math_id, math.latex.clone()));
+                                }
+                            }
+
                             // Broadcast document changes to collaborators
                             broadcast_doc_changes(
                                 &mut state.collab,
@@ -4539,6 +4550,11 @@ impl ApplicationHandler for App {
                                     state.ui_state.grid_snap_enabled,
                                     state.ui_state.angle_snap_enabled,
                                 );
+                                if let Some(math_id) = state.event_handler.pending_math_edit.take() {
+                                    if let Some(Shape::Math(math)) = state.canvas.document.get_shape(math_id) {
+                                        state.ui_state.math_editor = Some((math_id, math.latex.clone()));
+                                    }
+                                }
                             }
                             TouchPhase::Cancelled => {
                                 state.event_handler.cancel(&mut state.canvas);
@@ -5276,13 +5292,13 @@ impl ApplicationHandler for App {
                                         state.ui_state.zoom_level = state.canvas.camera.zoom;
                                     }
                                 }
-                                // Selection: V or 1
-                                "v" | "V" | "1" => {
+                                // Selection: S or 1
+                                "s" | "S" | "1" => {
                                     state.canvas.set_tool(ToolKind::Select);
                                     log::info!("Tool: Select");
                                 }
-                                // Pan: H
-                                "h" | "H" => {
+                                // Pan: M
+                                "m" | "M" => {
                                     state.canvas.set_tool(ToolKind::Pan);
                                     log::info!("Tool: Pan");
                                 }
@@ -5306,18 +5322,18 @@ impl ApplicationHandler for App {
                                     state.canvas.set_tool(ToolKind::Line);
                                     log::info!("Tool: Line");
                                 }
-                                // Draw/Pen: P or 7
-                                "p" | "P" | "7" => {
+                                // Draw/Pen: B or 7
+                                "b" | "B" | "7" => {
                                     state.canvas.set_tool(ToolKind::Freehand);
-                                    log::info!("Tool: Pen");
+                                    log::info!("Tool: Draw");
                                 }
                                 // Text: T or 8
                                 "t" | "T" | "8" => {
                                     state.canvas.set_tool(ToolKind::Text);
                                     log::info!("Tool: Text");
                                 }
-                                // Math: M or 9
-                                "m" | "M" | "9" => {
+                                // Math formula: 9 (M is reserved for Pan)
+                                "9" => {
                                     state.canvas.set_tool(ToolKind::Math);
                                     log::info!("Tool: Math");
                                 }
