@@ -1,10 +1,10 @@
-# DrafftInk Local 0.8.0
+# DrafftInk Local 0.9.0
 
 Version personnelle du tableau DrafftInk, sans collaboration reseau.
 
 ## Utilisation sous Windows
 
-Le ZIP **DrafftInk_Windows_Portable_0.8.0.zip** produit par GitHub Actions est deja compile.
+Le ZIP **DrafftInk_Windows_Portable_0.9.0.zip** produit par GitHub Actions est deja compile.
 Il ne faut installer ni Rust, ni wasm-pack, ni Visual Studio.
 
 1. Decompresser le ZIP.
@@ -26,8 +26,8 @@ Workflow : `.github/workflows/build-portable.yml`.
 
 A chaque push sur `main`, deux artefacts sont produits :
 
-- `DrafftInk-Windows-Portable-0.8.0` : version locale Windows precompilee ;
-- `DrafftInk-Web-0.8.0` : fichiers statiques a deposer sur un serveur web.
+- `DrafftInk-Windows-Portable-0.9.0` : version locale Windows precompilee ;
+- `DrafftInk-Web-0.9.0` : fichiers statiques a deposer sur un serveur web.
 
 ## Modifications de cette branche
 
@@ -120,3 +120,9 @@ Chrome et Edge recents sont les cibles prioritaires car DrafftInk utilise WebGPU
 - CI ajoute un test Chromium sur le WASM reel avec captures : saisie Unicode/remplacements, selection/mise en forme, fractions/racines, presentation/plein ecran, miroirs, rotation et Undo/Redo. Un clavier francais physique et Beeftext sous Windows restent distincts de ces simulations.
 
 - Export PNG : les donnees du document sont embarquees en UTF-8 (iTXt) pour conserver les symboles, blocs de formule et noms Unicode ; les anciens PNG zTXt restent importables.
+
+## Nouveautes 0.9.0
+
+Dans Text, taper sum(, prod(, int(, lim(, sqrt( ou frac( cree immediatement un bloc math et ouvre un mini editeur de code. Le symbole et ses arguments sont actualises sur la feuille pendant la frappe. Entree valide et continue le texte ; Escape valide et termine l'edition Text. Selectionner un bloc de code puis Ctrl+Entree (ou double clic sur le bloc deja en edition) permet de le modifier. Les champs 0.8 restent disponibles.
+
+Exemples : sum(kx,k,1,n), prod(k,k,1,n), int(x²,x,1,2), lim(x,x,5), sqrt(x²), frac(a,b), frac(a,frac(b,c)). La source reste dans le JSON avec le bloc ; les arguments manquants du rendu provisoire sont des points. Le code saisi n'est pas remplace par une chaine normalisee pendant la frappe, pour conserver le caret.

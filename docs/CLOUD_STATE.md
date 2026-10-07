@@ -1,11 +1,17 @@
-# État de reprise — 0.8.0
+# État de reprise — 0.9.0
 
 Date : 7 octobre 2026.
 
 - Dépôt : `rcarrox/drafft-ink`, application locale Windows/Rust/WASM.
-- Travail 0.8 : branche `codex/0.8.0-text-images-presentation`, [PR #9](https://github.com/rcarrox/drafft-ink/pull/9).
+- Travail 0.9 : branche `codex/0.9.0-live-text-commands`, [PR #10](https://github.com/rcarrox/drafft-ink/pull/10).
 - Le 7 octobre, l’utilisateur a explicitement demandé de continuer en local pour le moment. Cette exception remplace l’exigence cloud pour ce travail ; GitHub Actions reste le compilateur Rust/WASM.
-- **Publication exacte** : lire l’état de fusion et la description de PR #9. Sa description de livraison contient le commit `main`, le dernier CI, le workflow portable et l’identifiant/hash du ZIP effectivement vérifié. Ne pas assimiler un build de branche à l’artefact final.
+- **Publication exacte** : lire l’état de fusion et la description de PR #10. Sa description de livraison contient le commit `main`, le dernier CI, le workflow portable et l’identifiant/hash du ZIP effectivement vérifié. Ne pas assimiler un build de branche à l’artefact final.
+
+## Nouveautés 0.9
+
+Text reconnaît directement sum(, prod(, int(, lim(, sqrt( et frac(. Un mini panneau de code prend le focus ; la formule apparaît immédiatement et se complète pendant la saisie, avec blocs manquants provisoires et fractions imbriquées. Entrée conserve le bloc et continue le texte ; Échap conserve et termine l’édition. Une sélection du bloc puis Ctrl+Entrée permet de rouvrir le code. Le source et le rendu restent sérialisés. Les contrôles Chromium vérifient la somme, la fraction imbriquée et le texte ajouté après fermeture du panneau.
+
+Les 800 Mo signalés concernent l’ensemble d’Edge. Les propositions de diagnostic/optimisation sont détaillées dans PERFORMANCE_PLAN.md ; aucun gain mémoire mesuré ni optimisation de cache supplémentaire n’est revendiqué pour 0.9.
 
 ## Code et ressources
 
@@ -19,7 +25,7 @@ Ctrl+P cache les panneaux/outils/onglets. F11 utilise le plein écran Chrome/Edg
 
 ## Preuves et limites
 
-La révision `022c43c95a3527d06bc4e36fc893dfa3332ad1bf` a passé les huit jobs du [CI #46](https://github.com/rcarrox/drafft-ink/actions/runs/37578399416), dont Rust, WASM, natifs Ubuntu/macOS et Chromium Interactions. Le dernier head de PR #9 doit passer à nouveau avant fusion. Clippy historique reste non bloquant ; consulter ses logs plutôt que déclarer le lint entièrement propre.
+La révision `022c43c95a3527d06bc4e36fc893dfa3332ad1bf` a passé les huit jobs du [CI #46](https://github.com/rcarrox/drafft-ink/actions/runs/37578399416), dont Rust, WASM, natifs Ubuntu/macOS et Chromium Interactions. Le dernier head de PR #10 doit passer avant fusion ; la description de cette PR donne la validation finale. Clippy historique reste non bloquant ; consulter ses logs plutôt que déclarer le lint entièrement propre.
 
 `utils/test_browser_interactions.cjs` pilote le vrai build WASM, avec touches ordinaires, paquets Unicode et touche morte simulée. Il vérifie `123^4` → `123⁴`, ≥/≤, doubles carets/accents, mise en forme partielle, fraction imbriquée/racine n-ième, présentation/plein écran, miroir/rotation d’image 1200×2000 et Undo/Redo. Le compositeur WebGPU de Chromium en CI peut produire une capture uniforme malgré un état correct. Le contrôle des pixels détecte cette limite (blanc/noir/uniforme) ; une perte explicite de l’instance WebGPU en CI est signalée comme contrôle de pixels indisponible, jamais comme un succès visuel. Les tests d’état restent actifs, les métadonnées PNG Unicode sont testées en Rust, et le rendu/encodage sont contrôlés localement. Les captures, états et logs sont dans l’artefact `chromium-interaction-evidence`. Le diagnostic `?drafftink-test=1` est uniquement en lecture.
 

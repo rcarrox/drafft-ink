@@ -138,6 +138,22 @@ function inspectCapture(file) {
     assert(!logs.some(line => line.startsWith('PAGEERROR:')), logs.join('\n'));
     const textPixels=await exportPixels(page,'text-render-export.png');
     fs.writeFileSync(path.join(evidence, 'state.json'), JSON.stringify(await state(), null, 2));
+    // Type a command directly in Text; arguments move into a focused mini editor.
+    await page.keyboard.press('t');await page.mouse.click(360,500);await wait(s=>!!s.editing_text);
+    await keys('sum(');await wait(s=>s.command_editor==='sum(');
+    const commandText=s=>s.shapes.find(item=>item.id===s.editing_text)?.shape.Text;
+    await wait(s=>commandText(s)?.formulas.length===1&&commandText(s).formulas[0].math.latex.includes('\\sum'));
+    await keys('kx,k,1,n)');await wait(s=>s.command_editor==='sum(kx,k,1,n)');
+    await wait(s=>commandText(s)?.formulas[0].math.latex==='\\sum_{k=1}^{n} kx');
+    await page.keyboard.press('Enter');await wait(s=>s.command_editor===null&&!!s.editing_text);
+    await keys(' = frac(');await wait(s=>s.command_editor==='frac(');
+    await keys('a,frac(b,c))');await wait(s=>s.command_editor==='frac(a,frac(b,c))');
+    await wait(s=>commandText(s)?.formulas.some(f=>f.math.latex==='\\frac{a}{\\frac{b}{c}}'));
+    await snapshot(page,'live-text-command.png');
+    await page.keyboard.press('Enter');await wait(s=>s.command_editor===null&&!!s.editing_text);await keys(' suite');
+    await wait(s=>commandText(s)?.content.endsWith(' suite'));
+    await page.keyboard.press('Escape');await wait(s=>s.editing_text===null);
+
     // Separate browser context with a public, deterministic 1200x2000 PNG fixture.
     const imageContext = await browser.newContext({viewport:{width:1280,height:720}});
     const imageId='00000000-0000-4000-8000-000000000001';
