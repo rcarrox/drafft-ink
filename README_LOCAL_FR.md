@@ -118,3 +118,5 @@ Chrome et Edge recents sont les cibles prioritaires car DrafftInk utilise WebGPU
 - Ctrl+P cache/retablit outils, panneaux et onglets pour la presentation. F11 entre/sort du plein ecran (navigateur Chrome/Edge).
 - Le cache de rendu Text conserve aussi les decorations et formules, sans reconstruire les textes termines a chaque clignotement.
 - CI ajoute un test Chromium sur le WASM reel avec captures : saisie Unicode/remplacements, selection/mise en forme, fractions/racines, presentation/plein ecran, miroirs, rotation et Undo/Redo. Un clavier francais physique et Beeftext sous Windows restent distincts de ces simulations.
+
+- Export PNG : les donnees du document sont embarquees en UTF-8 (iTXt) pour conserver les symboles, blocs de formule et noms Unicode ; les anciens PNG zTXt restent importables.

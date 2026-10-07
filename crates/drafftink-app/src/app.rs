@@ -1695,7 +1695,7 @@ pub fn spawn_png_export_async(
     });
 }
 
-/// MIME type keyword for embedded scene data in PNG tEXt chunks.
+/// MIME type keyword for embedded scene data in PNG text chunks.
 const PNG_METADATA_KEYWORD: &str = "application/vnd.drafftink+json";
 
 /// Encode RGBA pixel data to PNG bytes with optional embedded scene JSON.
@@ -1711,10 +1711,10 @@ fn encode_png(
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
 
-        // Embed scene data as compressed zTXt chunk
+        // iTXt supports Unicode (formula placeholders, ≥/≤, superscripts and font names).
         if let Some(json) = scene_json {
             if let Err(e) =
-                encoder.add_ztxt_chunk(PNG_METADATA_KEYWORD.to_string(), json.to_string())
+                encoder.add_itxt_chunk(PNG_METADATA_KEYWORD.to_string(), json.to_string())
             {
                 log::warn!("Failed to add metadata chunk: {:?}", e);
             }
@@ -1742,6 +1742,11 @@ pub fn extract_scene_from_png(png_data: &[u8]) -> Option<String> {
     let decoder = png::Decoder::new(std::io::Cursor::new(png_data));
     let reader = decoder.read_info().ok()?;
 
+    for chunk in &reader.info().utf8_text {
+        if chunk.keyword == PNG_METADATA_KEYWORD {
+            return chunk.get_text().ok();
+        }
+    }
     for chunk in &reader.info().compressed_latin1_text {
         if chunk.keyword == PNG_METADATA_KEYWORD {
             return chunk.get_text().ok();
@@ -6774,5 +6779,32 @@ impl ApplicationHandler for App {
         if let Some(state) = &mut self.state {
             state.input.end_step();
         }
+    }
+}
+
+#[cfg(test)]
+mod unicode_png_metadata_tests {
+    use super::*;
+    #[test]
+    fn unicode_document_metadata_survives_png_export_import() {
+        let source = r#"{"text":"123⁴ ≥ ≤ ￼ α","font":"Google Sans Medium","formula":"fraction"}"#;
+        let png = encode_png(&[255, 0, 0, 255], 1, 1, Some(source)).expect("Unicode PNG export");
+        assert_eq!(extract_scene_from_png(&png).as_deref(), Some(source));
+    }
+    #[test]
+    fn legacy_compressed_latin1_png_metadata_is_still_readable() {
+        let source = r#"{"text":"x^3"}"#;
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut bytes, 1, 1);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder
+                .add_ztxt_chunk(PNG_METADATA_KEYWORD.into(), source.into())
+                .unwrap();
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&[0, 0, 0, 255]).unwrap();
+        }
+        assert_eq!(extract_scene_from_png(&bytes).as_deref(), Some(source));
     }
 }

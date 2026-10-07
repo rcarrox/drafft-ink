@@ -954,7 +954,7 @@ impl VelloRenderer {
                             index as u64,
                             byte,
                             width as f32 + 4.0,
-                            (height + depth) as f32 + 4.0,
+                            (height - depth) as f32 + 4.0,
                         ));
                     }
                 }
@@ -3061,7 +3061,10 @@ mod inline_formula_render_tests {
             only.formulas[0].at = 0;
             renderer.render_text(&only, Affine::IDENTITY);
             assert!(
-                only.bounds().height() >= inline[0].3 as f64,
+                only.bounds().height() >= {
+                    let size = renderer.math_cache[&only.formulas[0].math.id()].size;
+                    size.1 - size.2
+                },
                 "formula escaped bounds: {latex}"
             );
         }

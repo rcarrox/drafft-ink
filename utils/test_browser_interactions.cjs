@@ -91,6 +91,7 @@ function inspectCapture(file) {
   try {
     await page.goto(process.env.DRAFFTINK_TEST_URL || 'http://127.0.0.1:8888/?drafftink-test=1');
     await wait(s => s.shapes.length === 0);
+    await page.mouse.click(370,270);
     await page.keyboard.press('t');
     await page.mouse.click(370, 270);
     await wait(s => !!s.editing_text);
