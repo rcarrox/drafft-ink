@@ -254,6 +254,14 @@ pub struct InlineFormulaDraft {
 }
 
 #[derive(Debug, Clone)]
+pub struct TextCommandEditor {
+    pub text_id: ShapeId,
+    pub formula_id: ShapeId,
+    pub source: String,
+    pub request_focus: bool,
+}
+
+#[derive(Debug, Clone)]
 pub struct MathEditorState {
     pub shape_id: ShapeId,
     pub input: String,
@@ -267,6 +275,8 @@ pub struct UiState {
     pub presentation_mode: bool,
     pub test_controls: std::collections::BTreeMap<String, [f32; 4]>,
     pub inline_formula_draft: Option<InlineFormulaDraft>,
+    pub text_command_editor: Option<TextCommandEditor>,
+    pub text_command_pos: Pos2,
     pub inline_formula_error: String,
     /// Currently selected tool (mirrored from canvas).
     pub current_tool: ToolKind,
@@ -392,6 +402,8 @@ impl Default for UiState {
             presentation_mode: false,
             test_controls: Default::default(),
             inline_formula_draft: None,
+            text_command_editor: None,
+            text_command_pos: Pos2::new(400.0, 300.0),
             inline_formula_error: String::new(),
             eraser_mode: EraserMode::Classic,
             stroke_color: TAILWIND_COLORS[11].shades[6], // Indigo 500
@@ -503,6 +515,7 @@ pub enum UiAction {
     ResetFloatingPanels,
     InsertTextSymbol(String),
     OpenInlineFormula(String),
+    EditTextCommand(String, bool, bool),
     CommitInlineFormula(String, String, [String; 4], bool),
     /// Change stroke color.
     SetStrokeColor(Color32),
@@ -759,6 +772,7 @@ pub fn render_ui(
     let right_panel_action = render_right_panel(ctx, ui_state, selected_props);
     let math_action = render_math_editor(ctx, ui_state);
     let inline_action = render_inline_formula_dialog(ctx, ui_state);
+    let command_action = render_text_command_editor(ctx, ui_state);
     let settings_action = render_settings_dialog(ctx, ui_state);
     let tab_action = render_tab_bar(ctx, ui_state);
 
@@ -773,6 +787,7 @@ pub fn render_ui(
         .or(right_panel_action)
         .or(math_action)
         .or(inline_action)
+        .or(command_action)
         .or(settings_action)
         .or(tab_action)
 }
@@ -4066,4 +4081,71 @@ mod inline_escape_tests {
             matches!(action,Some(UiAction::CommitInlineFormula(ref latex,_,_,true)) if latex==r"\frac{3}{2}")
         );
     }
+}
+
+fn render_text_command_editor(ctx: &Context, state: &mut UiState) -> Option<UiAction> {
+    let finish = ctx.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape));
+    let exit = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+    let editor = state.text_command_editor.as_mut()?;
+    let mut action = None;
+    egui::Window::new("Formule dans Text")
+        .id(egui::Id::new(("text_command_window", editor.formula_id)))
+        .collapsible(false)
+        .resizable(false)
+        .default_width(340.0)
+        .default_pos(state.text_command_pos)
+        .frame(
+            Frame::new()
+                .fill(Color32::from_gray(250))
+                .stroke(Stroke::new(1.0, Color32::from_gray(200)))
+                .corner_radius(CornerRadius::same(8))
+                .inner_margin(Margin::same(10)),
+        )
+        .show(ctx, |ui| {
+            *ui.visuals_mut() = egui::Visuals::light();
+            ui.visuals_mut().text_cursor.stroke = Stroke::new(2.0, Color32::BLACK);
+            let id = egui::Id::new(("text_command_source", editor.formula_id));
+            if editor.request_focus || finish {
+                ui.memory_mut(|m| m.request_focus(id));
+            }
+            let mut output = egui::TextEdit::singleline(&mut editor.source)
+                .id(id)
+                .desired_width(340.0)
+                .show(ui);
+            if editor.request_focus {
+                output
+                    .state
+                    .cursor
+                    .set_char_range(Some(egui::text::CCursorRange::one(
+                        egui::text::CCursor::new(editor.source.chars().count()),
+                    )));
+                output.state.store(ctx, id);
+                editor.request_focus = false;
+            }
+            let rect = output.response.rect;
+            state.test_controls.insert(
+                "Code formule".into(),
+                [rect.min.x, rect.min.y, rect.max.x, rect.max.y],
+            );
+            ui.label(
+                egui::RichText::new(
+                    "Rendu en direct · Entrée : continuer le texte · Échap : valider et sortir",
+                )
+                .size(10.0),
+            );
+            ui.label(
+                egui::RichText::new("frac(a,frac(b,c)) · int(x²,x,1,2) · sqrt(x²)").size(10.0),
+            );
+            if output.response.changed() || finish {
+                action = Some(UiAction::EditTextCommand(
+                    editor.source.clone(),
+                    finish,
+                    exit,
+                ));
+            }
+            if finish {
+                ui.memory_mut(|m| m.surrender_focus(id));
+            }
+        });
+    action
 }

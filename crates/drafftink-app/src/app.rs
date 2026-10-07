@@ -2660,7 +2660,8 @@ impl ApplicationHandler for App {
             // independent exponent/subscript shortcuts.
             if event.state == ElementState::Pressed
                 && (state.ui_state.math_editor.is_some()
-                    || state.ui_state.inline_formula_draft.is_some())
+                    || state.ui_state.inline_formula_draft.is_some()
+                    || state.ui_state.text_command_editor.is_some())
             {
                 let math_marker = match &event.logical_key {
                     Key::Dead(Some('^')) => Some('^'),
@@ -3293,6 +3294,7 @@ impl ApplicationHandler for App {
                         ui_action_taken = true;
                         match action.clone() {
                             UiAction::SetTool(tool) => {
+                                state.ui_state.text_command_editor = None;
                                 if tool != ToolKind::Text {
                                     if state.event_handler.editing_text.is_some() {
                                         state.event_handler.exit_text_edit(&mut state.canvas);
@@ -3726,6 +3728,9 @@ impl ApplicationHandler for App {
                                         text.sync_spans_after_edit(&old);
                                     }
                                 }
+                            }
+                            UiAction::EditTextCommand(source, finished, exit_text) => {
+                                update_text_command(state, source, finished, exit_text);
                             }
                             UiAction::OpenInlineFormula(kind) => {
                                 if let (Some(id), Some(editor)) = (
@@ -4997,7 +5002,7 @@ impl ApplicationHandler for App {
                             serde_json::json!({"id":shape.id(),"shape":shape,"bounds":[top_left.x,top_left.y,bottom_right.x,bottom_right.y],"handles":handles})
                         }).collect();
 
-                        let status = serde_json::json!({"shapes":shapes,"presentation":state.ui_state.presentation_mode,"tool":format!("{:?}",state.ui_state.current_tool),"editing_text":state.event_handler.editing_text,"inline_dialog":state.ui_state.inline_formula_draft.is_some(),"inline_error":state.ui_state.inline_formula_error,"controls":state.ui_state.test_controls});
+                        let status = serde_json::json!({"shapes":shapes,"presentation":state.ui_state.presentation_mode,"tool":format!("{:?}",state.ui_state.current_tool),"editing_text":state.event_handler.editing_text,"inline_dialog":state.ui_state.inline_formula_draft.is_some(),"inline_error":state.ui_state.inline_formula_error,"command_editor":state.ui_state.text_command_editor.as_ref().map(|e| &e.source),"controls":state.ui_state.test_controls});
                         let _ = js_sys::Reflect::set(
                             window.as_ref(),
                             &JsValue::from_str("__drafftinkTestState"),
@@ -5404,6 +5409,9 @@ impl ApplicationHandler for App {
                     return;
                 }
 
+                if btn_state == ElementState::Pressed {
+                    state.ui_state.text_command_editor = None;
+                }
                 let mouse_btn = match button {
                     MouseButton::Left => MouseButton::Left,
                     MouseButton::Right => MouseButton::Right,
@@ -5460,6 +5468,9 @@ impl ApplicationHandler for App {
                                                 layout_cx,
                                             );
                                         }
+                                    }
+                                    if state.input.is_double_click() {
+                                        open_selected_text_command(state);
                                     }
                                     // Handled click on editing text
                                 } else {
@@ -5782,6 +5793,13 @@ impl ApplicationHandler for App {
                             }
                         }
 
+                        if state.input.ctrl()
+                            && matches!(event.logical_key, Key::Named(NamedKey::Enter))
+                            && open_selected_text_command(state)
+                        {
+                            state.window.request_redraw();
+                            return;
+                        }
                         if state.input.ctrl() {
                             if let Key::Character(c) = &event.logical_key {
                                 let kind = c.to_ascii_lowercase();
@@ -5985,6 +6003,11 @@ impl ApplicationHandler for App {
                         } else {
                             log::debug!("Text edit: unhandled key {:?}", event.logical_key);
                         }
+                    }
+                    if event.state == ElementState::Pressed
+                        && matches!(event.logical_key, Key::Character(_))
+                    {
+                        activate_text_command(state);
                     }
                     state.needs_redraw = true;
                     state.window.request_redraw();
@@ -6817,5 +6840,150 @@ mod unicode_png_metadata_tests {
             writer.write_image_data(&[0, 0, 0, 255]).unwrap();
         }
         assert_eq!(extract_scene_from_png(&bytes).as_deref(), Some(source));
+    }
+}
+
+fn position_text_command_panel(state: &mut AppState, text_id: ShapeId) {
+    if let Some(Shape::Text(text)) = state.canvas.document.get_shape(text_id) {
+        let p = state.canvas.camera.world_to_screen(text.bounds().center());
+        let scale = state.egui_ctx.pixels_per_point() as f64;
+        state.ui_state.text_command_pos =
+            egui::Pos2::new((p.x / scale + 24.0) as f32, (p.y / scale + 36.0) as f32);
+    }
+}
+fn activate_text_command(state: &mut AppState) {
+    if state.ui_state.text_command_editor.is_some() {
+        return;
+    }
+    let Some(id) = state.event_handler.editing_text else {
+        return;
+    };
+    let Some(editor) = state.text_edit_state.as_ref() else {
+        return;
+    };
+    let old = editor.text();
+    let caret = editor.cursor_byte_offset();
+    let Some((start, _)) = crate::math_input::text_command_prefix(&old, caret) else {
+        return;
+    };
+    let source = old[start..caret].to_string();
+    let Some(latex) = crate::math_input::live_command_latex(&source) else {
+        return;
+    };
+    state.canvas.document.push_undo();
+    let editor = state.text_edit_state.as_mut().unwrap();
+    let (fonts, layouts) = state.shape_renderer.contexts_mut();
+    editor
+        .driver(fonts, layouts)
+        .select_byte_range(start, caret);
+    editor.handle_key(
+        TextKey::Character("\u{fffc}".into()),
+        TextModifiers::default(),
+        fonts,
+        layouts,
+    );
+    let at = old[..start].chars().count();
+    let mut math = drafftink_core::shapes::Math::new(Point::ZERO, latex);
+    math.source = source.clone();
+    let formula_id = math.id();
+    if let Some(Shape::Text(text)) = state.canvas.document.get_shape_mut(id) {
+        text.content = editor.text();
+        text.sync_spans_after_edit(&old);
+        text.formulas.push(drafftink_core::shapes::InlineFormula {
+            at,
+            math,
+            kind: "Code".into(),
+            parts: [source.clone(), String::new(), String::new(), String::new()],
+        });
+        text.invalidate_cache();
+    }
+    state.ui_state.text_command_editor = Some(crate::ui::TextCommandEditor {
+        text_id: id,
+        formula_id,
+        source,
+        request_focus: true,
+    });
+    position_text_command_panel(state, id);
+    state.ui_keyboard_pending = true;
+}
+fn open_selected_text_command(state: &mut AppState) -> bool {
+    let Some(id) = state.event_handler.editing_text else {
+        return false;
+    };
+    let Some(editor) = state.text_edit_state.as_ref() else {
+        return false;
+    };
+    let Some(range) = editor.selection_range() else {
+        return false;
+    };
+    let Some(Shape::Text(text)) = state.canvas.document.get_shape(id) else {
+        return false;
+    };
+    let start = text.content[..range.start].chars().count();
+    let end = text.content[..range.end].chars().count();
+    let Some(formula) = text
+        .formulas
+        .iter()
+        .find(|f| f.kind == "Code" && f.at >= start && f.at < end)
+    else {
+        return false;
+    };
+    state.ui_state.text_command_editor = Some(crate::ui::TextCommandEditor {
+        text_id: id,
+        formula_id: formula.math.id(),
+        source: formula.math.source.clone(),
+        request_focus: true,
+    });
+    position_text_command_panel(state, id);
+    state.ui_keyboard_pending = true;
+    true
+}
+fn update_text_command(state: &mut AppState, source: String, finished: bool, exit_text: bool) {
+    let Some(editor) = state.ui_state.text_command_editor.clone() else {
+        return;
+    };
+    let latex = crate::math_input::live_command_latex(&source);
+    let valid = latex
+        .as_ref()
+        .is_some_and(|s| state.shape_renderer.formula_is_valid(s));
+    if let Some(Shape::Text(text)) = state.canvas.document.get_shape_mut(editor.text_id) {
+        if let Some(formula) = text
+            .formulas
+            .iter_mut()
+            .find(|f| f.math.id() == editor.formula_id)
+        {
+            if valid {
+                formula.math.set_latex(latex.unwrap());
+            }
+            formula.math.source = source.clone();
+            formula.parts[0] = source;
+            text.invalidate_cache();
+        }
+    }
+    if finished {
+        state.ui_state.text_command_editor = None;
+        // Continue after the embedded formula, including when reopening an old block.
+        if let Some(Shape::Text(text)) = state.canvas.document.get_shape(editor.text_id) {
+            if let Some(formula) = text
+                .formulas
+                .iter()
+                .find(|f| f.math.id() == editor.formula_id)
+            {
+                let byte = text
+                    .content
+                    .char_indices()
+                    .nth(formula.at + 1)
+                    .map(|(b, _)| b)
+                    .unwrap_or(text.content.len());
+                if let Some(edit) = state.text_edit_state.as_mut() {
+                    let (fonts, layouts) = state.shape_renderer.contexts_mut();
+                    edit.driver(fonts, layouts).move_to_byte(byte);
+                }
+            }
+        }
+        if exit_text {
+            state.event_handler.exit_text_edit(&mut state.canvas);
+            state.text_edit_state = None;
+        }
     }
 }

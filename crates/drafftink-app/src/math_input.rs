@@ -518,3 +518,101 @@ pub fn dead_caret_text(text: &str) -> String {
         })
         .collect()
 }
+
+/// Match a complete command prefix immediately before the text caret.
+pub fn text_command_prefix(text: &str, caret: usize) -> Option<(usize, &'static str)> {
+    let prefix = text.get(..caret)?;
+    for name in ["sum", "prod", "int", "lim", "sqrt", "frac"] {
+        let marker = format!("{name}(");
+        if prefix.ends_with(&marker) {
+            let start = prefix.len() - marker.len();
+            if prefix[..start]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !c.is_alphanumeric() && c != '_')
+            {
+                return Some((start, name));
+            }
+        }
+    }
+    None
+}
+
+/// Complete only the preview, leaving the user's source/caret untouched.
+/// Empty arguments use a visible dot; nested commands remain recursive.
+pub fn live_command_latex(source: &str) -> Option<String> {
+    let source = normalize_friendly_math_input(source);
+    let source = source.trim();
+    let open = source.find('(')?;
+    let name = &source[..open];
+    let arity = match name {
+        "sum" | "prod" | "int" => 4,
+        "lim" => 3,
+        "sqrt" => 1,
+        "frac" => 2,
+        _ => return None,
+    };
+    let mut completed = source.to_string();
+    let mut depth = 0i32;
+    for ch in source.chars() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth < 0 {
+                    return None;
+                }
+            }
+            _ => {}
+        }
+    }
+    completed.extend(std::iter::repeat_n(')', depth as usize));
+    let body = completed.get(open + 1..completed.len().checked_sub(1)?)?;
+    let mut args = split_top_level_args(body);
+    if args.len() > arity {
+        return None;
+    }
+    args.resize(arity, String::new());
+    for argument in &mut args {
+        if argument.trim().is_empty() {
+            *argument = r"\cdot".into();
+        } else if let Some(nested) = live_command_latex(argument) {
+            *argument = nested;
+        }
+    }
+    render_call(name, &args.join(","))
+}
+
+#[cfg(test)]
+mod live_text_command_tests {
+    use super::*;
+    #[test]
+    fn prefixes_respect_word_boundaries_and_unicode() {
+        assert_eq!(text_command_prefix("é = sum(", 9), Some((5, "sum")));
+        assert_eq!(text_command_prefix("consum(", 7), None);
+        for command in ["sum(", "prod(", "int(", "lim(", "sqrt(", "frac("] {
+            assert!(text_command_prefix(command, command.len()).is_some());
+            assert!(live_command_latex(command).is_some());
+        }
+    }
+    #[test]
+    fn live_commands_preserve_nested_fractions_and_superscripts() {
+        for source in [
+            "sum(kx,k,1,n)",
+            "prod(k,k,1,n)",
+            "int(x²,x,1,2)",
+            "lim(x,x,5)",
+            "sqrt(x²)",
+            "frac(a,b)",
+            "frac(a,frac(b,c))",
+        ] {
+            assert_eq!(
+                live_command_latex(source).unwrap(),
+                friendly_math_to_latex(source)
+            );
+        }
+        let preview = live_command_latex("frac(a,frac(b,").unwrap();
+        assert!(preview.contains(r"\frac{a}{\frac{b}{\cdot}}"));
+        assert!(live_command_latex("frac(a,b,c)").is_none());
+    }
+}
