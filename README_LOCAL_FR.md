@@ -1,4 +1,4 @@
-# DrafftInk Local 0.9.0
+# DrafftInk Local 0.10.0
 
 Version personnelle du tableau DrafftInk, sans collaboration reseau.
 
@@ -26,7 +26,7 @@ Workflow : `.github/workflows/build-portable.yml`.
 
 A chaque push sur `main`, deux artefacts sont produits :
 
-- `DrafftInk-Windows-Portable-0.9.0` : version locale Windows precompilee ;
+- `DrafftInk-Windows-Portable-0.10.0` : version locale Windows precompilee ;
 - `DrafftInk-Web-0.9.0` : fichiers statiques a deposer sur un serveur web.
 
 ## Modifications de cette branche

@@ -924,7 +924,7 @@ impl VelloRenderer {
                             .size
                             .unwrap_or((run.run().font_size() / 16.0).max(1.0));
                         let y = run.baseline()
-                            - crate::text_editor::inline_baseline_shift(line, font_size)
+                            - crate::text_editor::inline_baseline_shift(&line, font_size)
                             + decoration.offset.unwrap_or(run.run().font_size() / 10.0);
                         let width: f32 = run.glyphs().map(|g| g.advance).sum();
                         self.scene.fill(
@@ -1268,7 +1268,7 @@ impl VelloRenderer {
                 };
                 let mut x = glyph_run.offset();
                 let y = glyph_run.baseline()
-                    - crate::text_editor::inline_baseline_shift(line, text.font_size as f32);
+                    - crate::text_editor::inline_baseline_shift(&line, text.font_size as f32);
                 let run = glyph_run.run();
                 let font = run.font();
                 let run_font_size = run.font_size();
@@ -1802,7 +1802,7 @@ impl VelloRenderer {
                 let glyph_style = glyph_run.style();
                 let mut x = glyph_run.offset();
                 let y = glyph_run.baseline()
-                    - crate::text_editor::inline_baseline_shift(line, text.font_size as f32);
+                    - crate::text_editor::inline_baseline_shift(&line, text.font_size as f32);
                 let run = glyph_run.run();
                 let font = run.font();
                 let font_size = run.font_size();
@@ -3237,7 +3237,7 @@ mod inline_axis_tests {
         renderer.render_text(&text, Affine::IDENTITY);
         let layout = &renderer.text_cache.values().next().unwrap().layout;
         let line = layout.lines().next().unwrap();
-        let shift = crate::text_editor::inline_baseline_shift(line, text.font_size as f32);
+        let shift = crate::text_editor::inline_baseline_shift(&line, text.font_size as f32);
         let axis = line
             .items()
             .filter_map(|item| match item {

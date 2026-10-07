@@ -1,7 +1,7 @@
 # État de reprise — 0.10.0
 
 7 octobre 2026. Travail local autorisé, compilateur Rust/WASM : GitHub Actions.
-Branche codex/0.10.0-transform-math-alignment. Lire la description de la PR de cette branche pour les statuts CI/fusion/artefact finaux.
+Branche codex/0.10.0-transform-math-alignment, PR #11 : https://github.com/rcarrox/drafft-ink/pull/11. Lire la description de la PR de cette branche pour les statuts CI/fusion/artefact finaux.
 
 Demandes : traverser les bords avec les poignées de tous les objets, conserver le pivot après rotation et le miroir du texte/math ; axe des formules aligné sur les caractères et le signe égal ; rééditer les blocs validés par double-clic ; mini panneau 10 pixels sous la formule et suivant sa hauteur.
 

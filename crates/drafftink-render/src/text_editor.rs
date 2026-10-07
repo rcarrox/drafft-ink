@@ -198,7 +198,7 @@ impl TextEditState {
             let selection = self.editor.raw_selection().refresh(layout);
             selection.geometry_with(layout, |mut rect, line_index| {
                 if let Some(line) = layout.lines().nth(line_index) {
-                    let shift = inline_baseline_shift(line, self.font_size) as f64;
+                    let shift = inline_baseline_shift(&line, self.font_size) as f64;
                     rect.y0 -= shift;
                     rect.y1 -= shift;
                 }
@@ -256,7 +256,7 @@ impl TextEditState {
             if let Some(line) = layout.lines().find(|l| {
                 l.text_range().contains(&cursor.index()) || l.text_range().end == cursor.index()
             }) {
-                let shift = inline_baseline_shift(line, self.font_size) as f64;
+                let shift = inline_baseline_shift(&line, self.font_size) as f64;
                 rect.y0 -= shift;
                 rect.y1 -= shift;
             }
@@ -718,7 +718,7 @@ impl TextEditState {
                 + layout
                     .lines()
                     .find(|l| local_y >= l.metrics().min_coord && local_y <= l.metrics().max_coord)
-                    .map(|l| inline_baseline_shift(l, self.font_size))
+                    .map(|l| inline_baseline_shift(&l, self.font_size))
                     .unwrap_or(0.0);
             let next = if shift {
                 self.editor
@@ -965,7 +965,7 @@ pub(crate) fn font_math_axis(bytes: &[u8], index: u32, size: f32) -> f32 {
         .unwrap_or(size * 0.27)
 }
 /// Parley aligns boxes at their bottom; move ordinary text to their math axis.
-pub(crate) fn inline_baseline_shift(line: parley::layout::Line<'_, Brush>, size: f32) -> f32 {
+pub(crate) fn inline_baseline_shift(line: &parley::layout::Line<'_, Brush>, size: f32) -> f32 {
     let height = line
         .items()
         .filter_map(|item| match item {
