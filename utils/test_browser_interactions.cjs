@@ -3,11 +3,41 @@ const { chromium } = require('../work/e2e/node_modules/playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const zlib = require('node:zlib');
 const evidence = path.resolve('work/e2e/evidence');
 fs.mkdirSync(evidence, { recursive: true });
 
+
+// Reject empty WebGPU captures; reconstruct standard Chromium RGB/RGBA PNGs.
+function inspectCapture(file) {
+  const png=fs.readFileSync(file);
+  let offset=8,width,height,bpp;const parts=[];
+  while(offset<png.length) {
+    const size=png.readUInt32BE(offset),tag=png.toString('ascii',offset+4,offset+8);
+    const data=png.subarray(offset+8,offset+8+size);
+    if(tag==='IHDR') {width=data.readUInt32BE(0);height=data.readUInt32BE(4);assert.equal(data[8],8);bpp=data[9]===6?4:data[9]===2?3:0;assert(bpp,'Unsupported screenshot PNG format');}
+    if(tag==='IDAT')parts.push(data);
+    offset+=size+12;
+  }
+  const raw=zlib.inflateSync(Buffer.concat(parts));const stride=width*bpp;
+  let previous=Buffer.alloc(stride),position=0,nonwhite=0;
+  const paeth=(a,b,c)=> {const p=a+b-c,pa=Math.abs(p-a),pb=Math.abs(p-b),pc=Math.abs(p-c);return pa<=pb&&pa<=pc?a:pb<=pc?b:c;};
+  for(let y=0;y<height;y++) {
+    const filter=raw[position++],row=Buffer.from(raw.subarray(position,position+stride));position+=stride;
+    for(let x=0;x<stride;x++) {
+      const left=x>=bpp?row[x-bpp]:0,up=previous[x],upperLeft=x>=bpp?previous[x-bpp]:0;
+      const prediction=filter===0?0:filter===1?left:filter===2?up:filter===3?Math.floor((left+up)/2):paeth(left,up,upperLeft);
+      row[x]=(row[x]+prediction)&255;
+    }
+    for(let x=0;x<stride;x+=bpp)if(row[x]<235||row[x+1]<235||row[x+2]<235)nonwhite++;
+    previous=row;
+  }
+  assert(nonwhite>1000,`Blank WebGPU screenshot: ${path.basename(file)} (${nonwhite} nonwhite pixels)`);
+  return {file:path.basename(file),width,height,nonwhite_pixels:nonwhite};
+}
+
 (async () => {
-  const browser = await chromium.launch({ headless: true, args: ['--enable-unsafe-webgpu', '--use-angle=swiftshader', '--disable-vulkan-surface'] });
+  const browser = await chromium.launch({ headless: false, args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan', '--use-angle=vulkan', '--use-vulkan=swiftshader', '--use-webgpu-adapter=swiftshader', '--disable-vulkan-surface'] });
   const context = await browser.newContext({ viewport: { width: 1280, height: 720 } });
   await context.addInitScript(() => localStorage.setItem('drafftink.user_settings.v1', JSON.stringify({ restore_last_document: false, intro_json: '', autosave_enabled: false, default_font: 'Noto Sans', default_font_postscript: '' })));
   const page = await context.newPage();
@@ -24,6 +54,10 @@ fs.mkdirSync(evidence, { recursive: true });
     throw new Error('Timed out; state=' + JSON.stringify(await state().catch(() => null)));
   };
   const text = s => s.shapes.find(item => item.shape.Text)?.shape.Text;
+  const snapshot=async(target,file)=> {
+    await target.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+    await target.screenshot({path:path.join(evidence,file)});
+  };
   const input = await context.newCDPSession(page);
   const keys = async value => {
     for (const char of value) {
@@ -71,15 +105,15 @@ fs.mkdirSync(evidence, { recursive: true });
     await page.keyboard.press('ArrowRight');
     await control('Fraction'); await fill('Numérateur', '1/2'); await fill('Dénominateur', '3/4'); await control('Insérer');
     await wait(s => text(s)?.formulas.length === 1 && !s.inline_dialog);
-    await page.screenshot({ path: path.join(evidence, 'text-fraction.png') });
+    await snapshot(page,'text-fraction.png');
     await keys(' fin');
     await wait(s => text(s)?.content.endsWith(' fin'));
     await control('Racine n-ième'); await fill('Expression', 'x+1'); await fill('Indice de la racine', '3'); await control('Insérer');
     await wait(s => text(s)?.formulas.length === 2 && !s.inline_dialog);
-    await page.screenshot({ path: path.join(evidence, 'text-root.png') });
+    await snapshot(page,'text-root.png');
     const before = await state();
     await page.keyboard.press('Control+p'); await wait(s => s.presentation);
-    await page.screenshot({ path: path.join(evidence, 'presentation.png') });
+    await snapshot(page,'presentation.png');
     await page.keyboard.press('Control+p'); await wait(s => !s.presentation);
     assert.equal(text(await state()).content, text(before).content);
     await page.keyboard.press('F11');
@@ -111,7 +145,7 @@ fs.mkdirSync(evidence, { recursive: true });
     const fixed=item.handles.find(h=>h.kind==='Corner(TopLeft)');
     await imagePage.mouse.move(handle.x,handle.y);await imagePage.mouse.down();await imagePage.mouse.move(fixed.x-100,fixed.y-80,{steps:20});await imagePage.mouse.up();
     await waitImage(s=>s.shape.Image.flip_x && s.shape.Image.flip_y);
-    await imagePage.screenshot({path:path.join(evidence,'image-flipped.png')});
+    await snapshot(imagePage,'image-flipped.png');
     await imagePage.keyboard.press('Control+z');await waitImage(s=>!s.shape.Image.flip_x && !s.shape.Image.flip_y);
     await imagePage.keyboard.press('Control+Shift+z');await waitImage(s=>s.shape.Image.flip_x && s.shape.Image.flip_y);
     item=(await imageState()).shapes.find(s=>s.shape.Image);
@@ -121,10 +155,12 @@ fs.mkdirSync(evidence, { recursive: true });
     const sx=corner.x-12,sy=corner.y-12;
     await imagePage.mouse.move(sx,sy);await imagePage.mouse.down();await imagePage.mouse.move(cx-(sy-cy),cy+(sx-cx),{steps:20});await imagePage.mouse.up();
     await waitImage(s=>Math.abs(s.shape.Image.rotation-Math.PI/2)<0.02);
-    await imagePage.screenshot({path:path.join(evidence,'image-rotated.png')});
+    await snapshot(imagePage,'image-rotated.png');
     fs.writeFileSync(path.join(evidence,'image-state.json'),JSON.stringify(await imageState(),null,2));
     await imageContext.close();
 
+    const captures=['text-fraction.png','text-root.png','presentation.png','image-flipped.png','image-rotated.png'].map(file=>inspectCapture(path.join(evidence,file)));
+    fs.writeFileSync(path.join(evidence,'capture-validation.json'),JSON.stringify(captures,null,2));
     fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, scenarios: ['French dead caret and accents', 'Unicode expander ^4/^>/^< replacement', 'partial selected B/I/U', 'nested inline fraction', 'indexed root', 'presentation', 'fullscreen', 'Escape preserves text', 'image mirrors, corner rotation, Undo/Redo'] }, null, 2));
     console.log('Chromium interaction checks passed.');
   } catch (error) {

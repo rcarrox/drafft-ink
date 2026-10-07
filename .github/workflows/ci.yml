@@ -237,7 +237,7 @@ jobs:
         run: |
           python3 utils/generate_cloud_fixtures.py --out work/e2e/fixtures
           python3 scripts/cloud/preview.py --port 8888 > work/e2e/server.log 2>&1 &
-          node utils/test_browser_interactions.cjs
+          xvfb-run -a -s "-screen 0 1280x800x24" node utils/test_browser_interactions.cjs
       - name: Upload interaction evidence
         if: always()
         uses: actions/upload-artifact@v4
