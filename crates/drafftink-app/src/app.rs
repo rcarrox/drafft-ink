@@ -2642,7 +2642,10 @@ impl ApplicationHandler for App {
             // editor has focus, translate it explicitly into the structured
             // exponent marker. Ctrl+ArrowUp / Ctrl+ArrowDown are layout-
             // independent exponent/subscript shortcuts.
-            if event.state == ElementState::Pressed && state.ui_state.math_editor.is_some() {
+            if event.state == ElementState::Pressed
+                && (state.ui_state.math_editor.is_some()
+                    || state.ui_state.inline_formula_draft.is_some())
+            {
                 let math_marker = match &event.logical_key {
                     Key::Dead(Some('^')) => Some('^'),
                     Key::Dead(None)
@@ -3722,6 +3725,7 @@ impl ApplicationHandler for App {
                                         range: range.clone(),
                                         kind,
                                         parts: ["x".into(), "2".into(), "0".into(), "1".into()],
+                                        active_field: 0,
                                     };
                                     if let Some(Shape::Text(text)) =
                                         state.canvas.document.get_shape(id)
@@ -3740,8 +3744,9 @@ impl ApplicationHandler for App {
                                     state.ui_state.inline_formula_draft = Some(draft);
                                 }
                             }
-                            UiAction::CommitInlineFormula(latex, kind, parts) => {
+                            UiAction::CommitInlineFormula(latex, kind, parts, exit_text) => {
                                 if state.shape_renderer.formula_is_valid(&latex) {
+                                    state.canvas.document.push_undo();
                                     if let Some(draft) = state.ui_state.inline_formula_draft.take()
                                     {
                                         if state.event_handler.editing_text == Some(draft.text_id) {
@@ -3783,6 +3788,10 @@ impl ApplicationHandler for App {
                                                 }
                                             }
                                         }
+                                    }
+                                    if exit_text {
+                                        state.event_handler.exit_text_edit(&mut state.canvas);
+                                        state.text_edit_state = None;
                                     }
                                 } else {
                                     state.ui_state.inline_formula_error =
@@ -5757,6 +5766,8 @@ impl ApplicationHandler for App {
                                         .as_ref()
                                         .and_then(|e| e.selection_range())
                                     {
+                                        state.canvas.document.push_undo();
+                                        state.canvas.document.push_undo();
                                         if let Some(Shape::Text(text)) =
                                             state.canvas.document.get_shape_mut(text_id)
                                         {
@@ -5845,6 +5856,15 @@ impl ApplicationHandler for App {
 
                         // Convert winit key to TextKey (if not already a clipboard operation)
                         let text_key = text_key.or_else(|| match &event.logical_key {
+                            Key::Dead(Some('^')) => Some(TextKey::DeadCaret),
+                            Key::Dead(None)
+                                if matches!(
+                                    event.physical_key,
+                                    PhysicalKey::Code(KeyCode::BracketLeft)
+                                ) =>
+                            {
+                                Some(TextKey::DeadCaret)
+                            }
                             Key::Named(NamedKey::Escape) => Some(TextKey::Escape),
                             Key::Named(NamedKey::Backspace) => Some(TextKey::Backspace),
                             Key::Named(NamedKey::Delete) => Some(TextKey::Delete),
@@ -5858,12 +5878,16 @@ impl ApplicationHandler for App {
                             Key::Named(NamedKey::Space) => {
                                 Some(TextKey::Character(" ".to_string()))
                             }
-                            Key::Character(c) => Some(TextKey::Character(
+                            Key::Character(c) => Some(TextKey::ComposedCharacter(
                                 event
                                     .text
                                     .as_ref()
                                     .map(|s| s.to_string())
                                     .unwrap_or_else(|| c.to_string()),
+                                matches!(
+                                    event.physical_key,
+                                    PhysicalKey::Code(KeyCode::BracketLeft)
+                                ),
                             )),
                             _ => None,
                         });

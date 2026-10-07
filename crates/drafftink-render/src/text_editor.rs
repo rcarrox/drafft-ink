@@ -15,6 +15,10 @@ use web_time::Instant;
 #[derive(Debug, Clone, PartialEq)]
 pub enum TextKey {
     Character(String),
+    /// Literal French dead-key caret, committed so expanders can erase it.
+    DeadCaret,
+    /// Browser/native key text, plus whether the physical caret key was pressed.
+    ComposedCharacter(String, bool),
     Backspace,
     Delete,
     Enter,
@@ -148,13 +152,12 @@ pub struct TextEditState {
     cached_height: f32,
     script_mode: ScriptMode,
     rich_layout: Option<parley::Layout<Brush>>,
+    pending_dead_caret: bool,
 }
 
 impl TextEditState {
     /// Create a new text edit state with the given text content.
     pub fn new(text: &str, font_size: f32) -> Self {
-        use parley::GenericFamily;
-
         let mut editor = PlainEditor::new(font_size);
         editor.set_text(text);
         editor.set_scale(1.0);
@@ -162,7 +165,13 @@ impl TextEditState {
         // Set default styles - use SansSerif generic family
         // The renderer will set the specific font (GelPen) via styles
         let styles = editor.edit_styles();
-        styles.insert(GenericFamily::SansSerif.into());
+        styles.insert(StyleProperty::FontStack(parley::FontStack::List(
+            vec![
+                parley::FontFamily::Named("Noto Sans".into()),
+                parley::FontFamily::Named("XITS Math".into()),
+            ]
+            .into(),
+        )));
         styles.insert(StyleProperty::Brush(Brush::Solid(peniko::Color::BLACK)));
 
         Self {
@@ -175,6 +184,7 @@ impl TextEditState {
             cached_height: 0.0,
             script_mode: ScriptMode::Normal,
             rich_layout: None,
+            pending_dead_caret: false,
         }
     }
 
@@ -335,7 +345,7 @@ impl TextEditState {
     #[allow(clippy::drop_non_drop)]
     pub fn handle_key(
         &mut self,
-        key: TextKey,
+        mut key: TextKey,
         modifiers: TextModifiers,
         font_cx: &mut FontContext,
         layout_cx: &mut LayoutContext<Brush>,
@@ -345,6 +355,34 @@ impl TextEditState {
             return TextEditResult::NotHandled;
         }
 
+        key = match key {
+            TextKey::DeadCaret => {
+                self.pending_dead_caret = true;
+                TextKey::Character("^".into())
+            }
+            TextKey::ComposedCharacter(mut value, physical_caret) => {
+                if std::mem::take(&mut self.pending_dead_caret) {
+                    let accent = value
+                        .chars()
+                        .next()
+                        .is_some_and(|c| "âêîôûŷÂÊÎÔÛŶ".contains(c))
+                        || value.contains('\u{0302}');
+                    if accent && self.editor.raw_selection().is_collapsed() {
+                        let cursor = self.editor.raw_selection().focus().index();
+                        if self.editor.text().to_string()[..cursor].ends_with('^') {
+                            self.editor.driver(font_cx, layout_cx).backdelete();
+                        }
+                    } else if value.starts_with('^') && !(physical_caret && value == "^") {
+                        value.remove(0);
+                    }
+                }
+                TextKey::Character(value)
+            }
+            other => {
+                self.pending_dead_caret = false;
+                other
+            }
+        };
         self.cursor_reset();
         let action_mod = modifiers.action_mod();
         let shift = modifiers.shift;
@@ -373,6 +411,9 @@ impl TextEditState {
         let mut drv = self.editor.driver(font_cx, layout_cx);
 
         match key {
+            TextKey::DeadCaret | TextKey::ComposedCharacter(_, _) => {
+                unreachable!("input normalized before editing")
+            }
             TextKey::Escape => {
                 self.script_mode = ScriptMode::Normal;
                 return TextEditResult::ExitEdit;
@@ -638,6 +679,13 @@ impl TextEditState {
         layout_cx: &mut LayoutContext<Brush>,
     ) {
         self.cursor_reset();
+        if let Some(layout) = &self.rich_layout {
+            let next = parley::editing::Selection::word_from_point(layout, local_x, local_y);
+            self.editor
+                .driver(font_cx, layout_cx)
+                .select_byte_range(next.anchor().index(), next.focus().index());
+            return;
+        }
         let mut drv = self.editor.driver(font_cx, layout_cx);
         drv.select_word_at_point(local_x, local_y);
     }
@@ -651,6 +699,13 @@ impl TextEditState {
         layout_cx: &mut LayoutContext<Brush>,
     ) {
         self.cursor_reset();
+        if let Some(layout) = &self.rich_layout {
+            let next = parley::editing::Selection::hard_line_from_point(layout, local_x, local_y);
+            self.editor
+                .driver(font_cx, layout_cx)
+                .select_byte_range(next.anchor().index(), next.focus().index());
+            return;
+        }
         let mut drv = self.editor.driver(font_cx, layout_cx);
         drv.select_hard_line_at_point(local_x, local_y);
     }
@@ -740,5 +795,41 @@ mod expander_tests {
             );
         }
         assert_eq!(editor.text(), "123⁴^^^p≥≤^3");
+    }
+}
+
+#[cfg(test)]
+mod dead_key_regressions {
+    use super::*;
+    #[test]
+    fn french_caret_is_literal_and_external_replacement_keeps_prefix() {
+        let mut renderer = crate::VelloRenderer::new();
+        let (fonts, layouts) = renderer.contexts_mut();
+        for (trigger, replacement) in [("4", "⁴"), (">", "≥"), ("<", "≤")] {
+            let mut editor = TextEditState::new("123", 20.0);
+            for key in [
+                TextKey::End,
+                TextKey::DeadCaret,
+                TextKey::ComposedCharacter(trigger.into(), false),
+                TextKey::Backspace,
+                TextKey::Backspace,
+                TextKey::ComposedCharacter(replacement.into(), false),
+            ] {
+                editor.handle_key(key, TextModifiers::default(), fonts, layouts);
+            }
+            assert_eq!(editor.text(), format!("123{replacement}"));
+        }
+        let mut editor = TextEditState::new("", 20.0);
+        for key in [
+            TextKey::DeadCaret,
+            TextKey::ComposedCharacter("^".into(), true),
+            TextKey::DeadCaret,
+            TextKey::ComposedCharacter("^p".into(), false),
+            TextKey::DeadCaret,
+            TextKey::ComposedCharacter("â".into(), false),
+        ] {
+            editor.handle_key(key, TextModifiers::default(), fonts, layouts);
+        }
+        assert_eq!(editor.text(), "^^^pâ");
     }
 }

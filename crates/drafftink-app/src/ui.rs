@@ -249,6 +249,7 @@ pub struct InlineFormulaDraft {
     pub range: std::ops::Range<usize>,
     pub kind: String,
     pub parts: [String; 4],
+    pub active_field: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -501,7 +502,7 @@ pub enum UiAction {
     ResetFloatingPanels,
     InsertTextSymbol(String),
     OpenInlineFormula(String),
-    CommitInlineFormula(String, String, [String; 4]),
+    CommitInlineFormula(String, String, [String; 4], bool),
     /// Change stroke color.
     SetStrokeColor(Color32),
     /// Change fill color.
@@ -3896,6 +3897,9 @@ mod floating_panel_regressions {
 }
 
 fn render_inline_formula_dialog(ctx: &Context, state: &mut UiState) -> Option<UiAction> {
+    let finish_requested =
+        ctx.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape));
+    let exit_text = ctx.input(|i| i.key_pressed(egui::Key::Escape));
     let draft = state.inline_formula_draft.as_mut()?;
     let mut action = None;
     let mut close = false;
@@ -3935,8 +3939,18 @@ fn render_inline_formula_dialog(ctx: &Context, state: &mut UiState) -> Option<Ui
             };
             for (i, label) in labels.iter().enumerate() {
                 ui.label(*label);
-                let response =
-                    ui.add(egui::TextEdit::singleline(&mut draft.parts[i]).desired_width(320.0));
+                let id = egui::Id::new(("inline_formula_part", draft.text_id, i));
+                if finish_requested && draft.active_field == i {
+                    ui.memory_mut(|m| m.request_focus(id));
+                }
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut draft.parts[i])
+                        .id(id)
+                        .desired_width(320.0),
+                );
+                if response.has_focus() {
+                    draft.active_field = i;
+                }
                 state.test_controls.insert(
                     label.to_string(),
                     [
@@ -3962,7 +3976,7 @@ fn render_inline_formula_dialog(ctx: &Context, state: &mut UiState) -> Option<Ui
                         response.rect.max.y,
                     ],
                 );
-                if response.clicked() {
+                if response.clicked() || finish_requested {
                     let parts = draft
                         .parts
                         .each_ref()
@@ -3989,6 +4003,7 @@ fn render_inline_formula_dialog(ctx: &Context, state: &mut UiState) -> Option<Ui
                         latex,
                         draft.kind.clone(),
                         draft.parts.clone(),
+                        exit_text,
                     ));
                 }
                 if ui.button("Fermer").clicked() {

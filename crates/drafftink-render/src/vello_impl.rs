@@ -39,6 +39,17 @@ static NOTO_SANS: &[u8] = include_bytes!("../assets/NotoSans-Regular.ttf");
 static NOTO_SANS_BOLD: &[u8] = include_bytes!("../assets/NotoSans-Bold.ttf");
 static NOTO_SANS_ITALIC: &[u8] = include_bytes!("../assets/NotoSans-Italic.ttf");
 
+fn text_font_stack(name: &str) -> parley::FontStack<'static> {
+    parley::FontStack::List(
+        vec![
+            parley::FontFamily::Named(name.to_string().into()),
+            parley::FontFamily::Named("Noto Sans".into()),
+            parley::FontFamily::Named("XITS Math".into()),
+        ]
+        .into(),
+    )
+}
+
 /// Cached text layout data for rendering.
 #[derive(Clone)]
 struct CachedTextLayout {
@@ -1117,9 +1128,7 @@ impl VelloRenderer {
         if is_italic {
             builder.push_default(StyleProperty::FontStyle(parley::FontStyle::Italic));
         }
-        builder.push_default(StyleProperty::FontStack(parley::FontStack::Single(
-            parley::FontFamily::Named(font_name.to_string().into()),
-        )));
+        builder.push_default(StyleProperty::FontStack(text_font_stack(font_name)));
 
         let mut byte_offset = 0;
         for (char_idx, ch) in text.content.chars().enumerate() {
@@ -1571,11 +1580,9 @@ impl VelloRenderer {
 
         // Set the font family and weight in the editor
         {
-            use parley::{FontFamily, FontStack, StyleProperty};
+            use parley::StyleProperty;
             let styles = edit_state.editor_mut().edit_styles();
-            styles.insert(StyleProperty::FontStack(FontStack::Single(
-                FontFamily::Named(font_name.to_string().into()),
-            )));
+            styles.insert(StyleProperty::FontStack(text_font_stack(font_name)));
             styles.insert(StyleProperty::FontWeight(parley_weight));
             if is_italic {
                 styles.insert(StyleProperty::FontStyle(parley::FontStyle::Italic));
@@ -1601,9 +1608,7 @@ impl VelloRenderer {
         builder.push_default(parley::StyleProperty::FontSize(text.font_size as f32));
         builder.push_default(parley::StyleProperty::Brush(brush.clone()));
         builder.push_default(parley::StyleProperty::FontWeight(parley_weight));
-        builder.push_default(parley::StyleProperty::FontStack(parley::FontStack::Single(
-            parley::FontFamily::Named(font_name.to_string().into()),
-        )));
+        builder.push_default(parley::StyleProperty::FontStack(text_font_stack(font_name)));
 
         // Apply per-character colors
         let mut byte_offset = 0;
@@ -3063,5 +3068,43 @@ mod inline_formula_render_tests {
             layouts,
         );
         assert_eq!(editor.text(), "123^");
+    }
+}
+
+#[cfg(test)]
+mod symbol_font_tests {
+    use super::*;
+    #[test]
+    fn text_symbol_fallback_provides_real_glyphs() {
+        let mut renderer = VelloRenderer::new();
+        let content = "≥≤Σ∏∫∞";
+        let mut builder =
+            renderer
+                .layout_cx
+                .ranged_builder(&mut renderer.font_cx, content, 1.0, false);
+        builder.push_default(parley::StyleProperty::FontSize(20.0));
+        builder.push_default(parley::StyleProperty::FontStack(text_font_stack(
+            "Noto Sans",
+        )));
+        let mut layout = builder.build(content);
+        layout.break_all_lines(None);
+        let glyphs: Vec<_> = layout
+            .lines()
+            .flat_map(|line| {
+                line.items().filter_map(|item| {
+                    if let PositionedLayoutItem::GlyphRun(run) = item {
+                        Some(run.glyphs().map(|g| g.id).collect::<Vec<_>>())
+                    } else {
+                        None
+                    }
+                })
+            })
+            .flatten()
+            .collect();
+        assert_eq!(glyphs.len(), 6);
+        assert!(
+            glyphs.iter().all(|id| *id != 0),
+            "missing mathematical glyphs: {glyphs:?}"
+        );
     }
 }

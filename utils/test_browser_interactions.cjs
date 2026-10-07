@@ -34,6 +34,10 @@ fs.mkdirSync(evidence, { recursive: true });
       }
     }
   };
+  const caretPacket = async key => {
+    await input.send('Input.dispatchKeyEvent',{type:'keyDown',key,code:'BracketLeft',...(key==='Dead'?{}:{text:key,unmodifiedText:key})});
+    await input.send('Input.dispatchKeyEvent',{type:'keyUp',key,code:'BracketLeft'});
+  };
   const control = async name => {
     const s = await wait(s => !!s.controls[name]);
     const [x0, y0, x1, y1] = s.controls[name];
@@ -46,15 +50,24 @@ fs.mkdirSync(evidence, { recursive: true });
     await page.keyboard.press('t');
     await page.mouse.click(370, 270);
     await wait(s => !!s.editing_text);
-    await keys('123^4');
+    await keys('123'); await caretPacket('Dead'); await keys('4');
     await wait(s => text(s)?.content === '123^4');
     await page.keyboard.press('Backspace'); await page.keyboard.press('Backspace'); await keys('⁴');
     await wait(s => text(s)?.content === '123⁴');
-    await keys('^^^p≥≤');
-    await wait(s => text(s)?.content === '123⁴^^^p≥≤');
+    for (const [trigger,replacement] of [['>','≥'],['<','≤']]) {
+      await caretPacket('Dead');await keys(trigger);
+      await page.keyboard.press('Backspace');await page.keyboard.press('Backspace');await keys(replacement);
+    }
+    await caretPacket('Dead');await caretPacket('^');await caretPacket('Dead');await keys('p');
+    await caretPacket('Dead');await keys('â');
+    await wait(s => text(s)?.content === '123⁴≥≤^^^pâ');
     await page.keyboard.press('Control+a');
     await page.keyboard.press('Control+b'); await page.keyboard.press('Control+i'); await page.keyboard.press('Control+u');
     await wait(s => text(s)?.char_styles.length === Array.from(text(s).content).length && text(s).char_styles.every(style => style.bold && style.italic && style.underline));
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('Shift+ArrowLeft');await page.keyboard.press('Shift+ArrowLeft');
+    await page.keyboard.press('Control+b');await page.keyboard.press('Control+i');await page.keyboard.press('Control+u');
+    await wait(s=>text(s)?.char_styles.slice(-2).every(style=>!style.bold&&!style.italic&&!style.underline) && text(s)?.char_styles.slice(0,-2).every(style=>style.bold&&style.italic&&style.underline));
     await page.keyboard.press('ArrowRight');
     await control('Fraction'); await fill('Numérateur', '1/2'); await fill('Dénominateur', '3/4'); await control('Insérer');
     await wait(s => text(s)?.formulas.length === 1 && !s.inline_dialog);
@@ -74,6 +87,9 @@ fs.mkdirSync(evidence, { recursive: true });
     await page.keyboard.press('F11'); await page.waitForFunction(() => !document.fullscreenElement);
     await page.keyboard.press('Escape');
     await wait(s => !s.editing_text && text(s)?.formulas.length === 2);
+    await page.keyboard.press('Control+z');await wait(s=>text(s)?.formulas.length===1);
+    await page.keyboard.press('Control+Shift+z');await wait(s=>text(s)?.formulas.length===2);
+
     assert(!logs.some(line => line.startsWith('PAGEERROR:')), logs.join('\n'));
     fs.writeFileSync(path.join(evidence, 'state.json'), JSON.stringify(await state(), null, 2));
     // Separate browser context with a public, deterministic 1200x2000 PNG fixture.

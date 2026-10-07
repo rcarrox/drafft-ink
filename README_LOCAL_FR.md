@@ -96,7 +96,7 @@ Chrome et Edge recents sont les cibles prioritaires car DrafftInk utilise WebGPU
 - Images tournees : resize dans le repere local, coin oppose fixe.
 - Ctrl + glisser une poignee d'image : rognage non destructif, y compris apres rotation. Relacher Ctrl et glisser pour redimensionner. Undo/Redo et JSON conservent le rognage et les pixels source.
 
-## Nouveautes 0.8.0
+## Nouveautes 0.7.0
 
 - La police choisie est conservee pour les prochains textes, y compris apres redemarrage. Settings permet de choisir la police par defaut (Google Sans Medium initialement).
 - Le lanceur Windows rend automatiquement disponibles les polices installees sur le PC, via son serveur loopback existant. Settings permet de choisir la police par defaut et d'actualiser la liste. La version web statique utilise Local Font Access si necessaire. Le bouton "Polices installees sur le PC" disparait des Properties Text. Les fontes sont mises en cache uniquement sur le PC, sans redistribution.
@@ -107,3 +107,14 @@ Chrome et Edge recents sont les cibles prioritaires car DrafftInk utilise WebGPU
 - Curseurs SVG personnalises : fleche blanche avec ombre/contour configurable et curseur Text/Math.
 - Poignees au centre des quatre bords : resize sur un seul axe, y compris apres rotation. Le crop Ctrl des images fonctionne aussi avec les poignees des bords. Text/Math conservent leur geometrie et leur source lors du redimensionnement.
 - Optimisations : sources d'images partagees entre duplications et Undo/Redo, decode unique par source, nettoyage des caches supprimes, cache des formules et du cmap des glyphes, animations du caret planifiees au lieu d'un rendu continu. Les pixels source restent intacts et l'export conserve sa resolution.
+
+## Nouveautes 0.8.0
+
+- Text conserve les caracteres saisis, dont ^ et les sequences composees du clavier francais. Ctrl+fleche haut/bas reste reserve aux exposants/indices. Les remplacements Unicode externes (^4, ^>, ^<) ne consomment plus le caractere qui precede leur declencheur.
+- Gras, italique et soulignement d'une selection avec Ctrl+B, Ctrl+I, Ctrl+U. La mise en forme est conservee dans le JSON et dans les rendus/export PNG. Le gras/italique peut etre synthetise si une seule variante de la police locale est disponible.
+- Text accepte des formules dans son flux : Fraction, Racine, Racine n-ieme, Somme, Produit, Integrale et Limite. Les champs restent accessibles depuis Properties ; les expressions de type 1/2, sqrt(x), x^2 et fractions imbriquees sont traduites sans imposer LaTeX. Selectionner le bloc puis cliquer sa commande pour le modifier. Les anciens objets Math restent lisibles/editables.
+- Symboles Σ, ∏, ∫, lim, ≥, ≤ et ∞ dans Text. Noto Sans/XITS completent les glyphes absents de la police choisie. Une police locale non encore chargee ne rend plus le texte invisible.
+- Une poignee d'image peut traverser le bord oppose pour retourner l'image horizontalement et/ou verticalement. La rotation commence aussi juste a l'exterieur d'un coin, autour du centre et sans saut d'angle. Ctrl+poignee continue de rogner, meme apres miroir/rotation. Pixels originaux et Undo/Redo preserves.
+- Ctrl+P cache/retablit outils, panneaux et onglets pour la presentation. F11 entre/sort du plein ecran (navigateur Chrome/Edge).
+- Le cache de rendu Text conserve aussi les decorations et formules, sans reconstruire les textes termines a chaque clignotement.
+- CI ajoute un test Chromium sur le WASM reel avec captures : saisie Unicode/remplacements, selection/mise en forme, fractions/racines, presentation/plein ecran, miroirs, rotation et Undo/Redo. Un clavier francais physique et Beeftext sous Windows restent distincts de ces simulations.
