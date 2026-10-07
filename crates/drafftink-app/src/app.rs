@@ -1,4 +1,3 @@
-use drafftink_core::shapes::ShapeTrait;
 //! Core application state and lifecycle.
 
 use drafftink_core::canvas::Canvas;
@@ -7,6 +6,7 @@ use drafftink_core::input::InputState;
 use drafftink_core::shapes::Shape;
 #[cfg(target_arch = "wasm32")]
 use drafftink_core::shapes::ShapeId;
+use drafftink_core::shapes::ShapeTrait;
 use drafftink_core::sync::{AwarenessState, ConnectionState, SyncEvent};
 use drafftink_core::tools::ToolKind;
 #[cfg(not(target_arch = "wasm32"))]
