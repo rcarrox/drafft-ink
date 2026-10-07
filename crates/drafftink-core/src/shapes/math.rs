@@ -177,6 +177,9 @@ impl ShapeTrait for Math {
         self.display_scale[0] *= coeffs[0].hypot(coeffs[1]);
         self.display_scale[1] *= coeffs[2].hypot(coeffs[3]);
         if affine.as_coeffs()[1].abs() < 1e-10 && affine.as_coeffs()[2].abs() < 1e-10 {
+            if affine.as_coeffs()[0] * affine.as_coeffs()[3] < 0.0 {
+                self.rotation = -self.rotation;
+            }
             self.display_scale[0] *= affine.as_coeffs()[0].signum();
             self.display_scale[1] *= affine.as_coeffs()[3].signum();
         }

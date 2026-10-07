@@ -130,3 +130,5 @@ Exemples : sum(kx,k,1,n), prod(k,k,1,n), int(x²,x,1,2), lim(x,x,5), sqrt(x²), 
 ## Nouveautés 0.10.0
 
 Poignées traversantes pour les objets, y compris textes/formules en miroir et objets tournés. Axe des formules aligné sur le signe égal. Double-clic sur un bloc validé pour rouvrir son code ; Ctrl+Entrée reste disponible. Le mini panneau suit la formule, 10 pixels sous le bloc.
+
+Pour rééditer une formule validée : sélectionner l’outil Select puis double-cliquer directement sur le bloc de formule. Le panneau de code se rouvre sous ce bloc.

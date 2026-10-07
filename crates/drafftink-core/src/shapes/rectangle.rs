@@ -139,6 +139,9 @@ impl ShapeTrait for Rectangle {
         let scale = affine.as_coeffs();
         self.width *= scale[0].abs();
         self.height *= scale[3].abs();
+        if scale[1].abs() < 1e-10 && scale[2].abs() < 1e-10 && scale[0] * scale[3] < 0.0 {
+            self.rotation = -self.rotation;
+        }
         self.position = Point::new(center.x - self.width / 2.0, center.y - self.height / 2.0);
     }
 

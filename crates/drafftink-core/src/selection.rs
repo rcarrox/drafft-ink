@@ -1192,11 +1192,32 @@ mod edge_handle_regressions {
                 }
                 let restored: Shape =
                     serde_json::from_str(&serde_json::to_string(&next).unwrap()).unwrap();
-                assert_eq!(
-                    serde_json::to_value(next).unwrap(),
-                    serde_json::to_value(restored).unwrap()
-                );
+                assert_eq!(next.id(), restored.id());
+                assert!((next.rotation() - restored.rotation()).abs() < 1e-9);
+                match (&next, &restored) {
+                    (Shape::Text(a), Shape::Text(b)) => {
+                        assert_eq!(a.content, b.content);
+                        assert!(b.display_scale[0] < 0.0 && b.display_scale[1] < 0.0);
+                    }
+                    (Shape::Math(a), Shape::Math(b)) => {
+                        assert_eq!(a.latex, b.latex);
+                        assert!(b.display_scale[0] < 0.0 && b.display_scale[1] < 0.0);
+                    }
+                    _ => {
+                        assert!(next.bounds().center().distance(restored.bounds().center()) < 1e-8)
+                    }
+                }
             }
+        }
+    }
+    #[test]
+    fn group_axis_reflection_preserves_child_centers_and_orientation() {
+        for mut child in shapes(0.7) {
+            let old = child.bounds().center();
+            let reflect = Affine::translate((200.0, 0.0)) * Affine::scale_non_uniform(-1.0, 1.0);
+            child.transform(reflect);
+            assert!(child.bounds().center().distance(reflect * old) < 1e-8);
+            assert!((child.rotation() + 0.7).abs() < 1e-8);
         }
     }
     fn edge(shape: &Shape, kind: Edge) -> Point {

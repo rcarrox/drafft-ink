@@ -591,6 +591,9 @@ impl ShapeTrait for Text {
         self.display_scale[0] *= c[0].hypot(c[1]);
         self.display_scale[1] *= c[2].hypot(c[3]);
         if affine.as_coeffs()[1].abs() < 1e-10 && affine.as_coeffs()[2].abs() < 1e-10 {
+            if affine.as_coeffs()[0] * affine.as_coeffs()[3] < 0.0 {
+                self.rotation = -self.rotation;
+            }
             self.display_scale[0] *= affine.as_coeffs()[0].signum();
             self.display_scale[1] *= affine.as_coeffs()[3].signum();
         }
