@@ -15,6 +15,10 @@ use web_time::Instant;
 #[derive(Debug, Clone, PartialEq)]
 pub enum TextKey {
     Character(String),
+    /// Literal French dead-key caret, committed so expanders can erase it.
+    DeadCaret,
+    /// Browser/native key text, plus whether the physical caret key was pressed.
+    ComposedCharacter(String, bool),
     Backspace,
     Delete,
     Enter,
@@ -147,13 +151,14 @@ pub struct TextEditState {
     /// Cached layout height for bounds calculation.
     cached_height: f32,
     script_mode: ScriptMode,
+    rich_layout: Option<parley::Layout<Brush>>,
+    pending_dead_caret: bool,
+    font_size: f32,
 }
 
 impl TextEditState {
     /// Create a new text edit state with the given text content.
     pub fn new(text: &str, font_size: f32) -> Self {
-        use parley::GenericFamily;
-
         let mut editor = PlainEditor::new(font_size);
         editor.set_text(text);
         editor.set_scale(1.0);
@@ -161,7 +166,13 @@ impl TextEditState {
         // Set default styles - use SansSerif generic family
         // The renderer will set the specific font (GelPen) via styles
         let styles = editor.edit_styles();
-        styles.insert(GenericFamily::SansSerif.into());
+        styles.insert(StyleProperty::FontStack(parley::FontStack::List(
+            vec![
+                parley::FontFamily::Named("Noto Sans".into()),
+                parley::FontFamily::Named("STIX Two Math".into()),
+            ]
+            .into(),
+        )));
         styles.insert(StyleProperty::Brush(Brush::Solid(peniko::Color::BLACK)));
 
         Self {
@@ -173,7 +184,88 @@ impl TextEditState {
             cached_width: 0.0,
             cached_height: 0.0,
             script_mode: ScriptMode::Normal,
+            rich_layout: None,
+            pending_dead_caret: false,
+            font_size,
         }
+    }
+
+    pub fn set_rich_layout(&mut self, layout: parley::Layout<Brush>) {
+        self.rich_layout = Some(layout);
+    }
+    pub fn selection_geometry_with(&self, mut f: impl FnMut(parley::BoundingBox, usize)) {
+        if let Some(layout) = &self.rich_layout {
+            let selection = self.editor.raw_selection().refresh(layout);
+            selection.geometry_with(layout, &mut f);
+            let range = selection.text_range();
+            for (line_index, line) in layout.lines().enumerate() {
+                for item in line.items() {
+                    if let parley::PositionedLayoutItem::InlineBox(b) = item {
+                        if layout.inline_boxes().iter().any(|raw| {
+                            raw.id == b.id && range.start <= raw.index && range.end >= raw.index + 3
+                        }) {
+                            f(
+                                parley::BoundingBox::new(
+                                    b.x as f64,
+                                    b.y as f64,
+                                    (b.x + b.width) as f64,
+                                    (b.y + b.height) as f64,
+                                ),
+                                line_index,
+                            );
+                        }
+                    }
+                }
+            }
+        } else {
+            self.editor.selection_geometry_with(f);
+        }
+    }
+    pub fn cursor_geometry(&self, size: f32) -> Option<parley::BoundingBox> {
+        if let Some(layout) = &self.rich_layout {
+            let cursor = self.editor.raw_selection().focus().refresh(layout);
+            for line in layout.lines() {
+                for item in line.items() {
+                    if let parley::PositionedLayoutItem::InlineBox(b) = item {
+                        if layout
+                            .inline_boxes()
+                            .iter()
+                            .any(|raw| raw.id == b.id && raw.index == cursor.index())
+                        {
+                            return Some(parley::BoundingBox::new(
+                                b.x as f64,
+                                b.y as f64,
+                                (b.x + size) as f64,
+                                (b.y + b.height) as f64,
+                            ));
+                        }
+                    }
+                }
+            }
+            let mut rect = cursor.geometry(layout, size);
+            if rect.height() < 1.0 {
+                rect.y0 = rect.y1 - self.font_size as f64 * 1.2;
+            }
+            Some(rect)
+        } else {
+            self.editor.cursor_geometry(size)
+        }
+    }
+
+    fn inline_at(&self, x: f32, y: f32) -> Option<(usize, bool)> {
+        let layout = self.rich_layout.as_ref()?;
+        for line in layout.lines() {
+            for item in line.items() {
+                if let parley::PositionedLayoutItem::InlineBox(b) = item {
+                    if x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height {
+                        if let Some(raw) = layout.inline_boxes().iter().find(|raw| raw.id == b.id) {
+                            return Some((raw.index, x > b.x + b.width / 2.0));
+                        }
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// Get a mutable reference to the PlainEditor.
@@ -213,6 +305,7 @@ impl TextEditState {
 
     /// Set the font size.
     pub fn set_font_size(&mut self, size: f32) {
+        self.font_size = size;
         let styles = self.editor.edit_styles();
         styles.insert(StyleProperty::FontSize(size));
     }
@@ -306,7 +399,7 @@ impl TextEditState {
     #[allow(clippy::drop_non_drop)]
     pub fn handle_key(
         &mut self,
-        key: TextKey,
+        mut key: TextKey,
         modifiers: TextModifiers,
         font_cx: &mut FontContext,
         layout_cx: &mut LayoutContext<Brush>,
@@ -316,13 +409,65 @@ impl TextEditState {
             return TextEditResult::NotHandled;
         }
 
+        key = match key {
+            TextKey::DeadCaret => {
+                self.pending_dead_caret = true;
+                TextKey::Character("^".into())
+            }
+            TextKey::ComposedCharacter(mut value, physical_caret) => {
+                if std::mem::take(&mut self.pending_dead_caret) {
+                    let accent = value
+                        .chars()
+                        .next()
+                        .is_some_and(|c| "âêîôûŷÂÊÎÔÛŶ".contains(c))
+                        || value.contains('\u{0302}');
+                    if accent && self.editor.raw_selection().is_collapsed() {
+                        let cursor = self.editor.raw_selection().focus().index();
+                        if self.editor.text().to_string()[..cursor].ends_with('^') {
+                            self.editor.driver(font_cx, layout_cx).backdelete();
+                        }
+                    } else if value.starts_with('^') && !(physical_caret && value == "^") {
+                        value.remove(0);
+                    }
+                }
+                TextKey::Character(value)
+            }
+            other => {
+                self.pending_dead_caret = false;
+                other
+            }
+        };
         self.cursor_reset();
         let action_mod = modifiers.action_mod();
         let shift = modifiers.shift;
 
+        if let Some(layout) = &self.rich_layout {
+            let selection = self.editor.raw_selection().refresh(layout);
+            let next = match key {
+                TextKey::Left if !action_mod => Some(selection.previous_visual(layout, shift)),
+                TextKey::Right if !action_mod && self.script_mode == ScriptMode::Normal => {
+                    Some(selection.next_visual(layout, shift))
+                }
+                TextKey::Up => Some(selection.previous_line(layout, shift)),
+                TextKey::Down => Some(selection.next_line(layout, shift)),
+                TextKey::Home if !action_mod => Some(selection.line_start(layout, shift)),
+                TextKey::End if !action_mod => Some(selection.line_end(layout, shift)),
+                _ => None,
+            };
+            if let Some(next) = next {
+                self.editor
+                    .driver(font_cx, layout_cx)
+                    .select_byte_range(next.anchor().index(), next.focus().index());
+                return TextEditResult::Handled;
+            }
+        }
+        self.rich_layout = None;
         let mut drv = self.editor.driver(font_cx, layout_cx);
 
         match key {
+            TextKey::DeadCaret | TextKey::ComposedCharacter(_, _) => {
+                unreachable!("input normalized before editing")
+            }
             TextKey::Escape => {
                 self.script_mode = ScriptMode::Normal;
                 return TextEditResult::ExitEdit;
@@ -518,7 +663,34 @@ impl TextEditState {
     ) {
         self.cursor_reset();
         self.is_dragging = true;
+        self.pending_dead_caret = false;
+        if let Some((start, after)) = self.inline_at(local_x, local_y) {
+            let byte = start + if after { 3 } else { 0 };
+            let anchor = if shift {
+                self.editor.raw_selection().anchor().index()
+            } else {
+                byte
+            };
+            self.editor
+                .driver(font_cx, layout_cx)
+                .select_byte_range(anchor, byte);
+            return;
+        }
 
+        if let Some(layout) = &self.rich_layout {
+            let next = if shift {
+                self.editor
+                    .raw_selection()
+                    .refresh(layout)
+                    .extend_to_point(layout, local_x, local_y)
+            } else {
+                parley::editing::Selection::from_point(layout, local_x, local_y)
+            };
+            self.editor
+                .driver(font_cx, layout_cx)
+                .select_byte_range(next.anchor().index(), next.focus().index());
+            return;
+        }
         let mut drv = self.editor.driver(font_cx, layout_cx);
         if shift {
             drv.extend_selection_to_point(local_x, local_y);
@@ -540,6 +712,17 @@ impl TextEditState {
         }
 
         self.cursor_reset();
+        if let Some(layout) = &self.rich_layout {
+            let next = self
+                .editor
+                .raw_selection()
+                .refresh(layout)
+                .extend_to_point(layout, local_x, local_y);
+            self.editor
+                .driver(font_cx, layout_cx)
+                .select_byte_range(next.anchor().index(), next.focus().index());
+            return;
+        }
         let mut drv = self.editor.driver(font_cx, layout_cx);
         drv.extend_selection_to_point(local_x, local_y);
     }
@@ -563,6 +746,20 @@ impl TextEditState {
         layout_cx: &mut LayoutContext<Brush>,
     ) {
         self.cursor_reset();
+        self.pending_dead_caret = false;
+        if let Some((start, _)) = self.inline_at(local_x, local_y) {
+            self.editor
+                .driver(font_cx, layout_cx)
+                .select_byte_range(start, start + 3);
+            return;
+        }
+        if let Some(layout) = &self.rich_layout {
+            let next = parley::editing::Selection::word_from_point(layout, local_x, local_y);
+            self.editor
+                .driver(font_cx, layout_cx)
+                .select_byte_range(next.anchor().index(), next.focus().index());
+            return;
+        }
         let mut drv = self.editor.driver(font_cx, layout_cx);
         drv.select_word_at_point(local_x, local_y);
     }
@@ -576,6 +773,13 @@ impl TextEditState {
         layout_cx: &mut LayoutContext<Brush>,
     ) {
         self.cursor_reset();
+        if let Some(layout) = &self.rich_layout {
+            let next = parley::editing::Selection::hard_line_from_point(layout, local_x, local_y);
+            self.editor
+                .driver(font_cx, layout_cx)
+                .select_byte_range(next.anchor().index(), next.focus().index());
+            return;
+        }
         let mut drv = self.editor.driver(font_cx, layout_cx);
         drv.select_hard_line_at_point(local_x, local_y);
     }
@@ -617,5 +821,89 @@ mod escape_regression {
             TextEditResult::ExitEdit
         );
         assert_eq!(editor.text(), "Bonjour monde");
+    }
+}
+
+#[cfg(test)]
+mod expander_tests {
+    use super::*;
+    #[test]
+    fn literal_caret_and_unicode_replacements_do_not_delete_prefix() {
+        let mut fonts = FontContext::new();
+        fonts.collection.register_fonts(
+            peniko::Blob::new(std::sync::Arc::new(
+                include_bytes!("../assets/NotoSans-Regular.ttf").as_slice(),
+            )),
+            None,
+        );
+        let mut layouts = LayoutContext::new();
+        let mut editor = TextEditState::new("123", 20.0);
+        editor
+            .editor_mut()
+            .edit_styles()
+            .insert(parley::StyleProperty::FontStack(parley::FontStack::Single(
+                parley::FontFamily::Named("Noto Sans".into()),
+            )));
+        editor.handle_key(
+            TextKey::End,
+            TextModifiers::default(),
+            &mut fonts,
+            &mut layouts,
+        );
+        for key in [
+            TextKey::Character("^".into()),
+            TextKey::Character("4".into()),
+            TextKey::Backspace,
+            TextKey::Backspace,
+            TextKey::Character("⁴".into()),
+        ] {
+            editor.handle_key(key, TextModifiers::default(), &mut fonts, &mut layouts);
+        }
+        assert_eq!(editor.text(), "123⁴");
+        for text in ["^^", "^p", "≥", "≤", "^3"] {
+            editor.handle_key(
+                TextKey::Character(text.into()),
+                TextModifiers::default(),
+                &mut fonts,
+                &mut layouts,
+            );
+        }
+        assert_eq!(editor.text(), "123⁴^^^p≥≤^3");
+    }
+}
+
+#[cfg(test)]
+mod dead_key_regressions {
+    use super::*;
+    #[test]
+    fn french_caret_is_literal_and_external_replacement_keeps_prefix() {
+        let mut renderer = crate::VelloRenderer::new();
+        let (fonts, layouts) = renderer.contexts_mut();
+        for (trigger, replacement) in [("4", "⁴"), (">", "≥"), ("<", "≤")] {
+            let mut editor = TextEditState::new("123", 20.0);
+            for key in [
+                TextKey::End,
+                TextKey::DeadCaret,
+                TextKey::ComposedCharacter(trigger.into(), false),
+                TextKey::Backspace,
+                TextKey::Backspace,
+                TextKey::ComposedCharacter(replacement.into(), false),
+            ] {
+                editor.handle_key(key, TextModifiers::default(), fonts, layouts);
+            }
+            assert_eq!(editor.text(), format!("123{replacement}"));
+        }
+        let mut editor = TextEditState::new("", 20.0);
+        for key in [
+            TextKey::DeadCaret,
+            TextKey::ComposedCharacter("^".into(), true),
+            TextKey::DeadCaret,
+            TextKey::ComposedCharacter("^p".into(), false),
+            TextKey::DeadCaret,
+            TextKey::ComposedCharacter("â".into(), false),
+        ] {
+            editor.handle_key(key, TextModifiers::default(), fonts, layouts);
+        }
+        assert_eq!(editor.text(), "^^^pâ");
     }
 }

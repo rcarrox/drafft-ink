@@ -101,7 +101,12 @@ impl ShortcutRegistry {
                 false,
                 "Rectangle → square; Ellipse → circle; Line/Arrow → angle snap",
             ),
-            Shortcut::new("^", false, false, "Text superscript mode"),
+            Shortcut::new("^", false, false, "Literal caret in Text; exponent in Math"),
+            Shortcut::new("P", true, false, "Presentation: hide/show panels"),
+            Shortcut::new("F11", false, false, "Fullscreen"),
+            Shortcut::new("B", true, false, "Bold selected text"),
+            Shortcut::new("I", true, false, "Italic selected text"),
+            Shortcut::new("U", true, false, "Underline selected text"),
             Shortcut::new(
                 "Ctrl+ArrowUp",
                 false,

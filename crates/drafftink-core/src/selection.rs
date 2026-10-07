@@ -212,6 +212,20 @@ pub fn hit_test_handles(shape: &Shape, point: Point, tolerance: f64) -> Option<H
             return Some(handle.kind);
         }
     }
+    // Outer corner annulus: resize at the handle, rotate just outside it.
+    if matches!(shape, Shape::Image(_)) {
+        let local = Affine::rotate_about(-shape.rotation(), shape.bounds().center()) * point;
+        let bounds = shape.bounds();
+        for corner in get_handles(shape)
+            .into_iter()
+            .filter(|h| matches!(h.kind, HandleKind::Corner(_)))
+        {
+            let outward = !bounds.contains(local);
+            if outward && point.distance(corner.position) <= tolerance * 2.75 {
+                return Some(HandleKind::Rotate);
+            }
+        }
+    }
     None
 }
 
@@ -538,6 +552,28 @@ pub fn apply_rotation(shape: &mut Shape, cursor_point: Point, snap_to_15deg: boo
     angle
 }
 
+/// Rotate relative to the actual press point so any outer corner can start
+/// rotation without jumping to the orientation of the top rotation handle.
+pub fn apply_rotation_from_drag(
+    shape: &mut Shape,
+    original: &Shape,
+    start: Point,
+    cursor: Point,
+    snap: bool,
+) -> f64 {
+    let center = original.bounds().center();
+    let from = start - center;
+    let to = cursor - center;
+    let delta = (from.x * to.y - from.y * to.x).atan2(from.x * to.x + from.y * to.y);
+    let mut angle = original.rotation() + delta;
+    if snap {
+        let step = std::f64::consts::PI / 12.0;
+        angle = (angle / step).round() * step;
+    }
+    shape.set_rotation(angle);
+    angle
+}
+
 /// Reset rotation to a specific angle (0° or 90°).
 pub fn reset_rotation(shape: &mut Shape, angle_degrees: f64) {
     let angle_radians = angle_degrees.to_radians();
@@ -592,6 +628,55 @@ fn apply_box_resize(shape: &mut Shape, kind: HandleKind, delta: kurbo::Vec2, asp
         HandleKind::Corner(Corner::BottomLeft | Corner::BottomRight)
             | HandleKind::Edge(Edge::Bottom)
     );
+    if let Shape::Image(image) = shape {
+        let mut signed_w = w + if left {
+            -d.x
+        } else if right {
+            d.x
+        } else {
+            0.0
+        };
+        let mut signed_h = h + if top {
+            -d.y
+        } else if bottom {
+            d.y
+        } else {
+            0.0
+        };
+        if aspect && matches!(kind, HandleKind::Corner(_)) {
+            let magnitude = (signed_w.abs() / w).max(signed_h.abs() / h);
+            signed_w = signed_w.signum() * w * magnitude;
+            signed_h = signed_h.signum() * h * magnitude;
+        }
+        let shift = rotate_delta(
+            kurbo::Vec2::new(
+                (signed_w - w)
+                    * if left {
+                        -0.5
+                    } else if right {
+                        0.5
+                    } else {
+                        0.0
+                    },
+                (signed_h - h)
+                    * if top {
+                        -0.5
+                    } else if bottom {
+                        0.5
+                    } else {
+                        0.0
+                    },
+            ),
+            rotation,
+        );
+        let center = old.center() + shift;
+        image.width = signed_w.abs().max(0.001);
+        image.height = signed_h.abs().max(0.001);
+        image.position = Point::new(center.x - image.width / 2.0, center.y - image.height / 2.0);
+        image.flip_x ^= signed_w < 0.0;
+        image.flip_y ^= signed_h < 0.0;
+        return;
+    }
     let mut nw = (w + if left {
         -d.x
     } else if right {
@@ -689,17 +774,25 @@ pub fn apply_image_crop(shape: &Shape, handle: Option<HandleKind>, delta: kurbo:
         return shape.clone();
     };
     let mut image = original.clone();
-    let local = rotate_delta(delta, -image.rotation);
+    let mut local = rotate_delta(delta, -image.rotation);
+    if image.flip_x {
+        local.x = -local.x;
+    }
+    if image.flip_y {
+        local.y = -local.y;
+    }
     let left = matches!(
         kind,
         HandleKind::Corner(Corner::TopLeft | Corner::BottomLeft) | HandleKind::Edge(Edge::Left)
     );
+    let left = left ^ image.flip_x;
     let horizontal = !matches!(kind, HandleKind::Edge(Edge::Top | Edge::Bottom));
     let vertical = !matches!(kind, HandleKind::Edge(Edge::Left | Edge::Right));
     let top = matches!(
         kind,
         HandleKind::Corner(Corner::TopLeft | Corner::TopRight) | HandleKind::Edge(Edge::Top)
     );
+    let top = top ^ image.flip_y;
     let sx = image.width / image.crop.width();
     let sy = image.height / image.crop.height();
     let min_x = (1.0 / image.source_width.max(1) as f64).min(image.crop.width());
@@ -716,8 +809,8 @@ pub fn apply_image_crop(shape: &Shape, handle: Option<HandleKind>, delta: kurbo:
         crop.y1 = (crop.y1 + local.y / sy).clamp(crop.y0 + min_y, 1.0);
     }
     let shift = kurbo::Vec2::new(
-        (crop.center().x - image.crop.center().x) * sx,
-        (crop.center().y - image.crop.center().y) * sy,
+        (crop.center().x - image.crop.center().x) * sx * if image.flip_x { -1.0 } else { 1.0 },
+        (crop.center().y - image.crop.center().y) * sy * if image.flip_y { -1.0 } else { 1.0 },
     );
     let center = image.as_rect().center() + rotate_delta(shift, image.rotation);
     image.crop = crop;
@@ -850,6 +943,8 @@ mod tests {
             data_base64: String::new().into(),
             rotation: 0.0,
             crop: Rect::new(0.0, 0.0, 1.0, 1.0),
+            flip_x: false,
+            flip_y: false,
             style: ShapeStyle::default(),
         };
         let shape = Shape::Image(image);
@@ -1184,5 +1279,60 @@ mod edge_handle_regressions {
                 _ => panic!(),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod image_flip_tests {
+    use super::*;
+    use crate::shapes::{Image, ImageFormat};
+    #[test]
+    fn crossing_edges_mirrors_rotated_image_and_keeps_anchor() {
+        for angle in [0.0, 0.7, 1.8] {
+            let mut image = Image::new(
+                Point::new(20.0, 30.0),
+                &[1, 2, 3],
+                100,
+                80,
+                ImageFormat::Png,
+            );
+            image.rotation = angle;
+            let original = Shape::Image(image);
+            let anchor = get_handles(&original)[0].position;
+            let delta = rotate_delta(kurbo::Vec2::new(-140.0, -100.0), angle);
+            let next = apply_manipulation(
+                &original,
+                Some(HandleKind::Corner(Corner::BottomRight)),
+                delta,
+                false,
+            );
+            let Shape::Image(image) = &next else { panic!() };
+            assert!(image.flip_x && image.flip_y);
+            assert!((image.width - 40.0).abs() < 1e-9 && (image.height - 20.0).abs() < 1e-9);
+            assert!(get_handles(&next)[3].position.distance(anchor) < 1e-8);
+            let restored: Shape =
+                serde_json::from_str(&serde_json::to_string(&next).unwrap()).unwrap();
+            let Shape::Image(restored) = restored else {
+                panic!()
+            };
+            assert!(restored.flip_x && restored.flip_y);
+            assert_eq!(restored.data(), image.data());
+        }
+    }
+    #[test]
+    fn mirrored_crop_moves_visible_edge_without_stretching() {
+        let mut image = Image::new(Point::ZERO, &[1], 100, 80, ImageFormat::Png);
+        image.flip_x = true;
+        let cropped = apply_image_crop(
+            &Shape::Image(image),
+            Some(HandleKind::Edge(Edge::Left)),
+            kurbo::Vec2::new(20.0, 0.0),
+        );
+        let Shape::Image(image) = cropped else {
+            panic!()
+        };
+        assert!((image.crop.x1 - 0.8).abs() < 1e-9);
+        assert!((image.position.x - 20.0).abs() < 1e-9);
+        assert!((image.width - 80.0).abs() < 1e-9);
     }
 }

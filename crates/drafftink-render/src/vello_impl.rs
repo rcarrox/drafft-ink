@@ -39,17 +39,21 @@ static NOTO_SANS: &[u8] = include_bytes!("../assets/NotoSans-Regular.ttf");
 static NOTO_SANS_BOLD: &[u8] = include_bytes!("../assets/NotoSans-Bold.ttf");
 static NOTO_SANS_ITALIC: &[u8] = include_bytes!("../assets/NotoSans-Italic.ttf");
 
+fn text_font_stack(name: &str) -> parley::FontStack<'static> {
+    parley::FontStack::List(
+        vec![
+            parley::FontFamily::Named(name.to_string().into()),
+            parley::FontFamily::Named("Noto Sans".into()),
+            parley::FontFamily::Named("STIX Two Math".into()),
+        ]
+        .into(),
+    )
+}
+
 /// Cached text layout data for rendering.
 #[derive(Clone)]
 struct CachedTextLayout {
-    /// Glyph runs ready for rendering: (font_data, font_size, brush, glyphs, skew_angle)
-    glyph_runs: Vec<(
-        vello::peniko::FontData,
-        f32,
-        Brush,
-        Vec<vello::Glyph>,
-        Option<f64>,
-    )>,
+    scene: Scene,
     width: f64,
     height: f64,
 }
@@ -404,6 +408,11 @@ impl VelloRenderer {
             match shape {
                 Shape::Image(image) => {
                     keys.insert(image.data_base64.key());
+                }
+                Shape::Text(text) => {
+                    for formula in &text.formulas {
+                        ids.insert(formula.math.id());
+                    }
                 }
                 Shape::Group(group) => {
                     for child in group.children() {
@@ -900,6 +909,88 @@ impl VelloRenderer {
             .fill(Fill::NonZero, transform, color, None, &path);
     }
 
+    fn draw_underlines(&mut self, layout: &parley::Layout<Brush>, transform: Affine) {
+        for line in layout.lines() {
+            for item in line.items() {
+                if let PositionedLayoutItem::GlyphRun(run) = item {
+                    if let Some(decoration) = &run.style().underline {
+                        let thickness = decoration
+                            .size
+                            .unwrap_or((run.run().font_size() / 16.0).max(1.0));
+                        let y = run.baseline()
+                            + decoration.offset.unwrap_or(run.run().font_size() / 10.0);
+                        let width: f32 = run.glyphs().map(|g| g.advance).sum();
+                        self.scene.fill(
+                            Fill::NonZero,
+                            transform,
+                            &decoration.brush,
+                            None,
+                            &Rect::new(
+                                run.offset() as f64,
+                                y as f64,
+                                (run.offset() + width) as f64,
+                                (y + thickness) as f64,
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    fn prepare_inline_formulas(
+        &mut self,
+        text: &drafftink_core::shapes::Text,
+    ) -> Vec<(u64, usize, f32, f32)> {
+        let mut boxes = Vec::new();
+        for (index, formula) in text.formulas.iter().enumerate() {
+            let mut math = formula.math.clone();
+            math.font_size = text.font_size;
+            math.style = text.style.clone();
+            if self.prepare_math(&math) {
+                if let Some((width, height, depth)) = math.cached_size() {
+                    if let Some((byte, '\u{fffc}')) = text.content.char_indices().nth(formula.at) {
+                        boxes.push((
+                            index as u64,
+                            byte,
+                            width as f32 + 4.0,
+                            (height - depth) as f32 + 4.0,
+                        ));
+                    }
+                }
+            }
+        }
+        boxes
+    }
+
+    fn append_inline_formulas(
+        &mut self,
+        text: &drafftink_core::shapes::Text,
+        layout: &parley::Layout<Brush>,
+        transform: Affine,
+    ) {
+        for line in layout.lines() {
+            for item in line.items() {
+                if let PositionedLayoutItem::InlineBox(inline) = item {
+                    if let Some(formula) = text.formulas.get(inline.id as usize) {
+                        if let Some(cached) = self.math_cache.get(&formula.math.id()) {
+                            self.scene.append(
+                                &cached.scene,
+                                Some(
+                                    transform
+                                        * Affine::translate((
+                                            inline.x as f64 + 2.0,
+                                            inline.y as f64 + cached.size.1 + 2.0,
+                                        )),
+                                ),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Render a text shape using Parley for proper text layout.
     fn render_text(&mut self, text: &drafftink_core::shapes::Text, transform: Affine) {
         use parley::StyleProperty;
@@ -926,6 +1017,7 @@ impl VelloRenderer {
 
         use drafftink_core::shapes::{FontFamily, FontWeight};
 
+        let inline = self.prepare_inline_formulas(text);
         // Build cache key from content hash
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         text.content.hash(&mut hasher);
@@ -933,6 +1025,11 @@ impl VelloRenderer {
         text.custom_font.hash(&mut hasher);
         (text.font_weight as u8).hash(&mut hasher);
         text.font_size.to_bits().hash(&mut hasher);
+        for formula in &text.formulas {
+            formula.at.hash(&mut hasher);
+            formula.math.latex.hash(&mut hasher);
+        }
+        text.char_styles.hash(&mut hasher);
         text.char_colors.len().hash(&mut hasher);
         for c in &text.char_colors {
             c.is_some().hash(&mut hasher);
@@ -956,17 +1053,7 @@ impl VelloRenderer {
                 * Affine::translate((text.position.x, text.position.y))
                 * Affine::scale_non_uniform(text.display_scale[0], text.display_scale[1]);
 
-            for (font_data, font_size, brush, glyphs, skew) in &cached.glyph_runs {
-                let glyph_xform = skew.map(|angle| Affine::skew(angle, 0.0));
-                self.scene
-                    .draw_glyphs(font_data)
-                    .brush(brush)
-                    .hint(true)
-                    .transform(text_transform)
-                    .glyph_transform(glyph_xform)
-                    .font_size(*font_size)
-                    .draw(Fill::NonZero, glyphs.iter().cloned());
-            }
+            self.scene.append(&cached.scene, Some(text_transform));
             return;
         }
 
@@ -974,67 +1061,79 @@ impl VelloRenderer {
         let brush = Brush::Solid(style.stroke_with_opacity());
         let font_size = text.font_size as f32;
 
-        let (font_name, parley_weight, is_italic) =
-            if let Some(custom) = text.custom_font.as_deref() {
-                (
-                    self.font_aliases
-                        .get(custom)
-                        .map(String::as_str)
-                        .unwrap_or(custom),
-                    parley::FontWeight::new(text.font_weight.value()),
-                    false,
-                )
-            } else {
-                match (&text.font_family, &text.font_weight) {
-                    (FontFamily::GelPen, FontWeight::Light) => {
-                        ("GelPenLight", parley::FontWeight::NORMAL, false)
-                    }
-                    (FontFamily::GelPen, FontWeight::Regular | FontWeight::Medium) => {
-                        ("GelPen", parley::FontWeight::NORMAL, false)
-                    }
-                    (FontFamily::GelPen, FontWeight::Heavy) => {
-                        ("GelPenHeavy", parley::FontWeight::NORMAL, false)
-                    }
-                    (FontFamily::NotoSans, FontWeight::Light) => {
-                        ("Noto Sans", parley::FontWeight::NORMAL, true)
-                    }
-                    (FontFamily::NotoSans, FontWeight::Medium) => {
-                        ("Noto Sans", parley::FontWeight::new(500.0), false)
-                    }
-                    (FontFamily::NotoSans, FontWeight::Regular) => {
-                        ("Noto Sans", parley::FontWeight::NORMAL, false)
-                    }
-                    (FontFamily::NotoSans, FontWeight::Heavy) => {
-                        ("Noto Sans", parley::FontWeight::BOLD, false)
-                    }
-                    (FontFamily::GelPenSerif, FontWeight::Light) => {
-                        ("GelPenSerifLight", parley::FontWeight::NORMAL, false)
-                    }
-                    (FontFamily::GelPenSerif, FontWeight::Regular | FontWeight::Medium) => {
-                        ("GelPenSerif", parley::FontWeight::NORMAL, false)
-                    }
-                    (FontFamily::GelPenSerif, FontWeight::Heavy) => {
-                        ("GelPenSerifHeavy", parley::FontWeight::NORMAL, false)
-                    }
-                    (FontFamily::VanillaExtract, _) => {
-                        ("Vanilla Extract", parley::FontWeight::NORMAL, false)
-                    }
-                    (FontFamily::XitsMath, _) => ("XITS Math", parley::FontWeight::NORMAL, false),
+        let (font_name, parley_weight, is_italic) = if let Some(custom) =
+            text.custom_font.as_deref()
+        {
+            (
+                self.font_aliases
+                    .get(custom)
+                    .map(String::as_str)
+                    .unwrap_or("Noto Sans"),
+                parley::FontWeight::new(text.font_weight.value()),
+                false,
+            )
+        } else {
+            match (&text.font_family, &text.font_weight) {
+                (FontFamily::GelPen, FontWeight::Light) => {
+                    ("GelPenLight", parley::FontWeight::NORMAL, false)
                 }
-            };
+                (FontFamily::GelPen, FontWeight::Regular | FontWeight::Medium) => {
+                    ("GelPen", parley::FontWeight::NORMAL, false)
+                }
+                (FontFamily::GelPen, FontWeight::Heavy) => {
+                    ("GelPenHeavy", parley::FontWeight::NORMAL, false)
+                }
+                (FontFamily::NotoSans, FontWeight::Light) => {
+                    ("Noto Sans", parley::FontWeight::NORMAL, true)
+                }
+                (FontFamily::NotoSans, FontWeight::Medium) => {
+                    ("Noto Sans", parley::FontWeight::new(500.0), false)
+                }
+                (FontFamily::NotoSans, FontWeight::Regular) => {
+                    ("Noto Sans", parley::FontWeight::NORMAL, false)
+                }
+                (FontFamily::NotoSans, FontWeight::Heavy) => {
+                    ("Noto Sans", parley::FontWeight::BOLD, false)
+                }
+                (FontFamily::GelPenSerif, FontWeight::Light) => {
+                    ("GelPenSerifLight", parley::FontWeight::NORMAL, false)
+                }
+                (FontFamily::GelPenSerif, FontWeight::Regular | FontWeight::Medium) => {
+                    ("GelPenSerif", parley::FontWeight::NORMAL, false)
+                }
+                (FontFamily::GelPenSerif, FontWeight::Heavy) => {
+                    ("GelPenSerifHeavy", parley::FontWeight::NORMAL, false)
+                }
+                (FontFamily::VanillaExtract, _) => {
+                    ("Vanilla Extract", parley::FontWeight::NORMAL, false)
+                }
+                (FontFamily::XitsMath, _) => ("STIX Two Math", parley::FontWeight::NORMAL, false),
+            }
+        };
 
         let mut builder =
             self.layout_cx
                 .ranged_builder(&mut self.font_cx, &text.content, 1.0, false);
+        for &(id, index, width, height) in &inline {
+            builder.push_inline_box(parley::InlineBox {
+                id,
+                index,
+                width,
+                height,
+            });
+            builder.push(StyleProperty::FontSize(0.0), index..index + 3);
+            builder.push(
+                StyleProperty::LineHeight(parley::LineHeight::Absolute(height + font_size * 0.4)),
+                index..index + 3,
+            );
+        }
         builder.push_default(StyleProperty::FontSize(font_size));
         builder.push_default(StyleProperty::Brush(brush.clone()));
         builder.push_default(StyleProperty::FontWeight(parley_weight));
         if is_italic {
             builder.push_default(StyleProperty::FontStyle(parley::FontStyle::Italic));
         }
-        builder.push_default(StyleProperty::FontStack(parley::FontStack::Single(
-            parley::FontFamily::Named(font_name.to_string().into()),
-        )));
+        builder.push_default(StyleProperty::FontStack(text_font_stack(font_name)));
 
         let mut byte_offset = 0;
         for (char_idx, ch) in text.content.chars().enumerate() {
@@ -1046,6 +1145,24 @@ impl VelloRenderer {
                     StyleProperty::Brush(span_brush),
                     byte_offset..byte_offset + char_len,
                 );
+            }
+            if let Some(style) = text.char_styles.get(char_idx) {
+                let range = byte_offset..byte_offset + ch.len_utf8();
+                if style.bold {
+                    builder.push(
+                        parley::StyleProperty::FontWeight(parley::FontWeight::BOLD),
+                        range.clone(),
+                    );
+                }
+                if style.italic {
+                    builder.push(
+                        parley::StyleProperty::FontStyle(parley::FontStyle::Italic),
+                        range.clone(),
+                    );
+                }
+                if style.underline {
+                    builder.push(parley::StyleProperty::Underline(true), range);
+                }
             }
             byte_offset += ch.len_utf8();
         }
@@ -1061,12 +1178,10 @@ impl VelloRenderer {
         let layout_width = layout.width() as f64;
         let layout_height = layout.height() as f64;
         text.set_cached_size(layout_width, layout_height);
-
-        let text_transform = transform
-            * Affine::translate((text.position.x, text.position.y))
-            * Affine::scale_non_uniform(text.display_scale[0], text.display_scale[1]);
-
-        let mut cached_runs = Vec::new();
+        let previous_scene = std::mem::take(&mut self.scene);
+        let text_transform = Affine::IDENTITY;
+        self.draw_underlines(&layout, text_transform);
+        self.append_inline_formulas(text, &layout, text_transform);
         let mut glyph_count = 0;
 
         for line in layout.lines() {
@@ -1112,17 +1227,39 @@ impl VelloRenderer {
                         .normalized_coords(run.normalized_coords())
                         .draw(Fill::NonZero, glyphs.iter().cloned());
 
-                    cached_runs.push((font.clone(), run_font_size, run_brush, glyphs, skew_angle));
+                    if synthesis.embolden() {
+                        self.scene
+                            .draw_glyphs(font)
+                            .brush(&run_brush)
+                            .hint(true)
+                            .transform(text_transform)
+                            .glyph_transform(glyph_xform)
+                            .font_size(run_font_size)
+                            .normalized_coords(run.normalized_coords())
+                            .draw(
+                                &Stroke::new(run_font_size as f64 / 24.0),
+                                glyphs.iter().cloned(),
+                            );
+                    }
                 }
             }
         }
 
+        let scene = std::mem::replace(&mut self.scene, previous_scene);
+        self.scene.append(
+            &scene,
+            Some(
+                transform
+                    * Affine::translate((text.position.x, text.position.y))
+                    * Affine::scale_non_uniform(text.display_scale[0], text.display_scale[1]),
+            ),
+        );
         // One layout per text object; old edit versions must not accumulate.
         self.text_cache.retain(|(id, _), _| *id != text.id());
         self.text_cache.insert(
             cache_key,
             CachedTextLayout {
-                glyph_runs: cached_runs,
+                scene,
                 width: layout_width,
                 height: layout_height,
             },
@@ -1190,7 +1327,14 @@ impl VelloRenderer {
         let scale_x = bounds.width() / (image.crop.width() * image_data.width as f64);
         let scale_y = bounds.height() / (image.crop.height() * image_data.height as f64);
 
+        let mirror = Affine::translate((bounds.center().x, bounds.center().y))
+            * Affine::scale_non_uniform(
+                if image.flip_x { -1.0 } else { 1.0 },
+                if image.flip_y { -1.0 } else { 1.0 },
+            )
+            * Affine::translate((-bounds.center().x, -bounds.center().y));
         let image_transform = transform
+            * mirror
             * Affine::translate((
                 bounds.x0 - image.crop.x0 * image_data.width as f64 * scale_x,
                 bounds.y0 - image.crop.y0 * image_data.height as f64 * scale_y,
@@ -1243,6 +1387,13 @@ impl VelloRenderer {
             None,
             &rect_path,
         );
+    }
+
+    pub fn formula_is_valid(&mut self, latex: &str) -> bool {
+        self.prepare_math(&drafftink_core::shapes::Math::new(
+            Point::ZERO,
+            latex.to_string(),
+        ))
     }
 
     fn prepare_math(&mut self, math: &drafftink_core::shapes::Math) -> bool {
@@ -1376,56 +1527,58 @@ impl VelloRenderer {
         let brush = Brush::Solid(style.stroke_with_opacity());
 
         // Determine font name and parley weight based on family and weight
+        let inline = self.prepare_inline_formulas(text);
         // Use same logic as render_text - all Roboto variants use "Roboto" family with weight
-        let (font_name, parley_weight, is_italic) = if let Some(custom) =
-            text.custom_font.as_deref()
-        {
-            (
-                self.font_aliases
-                    .get(custom)
-                    .map(String::as_str)
-                    .unwrap_or(custom),
-                parley::FontWeight::new(text.font_weight.value()),
-                false,
-            )
-        } else {
-            match (&text.font_family, &text.font_weight) {
-                (ShapeFontFamily::GelPen, FontWeight::Light) => {
-                    ("GelPenLight", parley::FontWeight::NORMAL, false)
+        let (font_name, parley_weight, is_italic) =
+            if let Some(custom) = text.custom_font.as_deref() {
+                (
+                    self.font_aliases
+                        .get(custom)
+                        .map(String::as_str)
+                        .unwrap_or("Noto Sans"),
+                    parley::FontWeight::new(text.font_weight.value()),
+                    false,
+                )
+            } else {
+                match (&text.font_family, &text.font_weight) {
+                    (ShapeFontFamily::GelPen, FontWeight::Light) => {
+                        ("GelPenLight", parley::FontWeight::NORMAL, false)
+                    }
+                    (ShapeFontFamily::GelPen, FontWeight::Regular | FontWeight::Medium) => {
+                        ("GelPen", parley::FontWeight::NORMAL, false)
+                    }
+                    (ShapeFontFamily::GelPen, FontWeight::Heavy) => {
+                        ("GelPenHeavy", parley::FontWeight::NORMAL, false)
+                    }
+                    (ShapeFontFamily::NotoSans, FontWeight::Light) => {
+                        ("Noto Sans", parley::FontWeight::NORMAL, true)
+                    }
+                    (ShapeFontFamily::NotoSans, FontWeight::Medium) => {
+                        ("Noto Sans", parley::FontWeight::new(500.0), false)
+                    }
+                    (ShapeFontFamily::NotoSans, FontWeight::Regular) => {
+                        ("Noto Sans", parley::FontWeight::NORMAL, false)
+                    }
+                    (ShapeFontFamily::NotoSans, FontWeight::Heavy) => {
+                        ("Noto Sans", parley::FontWeight::BOLD, false)
+                    }
+                    (ShapeFontFamily::GelPenSerif, FontWeight::Light) => {
+                        ("GelPenSerifLight", parley::FontWeight::NORMAL, false)
+                    }
+                    (ShapeFontFamily::GelPenSerif, FontWeight::Regular | FontWeight::Medium) => {
+                        ("GelPenSerif", parley::FontWeight::NORMAL, false)
+                    }
+                    (ShapeFontFamily::GelPenSerif, FontWeight::Heavy) => {
+                        ("GelPenSerifHeavy", parley::FontWeight::NORMAL, false)
+                    }
+                    (ShapeFontFamily::VanillaExtract, _) => {
+                        ("Vanilla Extract", parley::FontWeight::NORMAL, false)
+                    }
+                    (ShapeFontFamily::XitsMath, _) => {
+                        ("STIX Two Math", parley::FontWeight::NORMAL, false)
+                    }
                 }
-                (ShapeFontFamily::GelPen, FontWeight::Regular | FontWeight::Medium) => {
-                    ("GelPen", parley::FontWeight::NORMAL, false)
-                }
-                (ShapeFontFamily::GelPen, FontWeight::Heavy) => {
-                    ("GelPenHeavy", parley::FontWeight::NORMAL, false)
-                }
-                (ShapeFontFamily::NotoSans, FontWeight::Light) => {
-                    ("Noto Sans", parley::FontWeight::NORMAL, true)
-                }
-                (ShapeFontFamily::NotoSans, FontWeight::Medium) => {
-                    ("Noto Sans", parley::FontWeight::new(500.0), false)
-                }
-                (ShapeFontFamily::NotoSans, FontWeight::Regular) => {
-                    ("Noto Sans", parley::FontWeight::NORMAL, false)
-                }
-                (ShapeFontFamily::NotoSans, FontWeight::Heavy) => {
-                    ("Noto Sans", parley::FontWeight::BOLD, false)
-                }
-                (ShapeFontFamily::GelPenSerif, FontWeight::Light) => {
-                    ("GelPenSerifLight", parley::FontWeight::NORMAL, false)
-                }
-                (ShapeFontFamily::GelPenSerif, FontWeight::Regular | FontWeight::Medium) => {
-                    ("GelPenSerif", parley::FontWeight::NORMAL, false)
-                }
-                (ShapeFontFamily::GelPenSerif, FontWeight::Heavy) => {
-                    ("GelPenSerifHeavy", parley::FontWeight::NORMAL, false)
-                }
-                (ShapeFontFamily::VanillaExtract, _) => {
-                    ("Vanilla Extract", parley::FontWeight::NORMAL, false)
-                }
-                (ShapeFontFamily::XitsMath, _) => ("XITS Math", parley::FontWeight::NORMAL, false),
-            }
-        };
+            };
 
         // Configure the editor styles
         edit_state.set_font_size(text.font_size as f32);
@@ -1433,11 +1586,9 @@ impl VelloRenderer {
 
         // Set the font family and weight in the editor
         {
-            use parley::{FontFamily, FontStack, StyleProperty};
+            use parley::StyleProperty;
             let styles = edit_state.editor_mut().edit_styles();
-            styles.insert(StyleProperty::FontStack(FontStack::Single(
-                FontFamily::Named(font_name.to_string().into()),
-            )));
+            styles.insert(StyleProperty::FontStack(text_font_stack(font_name)));
             styles.insert(StyleProperty::FontWeight(parley_weight));
             if is_italic {
                 styles.insert(StyleProperty::FontStyle(parley::FontStyle::Italic));
@@ -1451,12 +1602,25 @@ impl VelloRenderer {
         let mut builder =
             self.layout_cx
                 .ranged_builder(&mut self.font_cx, &editor_text, 1.0, false);
+        for &(id, index, width, height) in &inline {
+            builder.push_inline_box(parley::InlineBox {
+                id,
+                index,
+                width,
+                height,
+            });
+            builder.push(parley::StyleProperty::FontSize(0.0), index..index + 3);
+            builder.push(
+                parley::StyleProperty::LineHeight(parley::LineHeight::Absolute(
+                    height + text.font_size as f32 * 0.4,
+                )),
+                index..index + 3,
+            );
+        }
         builder.push_default(parley::StyleProperty::FontSize(text.font_size as f32));
         builder.push_default(parley::StyleProperty::Brush(brush.clone()));
         builder.push_default(parley::StyleProperty::FontWeight(parley_weight));
-        builder.push_default(parley::StyleProperty::FontStack(parley::FontStack::Single(
-            parley::FontFamily::Named(font_name.to_string().into()),
-        )));
+        builder.push_default(parley::StyleProperty::FontStack(text_font_stack(font_name)));
 
         // Apply per-character colors
         let mut byte_offset = 0;
@@ -1469,6 +1633,24 @@ impl VelloRenderer {
                     parley::StyleProperty::Brush(span_brush),
                     byte_offset..byte_offset + char_len,
                 );
+            }
+            if let Some(style) = text.char_styles.get(char_idx) {
+                let range = byte_offset..byte_offset + ch.len_utf8();
+                if style.bold {
+                    builder.push(
+                        parley::StyleProperty::FontWeight(parley::FontWeight::BOLD),
+                        range.clone(),
+                    );
+                }
+                if style.italic {
+                    builder.push(
+                        parley::StyleProperty::FontStyle(parley::FontStyle::Italic),
+                        range.clone(),
+                    );
+                }
+                if style.underline {
+                    builder.push(parley::StyleProperty::Underline(true), range);
+                }
             }
             byte_offset += ch.len_utf8();
         }
@@ -1485,8 +1667,10 @@ impl VelloRenderer {
         let layout = edit_state
             .editor_mut()
             .layout(&mut self.font_cx, &mut self.layout_cx);
-        let layout_width = layout.width() as f64;
-        let layout_height = layout.height() as f64;
+        let _ = layout;
+        let layout_width = styled_layout.width() as f64;
+        let layout_height = styled_layout.height() as f64;
+        edit_state.set_rich_layout(styled_layout.clone());
 
         // Update cached size so bounds() returns correct values
         text.set_cached_size(layout_width, layout_height);
@@ -1528,6 +1712,8 @@ impl VelloRenderer {
         let text_transform = text_transform
             * Affine::scale_non_uniform(text.display_scale[0], text.display_scale[1]);
 
+        self.append_inline_formulas(text, &styled_layout, text_transform);
+        self.draw_underlines(&styled_layout, text_transform);
         // Render glyphs first (text content) - use styled_layout which has color spans
         for line in styled_layout.lines() {
             for item in line.items() {
@@ -1568,7 +1754,21 @@ impl VelloRenderer {
                         .glyph_transform(glyph_xform)
                         .font_size(font_size)
                         .normalized_coords(run.normalized_coords())
-                        .draw(Fill::NonZero, glyphs.into_iter());
+                        .draw(Fill::NonZero, glyphs.iter().cloned());
+                    if synthesis.embolden() {
+                        self.scene
+                            .draw_glyphs(font)
+                            .brush(&glyph_style.brush)
+                            .hint(true)
+                            .transform(text_transform)
+                            .glyph_transform(glyph_xform)
+                            .font_size(font_size)
+                            .normalized_coords(run.normalized_coords())
+                            .draw(
+                                &Stroke::new(font_size as f64 / 24.0),
+                                glyphs.iter().cloned(),
+                            );
+                    }
                 }
             }
         }
@@ -1577,7 +1777,7 @@ impl VelloRenderer {
         let selection_color = Color::from_rgba8(70, 130, 180, 128); // STEEL_BLUE-ish
 
         // Draw selection background (now layout is computed)
-        edit_state.editor().selection_geometry_with(|rect, _| {
+        edit_state.selection_geometry_with(|rect, _| {
             self.scene.fill(
                 Fill::NonZero,
                 text_transform,
@@ -1589,7 +1789,7 @@ impl VelloRenderer {
 
         // Draw cursor if visible (now layout is computed)
         if edit_state.is_cursor_visible() {
-            if let Some(cursor) = edit_state.editor().cursor_geometry(1.5) {
+            if let Some(cursor) = edit_state.cursor_geometry(1.5) {
                 // Cursor color (contrasting with text)
                 let cursor_color = Color::from_rgba8(0, 0, 0, 255);
                 self.scene.fill(
@@ -2810,5 +3010,124 @@ mod cache_regressions {
         let canvas = drafftink_core::Canvas::new();
         renderer.build_scene(&RenderContext::new(&canvas, kurbo::Size::new(800.0, 600.0)));
         assert!(renderer.image_cache.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod inline_formula_render_tests {
+    use super::*;
+    use drafftink_core::shapes::{CharacterStyle, InlineFormula, Math, Text};
+    #[test]
+    fn structured_text_formulas_have_real_layout_and_keep_following_text() {
+        let mut renderer = VelloRenderer::new();
+        let mut text = Text::new(Point::ZERO, "Avant \u{fffc} après".into());
+        text.font_family = drafftink_core::shapes::FontFamily::NotoSans;
+        text.char_styles = vec![
+            CharacterStyle {
+                bold: true,
+                italic: true,
+                underline: true
+            };
+            text.content.chars().count()
+        ];
+        for latex in [
+            r"\frac{\frac{1}{2}}{\frac{3}{4}}",
+            r"\sqrt{x+1}",
+            r"\sqrt[3]{x+1}",
+            r"\sum_{i=1}^{n} i",
+            r"\prod_{i=1}^{n} i",
+            r"\int_{0}^{1} x\,dx",
+            r"\lim_{x\to 0} x",
+        ] {
+            text.formulas = vec![InlineFormula {
+                at: 6,
+                math: Math::new(Point::ZERO, latex.into()),
+                kind: "test".into(),
+                parts: Default::default(),
+            }];
+            assert!(
+                renderer.formula_is_valid(latex),
+                "unsupported formula {latex}"
+            );
+            renderer.render_text(&text, Affine::IDENTITY);
+            let inline = renderer.prepare_inline_formulas(&text);
+            assert_eq!(inline.len(), 1);
+            assert!(inline[0].2 > 0.0 && inline[0].3 > 0.0);
+            let mut editor = crate::TextEditState::new(&text.content, text.font_size as f32);
+            renderer.render_text_editing(&text, &mut editor, Affine::IDENTITY, None);
+            assert!(editor.cursor_geometry(1.5).is_some());
+            let mut only = Text::new(Point::ZERO, "\u{fffc}".into());
+            only.formulas = text.formulas.clone();
+            only.formulas[0].at = 0;
+            renderer.render_text(&only, Affine::IDENTITY);
+            assert!(
+                only.bounds().height() >= {
+                    let size = renderer.math_cache[&only.formulas[0].math.id()].size;
+                    size.1 - size.2
+                },
+                "formula escaped bounds: {latex}"
+            );
+        }
+    }
+    #[test]
+    fn unavailable_custom_font_still_renders_and_edits() {
+        let mut renderer = VelloRenderer::new();
+        let mut text = Text::new(Point::ZERO, "123^4".into());
+        text.custom_font = Some("Unavailable Private Font".into());
+        renderer.render_text(&text, Affine::IDENTITY);
+        let mut editor = crate::TextEditState::new(&text.content, text.font_size as f32);
+        renderer.render_text_editing(&text, &mut editor, Affine::IDENTITY, None);
+        let (fonts, layouts) = renderer.contexts_mut();
+        editor.handle_key(
+            crate::TextKey::End,
+            crate::TextModifiers::default(),
+            fonts,
+            layouts,
+        );
+        editor.handle_key(
+            crate::TextKey::Backspace,
+            crate::TextModifiers::default(),
+            fonts,
+            layouts,
+        );
+        assert_eq!(editor.text(), "123^");
+    }
+}
+
+#[cfg(test)]
+mod symbol_font_tests {
+    use super::*;
+    #[test]
+    fn text_symbol_fallback_provides_real_glyphs() {
+        let mut renderer = VelloRenderer::new();
+        let content = "≥≤Σ∏∫∞";
+        let mut builder =
+            renderer
+                .layout_cx
+                .ranged_builder(&mut renderer.font_cx, content, 1.0, false);
+        builder.push_default(parley::StyleProperty::FontSize(20.0));
+        builder.push_default(parley::StyleProperty::FontStack(text_font_stack(
+            "Noto Sans",
+        )));
+        let mut layout = builder.build(content);
+        layout.break_all_lines(None);
+        let glyphs: Vec<_> = layout
+            .lines()
+            .flat_map(|line| {
+                line.items().filter_map(|item| {
+                    if let PositionedLayoutItem::GlyphRun(run) = item {
+                        Some(run.glyphs().map(|g| g.id).collect::<Vec<_>>())
+                    } else {
+                        None
+                    }
+                })
+            })
+            .flatten()
+            .collect();
+        assert_eq!(glyphs.len(), 6);
+        assert!(
+            glyphs.iter().all(|id| *id != 0),
+            "missing mathematical glyphs: {glyphs:?}"
+        );
     }
 }

@@ -1,10 +1,10 @@
-# DrafftInk Local 0.7.0
+# DrafftInk Local 0.8.0
 
 Version personnelle du tableau DrafftInk, sans collaboration reseau.
 
 ## Utilisation sous Windows
 
-Le ZIP **DrafftInk_Windows_Portable_0.7.0.zip** produit par GitHub Actions est deja compile.
+Le ZIP **DrafftInk_Windows_Portable_0.8.0.zip** produit par GitHub Actions est deja compile.
 Il ne faut installer ni Rust, ni wasm-pack, ni Visual Studio.
 
 1. Decompresser le ZIP.
@@ -26,8 +26,8 @@ Workflow : `.github/workflows/build-portable.yml`.
 
 A chaque push sur `main`, deux artefacts sont produits :
 
-- `DrafftInk-Windows-Portable-0.7.0` : version locale Windows precompilee ;
-- `DrafftInk-Web-0.7.0` : fichiers statiques a deposer sur un serveur web.
+- `DrafftInk-Windows-Portable-0.8.0` : version locale Windows precompilee ;
+- `DrafftInk-Web-0.8.0` : fichiers statiques a deposer sur un serveur web.
 
 ## Modifications de cette branche
 
@@ -80,7 +80,7 @@ Chrome et Edge recents sont les cibles prioritaires car DrafftInk utilise WebGPU
 
 - champs de raccourcis Settings lisibles : texte noir sur fond blanc ;
 - raccourcis par defaut : D = Draw, M = Math, H = Pan ;
-- ^ fonctionne comme entree d'exposant, y compris avec les touches mortes des claviers francais ;
+- Dans Math, ^ ouvre un exposant ; depuis la 0.8, Text conserve ^ litteralement, touche morte francaise comprise ;
 - raccourcis texte : Ctrl+Fleche haut = exposant, Ctrl+Fleche bas = indice ; Espace ou Fleche droite sort du mode ;
 - exposants et indices texte restent dans le meme objet texte et la meme famille de police ;
 - Properties du texte reste visible pendant l'outil Text mais disparait lors d'un changement d'outil ;
@@ -107,3 +107,16 @@ Chrome et Edge recents sont les cibles prioritaires car DrafftInk utilise WebGPU
 - Curseurs SVG personnalises : fleche blanche avec ombre/contour configurable et curseur Text/Math.
 - Poignees au centre des quatre bords : resize sur un seul axe, y compris apres rotation. Le crop Ctrl des images fonctionne aussi avec les poignees des bords. Text/Math conservent leur geometrie et leur source lors du redimensionnement.
 - Optimisations : sources d'images partagees entre duplications et Undo/Redo, decode unique par source, nettoyage des caches supprimes, cache des formules et du cmap des glyphes, animations du caret planifiees au lieu d'un rendu continu. Les pixels source restent intacts et l'export conserve sa resolution.
+
+## Nouveautes 0.8.0
+
+- Text conserve les caracteres saisis, dont ^ et les sequences composees du clavier francais. Ctrl+fleche haut/bas reste reserve aux exposants/indices. Les remplacements Unicode externes (^4, ^>, ^<) ne consomment plus le caractere qui precede leur declencheur.
+- Gras, italique et soulignement d'une selection avec Ctrl+B, Ctrl+I, Ctrl+U. La mise en forme est conservee dans le JSON et dans les rendus/export PNG. Le gras/italique peut etre synthetise si une seule variante de la police locale est disponible.
+- Text accepte des formules dans son flux : Fraction, Racine, Racine n-ieme, Somme, Produit, Integrale et Limite. Les champs restent accessibles depuis Properties ; les expressions de type 1/2, sqrt(x), x^2 et fractions imbriquees sont traduites sans imposer LaTeX. Selectionner le bloc puis cliquer sa commande pour le modifier. Les anciens objets Math restent lisibles/editables.
+- Symboles Σ, ∏, ∫, lim, ≥, ≤ et ∞ dans Text. Noto Sans/STIX Two Math completent les glyphes absents de la police choisie. Une police locale non encore chargee ne rend plus le texte invisible.
+- Une poignee d'image peut traverser le bord oppose pour retourner l'image horizontalement et/ou verticalement. La rotation commence aussi juste a l'exterieur d'un coin, autour du centre et sans saut d'angle. Ctrl+poignee continue de rogner, meme apres miroir/rotation. Pixels originaux et Undo/Redo preserves.
+- Ctrl+P cache/retablit outils, panneaux et onglets pour la presentation. F11 entre/sort du plein ecran (navigateur Chrome/Edge).
+- Le cache de rendu Text conserve aussi les decorations et formules, sans reconstruire les textes termines a chaque clignotement.
+- CI ajoute un test Chromium sur le WASM reel avec captures : saisie Unicode/remplacements, selection/mise en forme, fractions/racines, presentation/plein ecran, miroirs, rotation et Undo/Redo. Un clavier francais physique et Beeftext sous Windows restent distincts de ces simulations.
+
+- Export PNG : les donnees du document sont embarquees en UTF-8 (iTXt) pour conserver les symboles, blocs de formule et noms Unicode ; les anciens PNG zTXt restent importables.

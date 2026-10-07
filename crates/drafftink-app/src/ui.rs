@@ -244,6 +244,16 @@ pub struct PeerInfo {
 }
 
 #[derive(Debug, Clone)]
+pub struct InlineFormulaDraft {
+    pub text_id: drafftink_core::shapes::ShapeId,
+    pub range: std::ops::Range<usize>,
+    pub kind: String,
+    pub parts: [String; 4],
+    pub active_field: usize,
+    pub request_focus: bool,
+}
+
+#[derive(Debug, Clone)]
 pub struct MathEditorState {
     pub shape_id: ShapeId,
     pub input: String,
@@ -254,6 +264,10 @@ pub struct MathEditorState {
 
 /// UI state and actions.
 pub struct UiState {
+    pub presentation_mode: bool,
+    pub test_controls: std::collections::BTreeMap<String, [f32; 4]>,
+    pub inline_formula_draft: Option<InlineFormulaDraft>,
+    pub inline_formula_error: String,
     /// Currently selected tool (mirrored from canvas).
     pub current_tool: ToolKind,
     /// Eraser behavior (whole object vs manual stroke trimming).
@@ -375,6 +389,10 @@ impl Default for UiState {
             .unwrap_or_else(|| settings.default_font_postscript.clone());
         Self {
             current_tool: ToolKind::Select,
+            presentation_mode: false,
+            test_controls: Default::default(),
+            inline_formula_draft: None,
+            inline_formula_error: String::new(),
             eraser_mode: EraserMode::Classic,
             stroke_color: TAILWIND_COLORS[11].shades[6], // Indigo 500
             fill_color: None,
@@ -483,6 +501,9 @@ pub enum UiAction {
     SetDefaultFont(String, String),
     SetLaserColor(Color32),
     ResetFloatingPanels,
+    InsertTextSymbol(String),
+    OpenInlineFormula(String),
+    CommitInlineFormula(String, String, [String; 4], bool),
     /// Change stroke color.
     SetStrokeColor(Color32),
     /// Change fill color.
@@ -725,6 +746,10 @@ pub fn render_ui(
     ui_state: &mut UiState,
     selected_props: &SelectedShapeProps,
 ) -> Option<UiAction> {
+    ui_state.test_controls.clear();
+    if ui_state.presentation_mode {
+        return None;
+    }
     egui_extras::install_image_loaders(ctx);
 
     let toolbar_action = render_toolbar(ctx, ui_state);
@@ -733,6 +758,7 @@ pub fn render_ui(
     let bottom_action = render_bottom_toolbar(ctx, ui_state);
     let right_panel_action = render_right_panel(ctx, ui_state, selected_props);
     let math_action = render_math_editor(ctx, ui_state);
+    let inline_action = render_inline_formula_dialog(ctx, ui_state);
     let settings_action = render_settings_dialog(ctx, ui_state);
     let tab_action = render_tab_bar(ctx, ui_state);
 
@@ -746,6 +772,7 @@ pub fn render_ui(
         .or(bottom_action)
         .or(right_panel_action)
         .or(math_action)
+        .or(inline_action)
         .or(settings_action)
         .or(tab_action)
 }
@@ -1697,6 +1724,57 @@ fn render_right_panel(
 
                     // Text-specific properties
                     if props.is_text {
+                        let visuals = ui.visuals_mut();
+                        visuals.widgets.inactive.weak_bg_fill = Color32::from_gray(245);
+                        visuals.widgets.inactive.bg_fill = Color32::from_gray(245);
+                        visuals.widgets.inactive.fg_stroke =
+                            Stroke::new(1.0, Color32::from_gray(65));
+                        visuals.widgets.hovered = visuals.widgets.inactive;
+                        visuals.widgets.active = visuals.widgets.inactive;
+                        ui.horizontal_wrapped(|ui| {
+                            for (label, value) in [
+                                ("Σ", "Σ"),
+                                ("∏", "∏"),
+                                ("∫", "∫"),
+                                ("lim", "lim"),
+                                ("≥", "≥"),
+                                ("≤", "≤"),
+                                ("∞", "∞"),
+                            ] {
+                                if ui.button(label).clicked() {
+                                    action = Some(UiAction::InsertTextSymbol(value.into()));
+                                }
+                            }
+                        });
+                        ui.horizontal_wrapped(|ui| {
+                            for label in [
+                                "Fraction",
+                                "Racine",
+                                "Racine n-ième",
+                                "Somme",
+                                "Produit",
+                                "Intégrale",
+                                "Limite",
+                            ] {
+                                let response = ui.small_button(label);
+                                ui_state.test_controls.insert(
+                                    label.into(),
+                                    [
+                                        response.rect.min.x,
+                                        response.rect.min.y,
+                                        response.rect.max.x,
+                                        response.rect.max.y,
+                                    ],
+                                );
+                                if response.clicked() {
+                                    action = Some(UiAction::OpenInlineFormula(label.into()));
+                                }
+                            }
+                        });
+                        ui.label(
+                            egui::RichText::new("Sélection : Ctrl+B / I / U · Exposant : Ctrl+↑")
+                                .size(10.0),
+                        );
                         // Font Family
                         ui.label(
                             egui::RichText::new("Font Family")
@@ -1763,7 +1841,7 @@ fn render_right_panel(
                                     .selectable_label(
                                         props.custom_font.is_none()
                                             && props.font_family == FontFamily::XitsMath,
-                                        "XITS Symbols",
+                                        "STIX Symbols",
                                     )
                                     .clicked()
                                 {
@@ -3816,5 +3894,176 @@ mod floating_panel_regressions {
             rect = output.response.rect;
         });
         assert!(rect.width() < 80.0, "toolbar width {}", rect.width());
+    }
+}
+
+fn render_inline_formula_dialog(ctx: &Context, state: &mut UiState) -> Option<UiAction> {
+    let finish_requested =
+        ctx.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape));
+    let exit_text = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+    let draft = state.inline_formula_draft.as_mut()?;
+    let mut action = None;
+    let mut close = false;
+    egui::Window::new("Insérer dans Text")
+        .collapsible(false)
+        .resizable(false)
+        .default_width(340.0)
+        .default_pos(ctx.input(|i| i.content_rect()).center() - Vec2::new(180.0, 150.0))
+        .frame(
+            Frame::new()
+                .fill(Color32::from_gray(250))
+                .stroke(Stroke::new(1.0, Color32::from_gray(200)))
+                .corner_radius(CornerRadius::same(8))
+                .inner_margin(Margin::same(12)),
+        )
+        .show(ctx, |ui| {
+            *ui.visuals_mut() = egui::Visuals::light();
+            ui.visuals_mut().text_cursor.stroke = Stroke::new(2.0, Color32::BLACK);
+            egui::ComboBox::from_id_salt("inline_formula_kind")
+                .selected_text(&draft.kind)
+                .show_ui(ui, |ui| {
+                    for kind in [
+                        "Fraction",
+                        "Racine",
+                        "Racine n-ième",
+                        "Somme",
+                        "Produit",
+                        "Intégrale",
+                        "Limite",
+                    ] {
+                        ui.selectable_value(&mut draft.kind, kind.to_string(), kind);
+                    }
+                });
+            let labels: &[&str] = match draft.kind.as_str() {
+                "Fraction" => &["Numérateur", "Dénominateur"],
+                "Racine" => &["Expression"],
+                "Racine n-ième" => &["Expression", "Indice de la racine"],
+                "Limite" => &["Expression", "Variable", "Vers"],
+                _ => &[
+                    "Expression",
+                    "Variable",
+                    "Borne inférieure",
+                    "Borne supérieure",
+                ],
+            };
+            for (i, label) in labels.iter().enumerate() {
+                ui.label(*label);
+                let id = egui::Id::new(("inline_formula_part", draft.text_id, i));
+                if (finish_requested || draft.request_focus) && draft.active_field == i {
+                    ui.memory_mut(|m| m.request_focus(id));
+                }
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut draft.parts[i])
+                        .id(id)
+                        .desired_width(320.0),
+                );
+                if response.has_focus() {
+                    draft.active_field = i;
+                }
+                state.test_controls.insert(
+                    label.to_string(),
+                    [
+                        response.rect.min.x,
+                        response.rect.min.y,
+                        response.rect.max.x,
+                        response.rect.max.y,
+                    ],
+                );
+            }
+            draft.request_focus = false;
+            ui.label("Fractions imbriquées : (a/b)/(c/d) · sqrt(x) · x^2");
+            if !state.inline_formula_error.is_empty() {
+                ui.colored_label(Color32::RED, &state.inline_formula_error);
+            }
+            ui.horizontal(|ui| {
+                let response = ui.button("Insérer / mettre à jour");
+                state.test_controls.insert(
+                    "Insérer".into(),
+                    [
+                        response.rect.min.x,
+                        response.rect.min.y,
+                        response.rect.max.x,
+                        response.rect.max.y,
+                    ],
+                );
+                if response.clicked() || finish_requested {
+                    let parts = draft
+                        .parts
+                        .each_ref()
+                        .map(|p| crate::math_input::friendly_math_to_latex(p));
+                    let latex = match draft.kind.as_str() {
+                        "Fraction" => format!(r"\frac{{{}}}{{{}}}", parts[0], parts[1]),
+                        "Racine" => format!(r"\sqrt{{{}}}", parts[0]),
+                        "Racine n-ième" => format!(r"\sqrt[{}]{{{}}}", parts[1], parts[0]),
+                        "Somme" => format!(
+                            r"\sum_{{{}={}}}^{{{}}} {}",
+                            parts[1], parts[2], parts[3], parts[0]
+                        ),
+                        "Produit" => format!(
+                            r"\prod_{{{}={}}}^{{{}}} {}",
+                            parts[1], parts[2], parts[3], parts[0]
+                        ),
+                        "Intégrale" => format!(
+                            r"\int_{{{}}}^{{{}}} {}\,d{}",
+                            parts[2], parts[3], parts[0], parts[1]
+                        ),
+                        _ => format!(r"\lim_{{{}\to {}}} {}", parts[1], parts[2], parts[0]),
+                    };
+                    action = Some(UiAction::CommitInlineFormula(
+                        latex,
+                        draft.kind.clone(),
+                        draft.parts.clone(),
+                        exit_text,
+                    ));
+                }
+                if ui.button("Fermer").clicked() {
+                    close = true;
+                }
+            });
+        });
+    if close {
+        state.inline_formula_draft = None;
+    }
+    action
+}
+
+#[cfg(test)]
+mod inline_escape_tests {
+    use super::*;
+    #[test]
+    fn escape_keeps_latest_field_input_and_requests_text_commit() {
+        let ctx = egui::Context::default();
+        let mut state = UiState::default();
+        state.inline_formula_draft = Some(InlineFormulaDraft {
+            text_id: ShapeId::new_v4(),
+            range: 0..0,
+            kind: "Fraction".into(),
+            parts: [String::new(), "2".into(), String::new(), String::new()],
+            active_field: 0,
+            request_focus: true,
+        });
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            render_inline_formula_dialog(ctx, &mut state);
+        });
+        let input = egui::RawInput {
+            events: vec![
+                egui::Event::Text("3".into()),
+                egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            ..Default::default()
+        };
+        let mut action = None;
+        let _ = ctx.run(input, |ctx| {
+            action = render_inline_formula_dialog(ctx, &mut state);
+        });
+        assert!(
+            matches!(action,Some(UiAction::CommitInlineFormula(ref latex,_,_,true)) if latex==r"\frac{3}{2}")
+        );
     }
 }

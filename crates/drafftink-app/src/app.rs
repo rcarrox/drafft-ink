@@ -849,8 +849,19 @@ pub mod file_ops {
         };
         a.set_href(&url);
         a.set_download(filename);
+        // Keep the Blob URL alive until Chromium has started reading it.
+        // Immediate revocation can cancel the asynchronous download entirely.
+        a.style().set_property("display", "none").ok();
+        if let Some(body) = document.body() {
+            body.append_child(&a).ok();
+        }
         a.click();
-        let _ = web_sys::Url::revoke_object_url(&url);
+        a.remove();
+        let cleanup = wasm_bindgen::closure::Closure::once_into_js(move || {
+            let _ = web_sys::Url::revoke_object_url(&url);
+        });
+        let _ = window
+            .set_timeout_with_callback_and_timeout_and_arguments_0(cleanup.unchecked_ref(), 1000);
     }
 
     fn trigger_file_input_async() {
@@ -1695,7 +1706,7 @@ pub fn spawn_png_export_async(
     });
 }
 
-/// MIME type keyword for embedded scene data in PNG tEXt chunks.
+/// MIME type keyword for embedded scene data in PNG text chunks.
 const PNG_METADATA_KEYWORD: &str = "application/vnd.drafftink+json";
 
 /// Encode RGBA pixel data to PNG bytes with optional embedded scene JSON.
@@ -1711,10 +1722,10 @@ fn encode_png(
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
 
-        // Embed scene data as compressed zTXt chunk
+        // iTXt supports Unicode (formula placeholders, ≥/≤, superscripts and font names).
         if let Some(json) = scene_json {
             if let Err(e) =
-                encoder.add_ztxt_chunk(PNG_METADATA_KEYWORD.to_string(), json.to_string())
+                encoder.add_itxt_chunk(PNG_METADATA_KEYWORD.to_string(), json.to_string())
             {
                 log::warn!("Failed to add metadata chunk: {:?}", e);
             }
@@ -1742,6 +1753,11 @@ pub fn extract_scene_from_png(png_data: &[u8]) -> Option<String> {
     let decoder = png::Decoder::new(std::io::Cursor::new(png_data));
     let reader = decoder.read_info().ok()?;
 
+    for chunk in &reader.info().utf8_text {
+        if chunk.keyword == PNG_METADATA_KEYWORD {
+            return chunk.get_text().ok();
+        }
+    }
     for chunk in &reader.info().compressed_latin1_text {
         if chunk.keyword == PNG_METADATA_KEYWORD {
             return chunk.get_text().ok();
@@ -1861,6 +1877,7 @@ struct AppState {
     egui_state: egui_winit::State,
     egui_renderer: egui_wgpu::Renderer,
     ui_state: UiState,
+    ui_keyboard_pending: bool,
 
     // State
     canvas: Canvas,
@@ -2216,6 +2233,7 @@ impl App {
             egui_state,
             egui_renderer,
             ui_state: UiState::default(),
+            ui_keyboard_pending: false,
             canvas,
             tabs: vec![TabState {
                 name: "Canvas".to_string(),
@@ -2611,13 +2629,39 @@ impl ApplicationHandler for App {
         // Process input events through WinitInputHelper
         state.input.process_window_event(&event);
         state.event_handler.text_font = state.ui_state.current_text_font.clone();
+        if let WindowEvent::KeyboardInput { event, .. } = &event {
+            if event.state == ElementState::Pressed && !event.repeat {
+                if state.input.ctrl()
+                    && matches!(&event.logical_key, Key::Character(c) if c.eq_ignore_ascii_case("p"))
+                {
+                    state.ui_state.presentation_mode = !state.ui_state.presentation_mode;
+                    state.needs_redraw = true;
+                    state.window.request_redraw();
+                    return;
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                if matches!(event.logical_key, Key::Named(NamedKey::F11)) {
+                    use winit::window::Fullscreen;
+                    let fullscreen = state
+                        .window
+                        .fullscreen()
+                        .is_none()
+                        .then(|| Fullscreen::Borderless(None));
+                    state.window.set_fullscreen(fullscreen);
+                    return;
+                }
+            }
+        }
 
         if let WindowEvent::KeyboardInput { event, .. } = &event {
             // French layouts expose ^ as a dead key. When the inline math
             // editor has focus, translate it explicitly into the structured
             // exponent marker. Ctrl+ArrowUp / Ctrl+ArrowDown are layout-
             // independent exponent/subscript shortcuts.
-            if event.state == ElementState::Pressed && state.ui_state.math_editor.is_some() {
+            if event.state == ElementState::Pressed
+                && (state.ui_state.math_editor.is_some()
+                    || state.ui_state.inline_formula_draft.is_some())
+            {
                 let math_marker = match &event.logical_key {
                     Key::Dead(Some('^')) => Some('^'),
                     Key::Dead(None)
@@ -2688,10 +2732,32 @@ impl ApplicationHandler for App {
 
         // If egui wants this event exclusively, don't process it for canvas
         // Check both: if egui consumed the event OR if the pointer is over an egui area
+        let pointer = state.input.mouse_position();
+        let scale = state.egui_ctx.pixels_per_point();
+        let pointer_over_ui = state
+            .egui_ctx
+            .layer_id_at(egui::Pos2::new(
+                pointer.x as f32 / scale,
+                pointer.y as f32 / scale,
+            ))
+            .is_some_and(|layer| layer.order != egui::Order::Background);
+        if matches!(
+            event,
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                ..
+            }
+        ) && pointer_over_ui
+        {
+            state.ui_keyboard_pending = true;
+        }
         let egui_wants_input = egui_response.consumed
-            || state.egui_ctx.is_pointer_over_area()
-            || state.egui_ctx.wants_pointer_input()
-            || state.egui_ctx.wants_keyboard_input();
+            || match &event {
+                WindowEvent::KeyboardInput { .. } | WindowEvent::Ime(_) => {
+                    state.ui_keyboard_pending || state.egui_ctx.wants_keyboard_input()
+                }
+                _ => pointer_over_ui || state.egui_ctx.wants_pointer_input(),
+            };
 
         match event {
             WindowEvent::CloseRequested => {
@@ -2945,10 +3011,6 @@ impl ApplicationHandler for App {
                         if let Some(edit_state) = &mut state.text_edit_state {
                             // Capture state before paste
                             let old_text = edit_state.text();
-                            let old_char_count = old_text.chars().count();
-                            let cursor_byte = edit_state.cursor_byte_offset();
-                            let edit_char_pos =
-                                old_text[..cursor_byte.min(old_text.len())].chars().count();
 
                             let (font_cx, layout_cx) = state.shape_renderer.contexts_mut();
                             let _ = edit_state.handle_key(
@@ -2962,7 +3024,7 @@ impl ApplicationHandler for App {
                                 state.canvas.document.get_shape_mut(text_id)
                             {
                                 text.content = new_text;
-                                text.sync_char_colors_after_edit(edit_char_pos, old_char_count);
+                                text.sync_spans_after_edit(&old_text);
                             }
                         }
                     }
@@ -3642,6 +3704,124 @@ impl ApplicationHandler for App {
                                 #[cfg(target_arch = "wasm32")]
                                 if !postscript.is_empty() {
                                     file_ops::load_local_font_async(family, postscript);
+                                }
+                            }
+                            UiAction::InsertTextSymbol(symbol) => {
+                                if let (Some(id), Some(editor)) = (
+                                    state.event_handler.editing_text,
+                                    state.text_edit_state.as_mut(),
+                                ) {
+                                    let old = editor.text();
+                                    let (fonts, layouts) = state.shape_renderer.contexts_mut();
+                                    editor.handle_key(
+                                        TextKey::Character(symbol),
+                                        TextModifiers::default(),
+                                        fonts,
+                                        layouts,
+                                    );
+                                    if let Some(Shape::Text(text)) =
+                                        state.canvas.document.get_shape_mut(id)
+                                    {
+                                        text.content = editor.text();
+                                        text.sync_spans_after_edit(&old);
+                                    }
+                                }
+                            }
+                            UiAction::OpenInlineFormula(kind) => {
+                                if let (Some(id), Some(editor)) = (
+                                    state.event_handler.editing_text,
+                                    state.text_edit_state.as_ref(),
+                                ) {
+                                    let range = editor.selection_range().unwrap_or_else(|| {
+                                        let p = editor.cursor_byte_offset();
+                                        p..p
+                                    });
+                                    let defaults: [&str; 4] = match kind.as_str() {
+                                        "Fraction" => ["1", "2", "", ""],
+                                        "Racine" => ["x", "", "", ""],
+                                        "Racine n-ième" => ["x", "3", "", ""],
+                                        "Somme" | "Produit" => ["i", "i", "1", "n"],
+                                        "Intégrale" => ["x", "x", "0", "1"],
+                                        _ => ["sin(x)/x", "x", "0", ""],
+                                    };
+                                    let mut draft = crate::ui::InlineFormulaDraft {
+                                        text_id: id,
+                                        range: range.clone(),
+                                        kind,
+                                        parts: defaults.map(str::to_string),
+                                        active_field: 0,
+                                        request_focus: true,
+                                    };
+                                    if let Some(Shape::Text(text)) =
+                                        state.canvas.document.get_shape(id)
+                                    {
+                                        let at = text.content[..range.start].chars().count();
+                                        if let Some(formula) = text
+                                            .formulas
+                                            .iter()
+                                            .find(|f| f.at == at && range.end > range.start)
+                                        {
+                                            draft.kind = formula.kind.clone();
+                                            draft.parts = formula.parts.clone();
+                                        }
+                                    }
+                                    state.ui_state.inline_formula_error.clear();
+                                    state.ui_state.inline_formula_draft = Some(draft);
+                                }
+                            }
+                            UiAction::CommitInlineFormula(latex, kind, parts, exit_text) => {
+                                if state.shape_renderer.formula_is_valid(&latex) {
+                                    state.canvas.document.push_undo();
+                                    if let Some(draft) = state.ui_state.inline_formula_draft.take()
+                                    {
+                                        if state.event_handler.editing_text == Some(draft.text_id) {
+                                            if let Some(editor) = state.text_edit_state.as_mut() {
+                                                let old = editor.text();
+                                                let at = old[..draft.range.start].chars().count();
+                                                let (fonts, layouts) =
+                                                    state.shape_renderer.contexts_mut();
+                                                editor.driver(fonts, layouts).select_byte_range(
+                                                    draft.range.start,
+                                                    draft.range.end,
+                                                );
+                                                editor.handle_key(
+                                                    TextKey::Character("\u{fffc}".into()),
+                                                    TextModifiers::default(),
+                                                    fonts,
+                                                    layouts,
+                                                );
+                                                if let Some(Shape::Text(text)) = state
+                                                    .canvas
+                                                    .document
+                                                    .get_shape_mut(draft.text_id)
+                                                {
+                                                    text.content = editor.text();
+                                                    text.sync_spans_after_edit(&old);
+                                                    text.formulas.retain(|f| f.at != at);
+                                                    text.formulas.push(
+                                                        drafftink_core::shapes::InlineFormula {
+                                                            at,
+                                                            math: drafftink_core::shapes::Math::new(
+                                                                Point::ZERO,
+                                                                latex,
+                                                            ),
+                                                            kind,
+                                                            parts,
+                                                        },
+                                                    );
+                                                    text.invalidate_cache();
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if exit_text {
+                                        state.event_handler.exit_text_edit(&mut state.canvas);
+                                        state.text_edit_state = None;
+                                    }
+                                } else {
+                                    state.ui_state.inline_formula_error =
+                                        "Expression incomplète ou invalide : vérifiez les champs."
+                                            .into();
                                 }
                             }
                             UiAction::SetLaserColor(color) => {
@@ -4524,6 +4704,7 @@ impl ApplicationHandler for App {
                     }
                 });
 
+                state.ui_keyboard_pending = false;
                 state
                     .egui_state
                     .handle_platform_output(&state.window, egui_output.platform_output);
@@ -4796,6 +4977,34 @@ impl ApplicationHandler for App {
                     ),
                 );
                 state.shape_renderer.build_scene(&render_ctx);
+                #[cfg(target_arch = "wasm32")]
+                if let Some(window) = web_sys::window() {
+                    use wasm_bindgen::JsValue;
+                    if window
+                        .location()
+                        .search()
+                        .unwrap_or_default()
+                        .contains("drafftink-test=1")
+                    {
+                        let shapes: Vec<_> = state.canvas.document.shapes_ordered().map(|shape| {
+                            let bounds=shape.bounds();
+                            let top_left=state.canvas.camera.world_to_screen(Point::new(bounds.x0,bounds.y0));
+                            let bottom_right=state.canvas.camera.world_to_screen(Point::new(bounds.x1,bounds.y1));
+                            let handles:Vec<_>=drafftink_core::selection::get_handles(shape).into_iter().map(|handle| {
+                                let p=state.canvas.camera.world_to_screen(handle.position);
+                                serde_json::json!({"kind":format!("{:?}",handle.kind),"x":p.x,"y":p.y})
+                            }).collect();
+                            serde_json::json!({"id":shape.id(),"shape":shape,"bounds":[top_left.x,top_left.y,bottom_right.x,bottom_right.y],"handles":handles})
+                        }).collect();
+
+                        let status = serde_json::json!({"shapes":shapes,"presentation":state.ui_state.presentation_mode,"tool":format!("{:?}",state.ui_state.current_tool),"editing_text":state.event_handler.editing_text,"inline_dialog":state.ui_state.inline_formula_draft.is_some(),"inline_error":state.ui_state.inline_formula_error,"controls":state.ui_state.test_controls});
+                        let _ = js_sys::Reflect::set(
+                            window.as_ref(),
+                            &JsValue::from_str("__drafftinkTestState"),
+                            &JsValue::from_str(&status.to_string()),
+                        );
+                    }
+                }
 
                 // Render text in edit mode (with cursor and selection)
                 if let Some(text_id) = state.event_handler.editing_text {
@@ -5527,6 +5736,29 @@ impl ApplicationHandler for App {
                 state.window.request_redraw();
             }
 
+            WindowEvent::Ime(winit::event::Ime::Commit(value))
+                if state.event_handler.editing_text.is_some() =>
+            {
+                if let (Some(id), Some(editor)) = (
+                    state.event_handler.editing_text,
+                    state.text_edit_state.as_mut(),
+                ) {
+                    let old = editor.text();
+                    let (fonts, layouts) = state.shape_renderer.contexts_mut();
+                    editor.handle_key(
+                        TextKey::Character(value),
+                        TextModifiers::default(),
+                        fonts,
+                        layouts,
+                    );
+                    if let Some(Shape::Text(text)) = state.canvas.document.get_shape_mut(id) {
+                        text.content = editor.text();
+                        text.sync_spans_after_edit(&old);
+                    }
+                }
+                state.needs_redraw = true;
+                state.window.request_redraw();
+            }
             WindowEvent::KeyboardInput { event, .. } => {
                 // Skip canvas processing if egui wants keyboard
                 if egui_wants_input {
@@ -5550,14 +5782,35 @@ impl ApplicationHandler for App {
                             }
                         }
 
+                        if state.input.ctrl() {
+                            if let Key::Character(c) = &event.logical_key {
+                                let kind = c.to_ascii_lowercase();
+                                if matches!(kind.as_str(), "b" | "i" | "u") {
+                                    if let Some(range) = state
+                                        .text_edit_state
+                                        .as_ref()
+                                        .and_then(|e| e.selection_range())
+                                    {
+                                        state.canvas.document.push_undo();
+                                        if let Some(Shape::Text(text)) =
+                                            state.canvas.document.get_shape_mut(text_id)
+                                        {
+                                            text.toggle_format(range, kind.chars().next().unwrap());
+                                        }
+                                    }
+                                    state.needs_redraw = true;
+                                    state.window.request_redraw();
+                                    return;
+                                }
+                            }
+                        }
+
                         // Script shortcuts are handled before clipboard shortcuts.
-                        // ^ (including the French dead-key form) enters superscript.
+                        // Literal ^ belongs to composition and external expanders.
                         // Ctrl+ArrowUp / Ctrl+Shift+= enters superscript.
                         // Ctrl+ArrowDown / Ctrl+= enters subscript.
                         let has_ctrl = state.input.ctrl();
                         let script_key = match &event.logical_key {
-                            Key::Dead(Some('^')) => Some(TextKey::ToggleSuperscript),
-                            Key::Character(c) if c == "^" => Some(TextKey::ToggleSuperscript),
                             Key::Character(c) if has_ctrl && c == "_" => {
                                 Some(TextKey::ToggleSubscript)
                             }
@@ -5627,6 +5880,15 @@ impl ApplicationHandler for App {
 
                         // Convert winit key to TextKey (if not already a clipboard operation)
                         let text_key = text_key.or_else(|| match &event.logical_key {
+                            Key::Dead(Some('^')) => Some(TextKey::DeadCaret),
+                            Key::Dead(None)
+                                if matches!(
+                                    event.physical_key,
+                                    PhysicalKey::Code(KeyCode::BracketLeft)
+                                ) =>
+                            {
+                                Some(TextKey::DeadCaret)
+                            }
                             Key::Named(NamedKey::Escape) => Some(TextKey::Escape),
                             Key::Named(NamedKey::Backspace) => Some(TextKey::Backspace),
                             Key::Named(NamedKey::Delete) => Some(TextKey::Delete),
@@ -5640,7 +5902,17 @@ impl ApplicationHandler for App {
                             Key::Named(NamedKey::Space) => {
                                 Some(TextKey::Character(" ".to_string()))
                             }
-                            Key::Character(c) => Some(TextKey::Character(c.to_string())),
+                            Key::Character(c) => Some(TextKey::ComposedCharacter(
+                                event
+                                    .text
+                                    .as_ref()
+                                    .map(|s| s.to_string())
+                                    .unwrap_or_else(|| c.to_string()),
+                                matches!(
+                                    event.physical_key,
+                                    PhysicalKey::Code(KeyCode::BracketLeft)
+                                ),
+                            )),
                             _ => None,
                         });
 
@@ -5658,10 +5930,6 @@ impl ApplicationHandler for App {
                             if let Some(edit_state) = &mut state.text_edit_state {
                                 // Capture state before edit for color sync
                                 let old_text = edit_state.text();
-                                let old_char_count = old_text.chars().count();
-                                let cursor_byte = edit_state.cursor_byte_offset();
-                                let edit_char_pos =
-                                    old_text[..cursor_byte.min(old_text.len())].chars().count();
 
                                 let result =
                                     edit_state.handle_key(key, modifiers, font_cx, layout_cx);
@@ -5679,10 +5947,7 @@ impl ApplicationHandler for App {
                                             state.canvas.document.get_shape_mut(text_id)
                                         {
                                             text.content = new_text;
-                                            text.sync_char_colors_after_edit(
-                                                edit_char_pos,
-                                                old_char_count,
-                                            );
+                                            text.sync_spans_after_edit(&old_text);
                                         }
                                         state.event_handler.exit_text_edit(&mut state.canvas);
                                         state.text_edit_state = None;
@@ -5694,10 +5959,7 @@ impl ApplicationHandler for App {
                                             state.canvas.document.get_shape_mut(text_id)
                                         {
                                             text.content = new_text;
-                                            text.sync_char_colors_after_edit(
-                                                edit_char_pos,
-                                                old_char_count,
-                                            );
+                                            text.sync_spans_after_edit(&old_text);
                                         }
                                     }
                                     TextEditResult::Copy(text_to_copy) => {
@@ -5714,10 +5976,7 @@ impl ApplicationHandler for App {
                                             state.canvas.document.get_shape_mut(text_id)
                                         {
                                             text.content = new_text;
-                                            text.sync_char_colors_after_edit(
-                                                edit_char_pos,
-                                                old_char_count,
-                                            );
+                                            text.sync_spans_after_edit(&old_text);
                                         }
                                     }
                                     TextEditResult::NotHandled => {}
@@ -6531,5 +6790,32 @@ impl ApplicationHandler for App {
         if let Some(state) = &mut self.state {
             state.input.end_step();
         }
+    }
+}
+
+#[cfg(test)]
+mod unicode_png_metadata_tests {
+    use super::*;
+    #[test]
+    fn unicode_document_metadata_survives_png_export_import() {
+        let source = r#"{"text":"123⁴ ≥ ≤ ￼ α","font":"Google Sans Medium","formula":"fraction"}"#;
+        let png = encode_png(&[255, 0, 0, 255], 1, 1, Some(source)).expect("Unicode PNG export");
+        assert_eq!(extract_scene_from_png(&png).as_deref(), Some(source));
+    }
+    #[test]
+    fn legacy_compressed_latin1_png_metadata_is_still_readable() {
+        let source = r#"{"text":"x^3"}"#;
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut bytes, 1, 1);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder
+                .add_ztxt_chunk(PNG_METADATA_KEYWORD.into(), source.into())
+                .unwrap();
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&[0, 0, 0, 255]).unwrap();
+        }
+        assert_eq!(extract_scene_from_png(&bytes).as_deref(), Some(source));
     }
 }
