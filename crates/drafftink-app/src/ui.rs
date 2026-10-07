@@ -3908,6 +3908,7 @@ fn render_inline_formula_dialog(ctx: &Context, state: &mut UiState) -> Option<Ui
         .collapsible(false)
         .resizable(false)
         .default_width(340.0)
+        .default_pos(ctx.input(|i| i.content_rect()).center() - Vec2::new(180.0, 150.0))
         .frame(
             Frame::new()
                 .fill(Color32::from_gray(250))
