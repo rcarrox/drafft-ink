@@ -22,6 +22,11 @@ jobs:
           node-version: '22'
       - name: Test cursor, repaint, and local-font helpers
         run: node utils/test_browser_helpers.cjs
+      - name: Check portable cloud fixtures and scripts
+        run: |
+          bash -n scripts/cloud/setup.sh scripts/cloud/check.sh
+          python3 -m py_compile utils/generate_cloud_fixtures.py utils/verify_portable.py scripts/cloud/preview.py
+          python3 utils/test_cloud_fixtures.py
   quarantine:
     name: Dependency Age Gate
     runs-on: ubuntu-latest
@@ -209,4 +214,3 @@ jobs:
         with:
           name: drafftink-wasm
           path: web/pkg/
-

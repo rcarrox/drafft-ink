@@ -1,0 +1,12 @@
+{
+  "purpose": "Portable interaction cases; drive keydown/keyup or the Winit event adapter, not OS-specific keystroke injection.",
+  "cases": [
+    {"name":"direct_exponent","start":"x","keys":["^","3"],"expected":"x^3"},
+    {"name":"french_dead_caret","start":"x","events":[{"key":"Dead","code":"BracketLeft","text":null},{"key":"3","code":"Digit3","text":"^3"}],"expected":"x^3"},
+    {"name":"ctrl_exponent","start":"x","keys":["Control+ArrowUp","3"],"expected":"x^3"},
+    {"name":"ctrl_subscript","start":"x","keys":["Control+ArrowDown","1"],"expected":"x_1"},
+    {"name":"direct_subscript","start":"x","keys":["_","1"],"expected":"x_1"},
+    {"name":"leave_one_block","start":"1/2^3","keys":["ArrowRight","+","1"],"expected":"1/2^3 +1"},
+    {"name":"escape_commit","start":"x^3","keys":["Escape"],"expected_document_formula":"x^3","expected_editor_open":false}
+  ]
+}

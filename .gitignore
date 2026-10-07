@@ -18,3 +18,9 @@ Thumbs.db
 # WASM build artifacts
 *.wasm
 !web/pkg/*.wasm
+
+# Portable development scratch/cache
+/work/
+__pycache__/
+*.pyc
+.drafftink-server.pid
