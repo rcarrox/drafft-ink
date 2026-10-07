@@ -3908,6 +3908,13 @@ fn render_inline_formula_dialog(ctx: &Context, state: &mut UiState) -> Option<Ui
         .collapsible(false)
         .resizable(false)
         .default_width(340.0)
+        .frame(
+            Frame::new()
+                .fill(Color32::from_gray(250))
+                .stroke(Stroke::new(1.0, Color32::from_gray(200)))
+                .corner_radius(CornerRadius::same(8))
+                .inner_margin(Margin::same(12)),
+        )
         .show(ctx, |ui| {
             *ui.visuals_mut() = egui::Visuals::light();
             ui.visuals_mut().text_cursor.stroke = Stroke::new(2.0, Color32::BLACK);
@@ -4017,4 +4024,45 @@ fn render_inline_formula_dialog(ctx: &Context, state: &mut UiState) -> Option<Ui
         state.inline_formula_draft = None;
     }
     action
+}
+
+#[cfg(test)]
+mod inline_escape_tests {
+    use super::*;
+    #[test]
+    fn escape_keeps_latest_field_input_and_requests_text_commit() {
+        let ctx = egui::Context::default();
+        let mut state = UiState::default();
+        state.inline_formula_draft = Some(InlineFormulaDraft {
+            text_id: ShapeId::new_v4(),
+            range: 0..0,
+            kind: "Fraction".into(),
+            parts: [String::new(), "2".into(), String::new(), String::new()],
+            active_field: 0,
+            request_focus: true,
+        });
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            render_inline_formula_dialog(ctx, &mut state);
+        });
+        let input = egui::RawInput {
+            events: vec![
+                egui::Event::Text("3".into()),
+                egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            ..Default::default()
+        };
+        let mut action = None;
+        let _ = ctx.run(input, |ctx| {
+            action = render_inline_formula_dialog(ctx, &mut state);
+        });
+        assert!(
+            matches!(action,Some(UiAction::CommitInlineFormula(ref latex,_,_,true)) if latex==r"\frac{3}{2}")
+        );
+    }
 }

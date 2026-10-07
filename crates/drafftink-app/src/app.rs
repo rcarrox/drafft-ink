@@ -3720,11 +3720,19 @@ impl ApplicationHandler for App {
                                         let p = editor.cursor_byte_offset();
                                         p..p
                                     });
+                                    let defaults: [&str; 4] = match kind.as_str() {
+                                        "Fraction" => ["1", "2", "", ""],
+                                        "Racine" => ["x", "", "", ""],
+                                        "Racine n-ième" => ["x", "3", "", ""],
+                                        "Somme" | "Produit" => ["i", "i", "1", "n"],
+                                        "Intégrale" => ["x", "x", "0", "1"],
+                                        _ => ["sin(x)/x", "x", "0", ""],
+                                    };
                                     let mut draft = crate::ui::InlineFormulaDraft {
                                         text_id: id,
                                         range: range.clone(),
                                         kind,
-                                        parts: ["x".into(), "2".into(), "0".into(), "1".into()],
+                                        parts: defaults.map(str::to_string),
                                         active_field: 0,
                                         request_focus: true,
                                     };

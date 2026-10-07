@@ -80,7 +80,7 @@ Chrome et Edge recents sont les cibles prioritaires car DrafftInk utilise WebGPU
 
 - champs de raccourcis Settings lisibles : texte noir sur fond blanc ;
 - raccourcis par defaut : D = Draw, M = Math, H = Pan ;
-- ^ fonctionne comme entree d'exposant, y compris avec les touches mortes des claviers francais ;
+- Dans Math, ^ ouvre un exposant ; depuis la 0.8, Text conserve ^ litteralement, touche morte francaise comprise ;
 - raccourcis texte : Ctrl+Fleche haut = exposant, Ctrl+Fleche bas = indice ; Espace ou Fleche droite sort du mode ;
 - exposants et indices texte restent dans le meme objet texte et la meme famille de police ;
 - Properties du texte reste visible pendant l'outil Text mais disparait lors d'un changement d'outil ;

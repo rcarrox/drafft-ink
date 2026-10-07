@@ -41,7 +41,7 @@ impl FontFamily {
             FontFamily::NotoSans => "Noto",
             FontFamily::GelPenSerif => "GelPen Serif",
             FontFamily::VanillaExtract => "Vanilla",
-            FontFamily::XitsMath => "XITS Symbols",
+            FontFamily::XitsMath => "STIX Symbols",
         }
     }
 

@@ -1,12 +1,14 @@
-# Développement cloud à partir de la 0.8
+# Développement cloud — préparation disponible
 
 Le développement, les tests et la fabrication des versions peuvent se faire à distance. L'application finale reste un ZIP exécuté localement dans Chrome/Edge sous Windows. Lire une police installée chez l'utilisateur est une fonction du lanceur local, pas une dépendance du développement.
+
+**Mise à jour du 7 octobre 2026 :** l’utilisateur autorise explicitement la 0.8 en local pour le moment. La suite Chromium/Actions est maintenant implémentée ; lire `CLOUD_STATE.md` et PR #9 pour les validations. Aucun environnement cloud publié n’est présumé.
 
 ## Une configuration initiale dans l'interface
 
 Dans Codex, choisir **Work in > Cloud > Select environment > Create environment**, sélectionner `rcarrox/drafft-ink` et connecter GitHub si demandé. Fournir le bloc de configuration ci-dessous pendant la préparation. Après vérification du rapport, sélectionner **Publish**, puis démarrer une nouvelle tâche avec cet environnement.
 
-Cette création/publication nécessite l'interface du compte ; elle n'a pas été réalisée par la tâche locale actuelle. La tâche Windows existante n'a pas été transférée. Les versions suivantes doivent démarrer dans le nouvel environnement publié.
+Cette création/publication nécessite l'interface du compte ; elle n'a pas été réalisée par la tâche locale actuelle. La tâche Windows existante n'a pas été transférée. Après activation effective du cloud, démarrer les travaux dans le nouvel environnement publié.
 
 [Documentation officielle : Cloud environments](https://learn.chatgpt.com/docs/environments/cloud-environments), consultée le 7 octobre 2026. Les outils interactifs de contrôle navigateur/ordinateur ne sont pas actuellement disponibles dans l'environnement cloud ; les contrôles de navigateur doivent donc devenir des tests programmatiques exécutés en CI, avec captures comme artefacts.
 

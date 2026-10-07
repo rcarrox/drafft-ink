@@ -125,7 +125,7 @@ fs.mkdirSync(evidence, { recursive: true });
     fs.writeFileSync(path.join(evidence,'image-state.json'),JSON.stringify(await imageState(),null,2));
     await imageContext.close();
 
-    fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, scenarios: ['literal caret', 'Unicode expander replacement', 'selected B/I/U', 'nested inline fraction', 'indexed root', 'presentation', 'fullscreen', 'Escape preserves text'] }, null, 2));
+    fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, scenarios: ['French dead caret and accents', 'Unicode expander ^4/^>/^< replacement', 'partial selected B/I/U', 'nested inline fraction', 'indexed root', 'presentation', 'fullscreen', 'Escape preserves text', 'image mirrors, corner rotation, Undo/Redo'] }, null, 2));
     console.log('Chromium interaction checks passed.');
   } catch (error) {
     await page.screenshot({ path: path.join(evidence, 'failure.png') }).catch(() => {});
