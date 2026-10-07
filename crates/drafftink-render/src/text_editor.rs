@@ -986,3 +986,14 @@ pub(crate) fn inline_baseline_shift(line: &parley::layout::Line<'_, Brush>, size
         .unwrap_or(size * 0.27);
     height * 0.5 - axis
 }
+
+/// ReX uses the MATH table axis, which can differ from the equals glyph's ink center.
+pub(crate) fn math_layout_axis(bytes: &[u8], index: u32, size: f32) -> f32 {
+    ttf_parser::Face::parse(bytes, index)
+        .ok()
+        .and_then(|face| {
+            let constants = face.tables().math?.constants?;
+            Some(constants.axis_height().value as f32 * size / face.units_per_em() as f32)
+        })
+        .unwrap_or_else(|| font_math_axis(bytes, index, size))
+}

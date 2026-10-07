@@ -1007,13 +1007,13 @@ impl VelloRenderer {
                             byte,
                             width as f32 + 4.0,
                             2.0 * ((height as f32
-                                - crate::text_editor::font_math_axis(
+                                - crate::text_editor::math_layout_axis(
                                     XITS_MATH,
                                     0,
                                     text.font_size as f32,
                                 ))
                             .max(
-                                crate::text_editor::font_math_axis(
+                                crate::text_editor::math_layout_axis(
                                     XITS_MATH,
                                     0,
                                     text.font_size as f32,
@@ -1052,7 +1052,7 @@ impl VelloRenderer {
                                             inline.x as f64 + 2.0,
                                             inline.y as f64
                                                 + inline.height as f64 * 0.5
-                                                + crate::text_editor::font_math_axis(
+                                                + crate::text_editor::math_layout_axis(
                                                     XITS_MATH,
                                                     0,
                                                     text.font_size as f32,
