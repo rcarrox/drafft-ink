@@ -2968,10 +2968,6 @@ impl ApplicationHandler for App {
                         if let Some(edit_state) = &mut state.text_edit_state {
                             // Capture state before paste
                             let old_text = edit_state.text();
-                            let old_char_count = old_text.chars().count();
-                            let cursor_byte = edit_state.cursor_byte_offset();
-                            let edit_char_pos =
-                                old_text[..cursor_byte.min(old_text.len())].chars().count();
 
                             let (font_cx, layout_cx) = state.shape_renderer.contexts_mut();
                             let _ = edit_state.handle_key(
@@ -5681,6 +5677,29 @@ impl ApplicationHandler for App {
                 state.window.request_redraw();
             }
 
+            WindowEvent::Ime(winit::event::Ime::Commit(value))
+                if state.event_handler.editing_text.is_some() =>
+            {
+                if let (Some(id), Some(editor)) = (
+                    state.event_handler.editing_text,
+                    state.text_edit_state.as_mut(),
+                ) {
+                    let old = editor.text();
+                    let (fonts, layouts) = state.shape_renderer.contexts_mut();
+                    editor.handle_key(
+                        TextKey::Character(value),
+                        TextModifiers::default(),
+                        fonts,
+                        layouts,
+                    );
+                    if let Some(Shape::Text(text)) = state.canvas.document.get_shape_mut(id) {
+                        text.content = editor.text();
+                        text.sync_spans_after_edit(&old);
+                    }
+                }
+                state.needs_redraw = true;
+                state.window.request_redraw();
+            }
             WindowEvent::KeyboardInput { event, .. } => {
                 // Skip canvas processing if egui wants keyboard
                 if egui_wants_input {
@@ -5838,10 +5857,6 @@ impl ApplicationHandler for App {
                             if let Some(edit_state) = &mut state.text_edit_state {
                                 // Capture state before edit for color sync
                                 let old_text = edit_state.text();
-                                let old_char_count = old_text.chars().count();
-                                let cursor_byte = edit_state.cursor_byte_offset();
-                                let edit_char_pos =
-                                    old_text[..cursor_byte.min(old_text.len())].chars().count();
 
                                 let result =
                                     edit_state.handle_key(key, modifiers, font_cx, layout_cx);

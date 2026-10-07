@@ -24,7 +24,16 @@ fs.mkdirSync(evidence, { recursive: true });
     throw new Error('Timed out; state=' + JSON.stringify(await state().catch(() => null)));
   };
   const text = s => s.shapes.find(item => item.shape.Text)?.shape.Text;
-  const keys = async value => { for (const char of value) await page.keyboard.press(char); };
+  const input = await context.newCDPSession(page);
+  const keys = async value => {
+    for (const char of value) {
+      if (char.codePointAt(0) < 128) await page.keyboard.press(char);
+      else {
+        await input.send('Input.dispatchKeyEvent', { type: 'keyDown', key: char, text: char, unmodifiedText: char });
+        await input.send('Input.dispatchKeyEvent', { type: 'keyUp', key: char });
+      }
+    }
+  };
   const control = async name => {
     const s = await wait(s => !!s.controls[name]);
     const [x0, y0, x1, y1] = s.controls[name];
@@ -45,7 +54,7 @@ fs.mkdirSync(evidence, { recursive: true });
     await wait(s => text(s)?.content === '123⁴^^^p≥≤');
     await page.keyboard.press('Control+a');
     await page.keyboard.press('Control+b'); await page.keyboard.press('Control+i'); await page.keyboard.press('Control+u');
-    await wait(s => text(s)?.char_styles.every(style => style.bold && style.italic && style.underline));
+    await wait(s => text(s)?.char_styles.length === Array.from(text(s).content).length && text(s).char_styles.every(style => style.bold && style.italic && style.underline));
     await page.keyboard.press('ArrowRight');
     await control('Fraction'); await fill('Numérateur', '1/2'); await fill('Dénominateur', '3/4'); await control('Insérer');
     await wait(s => text(s)?.formulas.length === 1 && !s.inline_dialog);

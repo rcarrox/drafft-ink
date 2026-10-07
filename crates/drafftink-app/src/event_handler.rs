@@ -5,7 +5,7 @@ use drafftink_core::input::InputState;
 use drafftink_core::selection::{Corner, HandleKind};
 use drafftink_core::selection::{
     HANDLE_HIT_TOLERANCE, ManipulationState, MultiMoveState, apply_image_crop, apply_manipulation,
-    apply_rotation, get_handles, get_manipulation_target_position, hit_test_boundary,
+    apply_rotation_from_drag, get_handles, get_manipulation_target_position, hit_test_boundary,
     hit_test_handles,
 };
 use drafftink_core::shapes::{
@@ -1047,7 +1047,13 @@ impl EventHandler {
 
                 // Apply rotation to the shape
                 if let Some(shape) = canvas.document.get_shape_mut(manip.shape_id) {
-                    let angle = apply_rotation(shape, world_point, snap_to_15deg);
+                    let angle = apply_rotation_from_drag(
+                        shape,
+                        &manip.original_shape,
+                        manip.start_point,
+                        world_point,
+                        snap_to_15deg,
+                    );
 
                     // Update rotation state for helper line rendering
                     self.rotation_state = Some(RotationState {

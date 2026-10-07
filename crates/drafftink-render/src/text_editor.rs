@@ -701,6 +701,12 @@ mod expander_tests {
     #[test]
     fn literal_caret_and_unicode_replacements_do_not_delete_prefix() {
         let mut fonts = FontContext::new();
+        fonts.collection.register_fonts(
+            peniko::Blob::new(std::sync::Arc::new(
+                include_bytes!("../assets/NotoSans-Regular.ttf").as_slice(),
+            )),
+            None,
+        );
         let mut layouts = LayoutContext::new();
         let mut editor = TextEditState::new("123", 20.0);
         editor.handle_key(

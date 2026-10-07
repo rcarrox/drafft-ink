@@ -554,6 +554,28 @@ pub fn apply_rotation(shape: &mut Shape, cursor_point: Point, snap_to_15deg: boo
     angle
 }
 
+/// Rotate relative to the actual press point so any outer corner can start
+/// rotation without jumping to the orientation of the top rotation handle.
+pub fn apply_rotation_from_drag(
+    shape: &mut Shape,
+    original: &Shape,
+    start: Point,
+    cursor: Point,
+    snap: bool,
+) -> f64 {
+    let center = original.bounds().center();
+    let from = start - center;
+    let to = cursor - center;
+    let delta = (from.x * to.y - from.y * to.x).atan2(from.x * to.x + from.y * to.y);
+    let mut angle = original.rotation() + delta;
+    if snap {
+        let step = std::f64::consts::PI / 12.0;
+        angle = (angle / step).round() * step;
+    }
+    shape.set_rotation(angle);
+    angle
+}
+
 /// Reset rotation to a specific angle (0° or 90°).
 pub fn reset_rotation(shape: &mut Shape, angle_degrees: f64) {
     let angle_radians = angle_degrees.to_radians();
