@@ -188,6 +188,10 @@ function inspectCapture(file) {
     await imagePage.waitForFunction(() => window.__drafftinkTestState && JSON.parse(window.__drafftinkTestState).shapes.some(s=>s.shape.Image));
     const imageState=async()=>JSON.parse(await imagePage.evaluate(()=>window.__drafftinkTestState));
     const waitImage=async predicate=> { for(let i=0;i<100;i++){const state=await imageState();if(predicate(state.shapes.find(s=>s.shape.Image)))return state;await imagePage.waitForTimeout(100);}throw new Error('Image transform failed: '+JSON.stringify((await imageState()).shapes.map(s=>({bounds:s.bounds,rotation:s.shape.Image?.rotation,flip_x:s.shape.Image?.flip_x,flip_y:s.shape.Image?.flip_y})))); };
+    const initialImageMemory=(await imageState()).memory;
+    assert(initialImageMemory.image_cache_bytes>0 && initialImageMemory.image_cache_bytes<1200*2000*4/4);
+    const wasmMemory=await imagePage.evaluate(()=>window.drafftinkMemoryUsage());
+    assert(wasmMemory.wasm_bytes>0);
     let item=(await imageState()).shapes.find(s=>s.shape.Image);
     await imagePage.mouse.click((item.bounds[0]+item.bounds[2])/2,(item.bounds[1]+item.bounds[3])/2);
     const handle=item.handles.find(h=>h.kind==='Corner(BottomRight)');
@@ -206,6 +210,24 @@ function inspectCapture(file) {
     await waitImage(s=>Math.abs(s.shape.Image.rotation-Math.PI/2)<0.02);
     await snapshot(imagePage,'image-rotated.png');
     fs.writeFileSync(path.join(evidence,'image-state.json'),JSON.stringify(await imageState(),null,2));
+    const finalImageMemory=(await imageState()).memory;
+    assert(finalImageMemory.image_cache_bytes<=finalImageMemory.image_cache_budget_bytes);
+    assert(finalImageMemory.render_target_allocations<=1,'Screen target must be reused across image manipulations');
+    fs.writeFileSync(path.join(evidence,'memory.json'),JSON.stringify({initial_image:initialImageMemory,after_image_manipulations:finalImageMemory,wasm:wasmMemory,original_rgba_bytes:1200*2000*4},null,2));
+    const imageControl=async name=> {
+      await imagePage.waitForFunction(name=>JSON.parse(window.__drafftinkTestState).controls[name],name);
+      const [x0,y0,x1,y1]=(await imageState()).controls[name];
+      await imagePage.mouse.click((x0+x1)/2,(y0+y1)/2);
+    };
+    await imageControl('New canvas');
+    await imagePage.waitForFunction(()=>JSON.parse(window.__drafftinkTestState).active_tab===1);
+    const emptyTab=await imageState();
+    assert.equal(emptyTab.shapes.length,0);
+    assert.equal(emptyTab.memory.image_cache_bytes,0,'Inactive canvas decoded pixels must be released');
+    await imageControl('Canvas 0');
+    await imagePage.waitForFunction(()=>JSON.parse(window.__drafftinkTestState).active_tab===0);
+    assert((await imageState()).shapes.some(s=>s.shape.Image?.id===imageId));
+    assert.equal((await imageState()).memory.parked_shapes_total,0,'Active document must not be cloned into its tab slot');
     const imagePixels=await exportPixels(imagePage,'image-render-export.png');
     await imageContext.close();
     // Fullscreen is a DOM behavior check. Keep software-GPU readback checks

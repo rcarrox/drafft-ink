@@ -1528,6 +1528,7 @@ fn render_scene_to_png(
 /// Takes references and clones internally to avoid lifetime issues.
 #[cfg(target_arch = "wasm32")]
 pub fn spawn_png_export_async(
+    vello_renderer: &mut vello::Renderer,
     device: &vello::wgpu::Device,
     queue: &vello::wgpu::Queue,
     scene: Scene,
@@ -1546,15 +1547,7 @@ pub fn spawn_png_export_async(
 
     log::info!("Starting async PNG export: {}x{}", width, height);
 
-    // Create a new Vello renderer for the export
-    let mut vello_renderer = match vello::Renderer::new(device, vello::RendererOptions::default()) {
-        Ok(r) => r,
-        Err(e) => {
-            log::error!("Failed to create Vello renderer for export: {:?}", e);
-            return;
-        }
-    };
-
+    // Share the display renderer and scratch buffers; GPU submissions remain ordered.
     // Create offscreen texture for rendering
     let texture = device.create_texture(&vello::wgpu::TextureDescriptor {
         label: Some("png export texture"),
@@ -1687,6 +1680,8 @@ pub fn spawn_png_export_async(
 
         drop(data);
         readback_buffer.unmap();
+        readback_buffer.destroy();
+        drop(readback_buffer);
 
         // Encode to PNG
         let png_data = match encode_png(&rgba_data, width, height, scene_json.as_deref()) {
@@ -1869,6 +1864,8 @@ struct AppState {
 
     // Rendering
     vello_renderer: vello::Renderer,
+    render_target: Option<(u32, u32, vello::wgpu::Texture, vello::wgpu::TextureView)>,
+    render_target_allocations: u64,
     shape_renderer: VelloRenderer,
     /// Texture blitter for RGBA->surface format conversion (needed for WebGPU/WASM)
     texture_blitter: vello::wgpu::util::TextureBlitter,
@@ -2033,24 +2030,26 @@ fn build_library_document(
     Some((name, document))
 }
 
-/// Snapshot the active tab's live document/camera back into `tabs`, so it can
-/// be restored later. Call before changing which tab is active.
+/// Move ownership into the outgoing tab; never deep-clone its Undo/Redo history.
 fn snapshot_active_tab(state: &mut AppState) {
     let active = state.active_tab;
-    state.tabs[active].document = state.canvas.document.clone();
+    state.tabs[active].document = std::mem::take(&mut state.canvas.document);
     state.tabs[active].camera = state.canvas.camera.clone();
 }
 
 /// Load the tab at `index` into the live canvas.
 fn load_tab_into_canvas(state: &mut AppState, index: usize) {
     state.active_tab = index;
-    state.canvas.document = state.tabs[index].document.clone();
+    state.canvas.document = std::mem::take(&mut state.tabs[index].document);
     state.canvas.camera = state.tabs[index].camera.clone();
     state.canvas.clear_selection();
     state.event_handler.editing_text = None;
     state.text_edit_state = None;
     state.ui_state.math_editor = None;
     state.ui_state.math_editor_screen_pos = None;
+    state.ui_state.text_command_editor = None;
+    state.ui_state.inline_formula_draft = None;
+    state.ui_keyboard_pending = false;
     state.needs_redraw = true;
 }
 
@@ -2162,8 +2161,14 @@ impl App {
             .expect("RenderContext not initialized");
         let device = &render_cx.devices[surface.dev_id].device;
 
-        let vello_renderer = vello::Renderer::new(device, RendererOptions::default())
-            .expect("Failed to create Vello renderer");
+        let vello_renderer = vello::Renderer::new(
+            device,
+            RendererOptions {
+                antialiasing_support: vello::AaSupport::area_only(),
+                ..Default::default()
+            },
+        )
+        .expect("Failed to create Vello renderer");
 
         // Create texture blitter for RGBA->surface format conversion
         // This is needed because Vello renders to Rgba8Unorm (for compute shader compatibility)
@@ -2228,6 +2233,8 @@ impl App {
             window: window.clone(),
             surface,
             vello_renderer,
+            render_target: None,
+            render_target_allocations: 0,
             shape_renderer: VelloRenderer::new(),
             texture_blitter,
             egui_ctx,
@@ -4830,7 +4837,14 @@ impl ApplicationHandler for App {
                                             format!("{}.png", state.canvas.document.name);
                                         let scene_json = state.canvas.document.to_json().ok();
                                         spawn_png_export_async(
-                                            device, queue, scene, width, height, filename, false,
+                                            &mut state.vello_renderer,
+                                            device,
+                                            queue,
+                                            scene,
+                                            width,
+                                            height,
+                                            filename,
+                                            false,
                                             scene_json,
                                         );
                                     }
@@ -4886,6 +4900,7 @@ impl ApplicationHandler for App {
                                     #[cfg(target_arch = "wasm32")]
                                     {
                                         spawn_png_export_async(
+                                            &mut state.vello_renderer,
                                             device,
                                             queue,
                                             scene,
@@ -4984,16 +4999,10 @@ impl ApplicationHandler for App {
                         255,
                     ));
 
-                state.shape_renderer.retain_open_document_caches(
-                    std::iter::once(&state.canvas.document).chain(
-                        state
-                            .tabs
-                            .iter()
-                            .enumerate()
-                            .filter(|(index, _)| *index != state.active_tab)
-                            .map(|(_, tab)| &tab.document),
-                    ),
-                );
+                // Inactive canvases keep encoded sources, not decoded images/text/GPU layouts.
+                state
+                    .shape_renderer
+                    .retain_open_document_caches(std::iter::once(&state.canvas.document));
                 state.shape_renderer.build_scene(&render_ctx);
                 #[cfg(target_arch = "wasm32")]
                 if let Some(window) = web_sys::window() {
@@ -5015,7 +5024,7 @@ impl ApplicationHandler for App {
                             serde_json::json!({"id":shape.id(),"shape":shape,"bounds":[top_left.x,top_left.y,bottom_right.x,bottom_right.y],"handles":handles})
                         }).collect();
 
-                        let status = serde_json::json!({"shapes":shapes,"presentation":state.ui_state.presentation_mode,"tool":format!("{:?}",state.ui_state.current_tool),"editing_text":state.event_handler.editing_text,"inline_dialog":state.ui_state.inline_formula_draft.is_some(),"inline_error":state.ui_state.inline_formula_error,"command_editor":state.ui_state.text_command_editor.as_ref().map(|e| &e.source),"controls":state.ui_state.test_controls});
+                        let status = serde_json::json!({"shapes":shapes,"presentation":state.ui_state.presentation_mode,"tool":format!("{:?}",state.ui_state.current_tool),"editing_text":state.event_handler.editing_text,"inline_dialog":state.ui_state.inline_formula_draft.is_some(),"inline_error":state.ui_state.inline_formula_error,"active_tab":state.active_tab,"tabs":state.tabs.len(),"memory":{"parked_shapes_total":state.tabs.iter().map(|tab|tab.document.len()).sum::<usize>(),"image_cache_bytes":state.shape_renderer.image_cache_bytes(),"image_cache_budget_bytes":32*1024*1024,"path_cache_payload_bytes":state.shape_renderer.path_cache_bytes(),"history_payload_bytes":state.canvas.document.history_memory_bytes(),"render_target_allocations":state.render_target_allocations,"render_target_bytes":state.surface.config.width as u64*state.surface.config.height as u64*4},"command_editor":state.ui_state.text_command_editor.as_ref().map(|e| &e.source),"controls":state.ui_state.test_controls});
                         let _ = js_sys::Reflect::set(
                             window.as_ref(),
                             &JsValue::from_str("__drafftinkTestState"),
@@ -5116,25 +5125,37 @@ impl ApplicationHandler for App {
                 // 1. Vello's compute shaders require StorageBinding usage
                 // 2. WebGPU only supports StorageBinding for Rgba8Unorm (not Bgra8Unorm)
                 // 3. We copy to the surface texture afterward (which may be Bgra8Unorm)
-                let render_texture = device.create_texture(&vello::wgpu::TextureDescriptor {
-                    label: Some("vello render texture"),
-                    size: vello::wgpu::Extent3d {
-                        width,
-                        height,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: vello::wgpu::TextureDimension::D2,
-                    format: vello::wgpu::TextureFormat::Rgba8Unorm,
-                    usage: vello::wgpu::TextureUsages::STORAGE_BINDING
-                        | vello::wgpu::TextureUsages::COPY_SRC
-                        | vello::wgpu::TextureUsages::TEXTURE_BINDING,
-                    view_formats: &[],
-                });
+                // Reuse the screen target; create a replacement only when its size changes.
+                if state
+                    .render_target
+                    .as_ref()
+                    .is_none_or(|target| target.0 != width || target.1 != height)
+                {
+                    let render_texture = device.create_texture(&vello::wgpu::TextureDescriptor {
+                        label: Some("vello render texture"),
+                        size: vello::wgpu::Extent3d {
+                            width,
+                            height,
+                            depth_or_array_layers: 1,
+                        },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: vello::wgpu::TextureDimension::D2,
+                        format: vello::wgpu::TextureFormat::Rgba8Unorm,
+                        usage: vello::wgpu::TextureUsages::STORAGE_BINDING
+                            | vello::wgpu::TextureUsages::COPY_SRC
+                            | vello::wgpu::TextureUsages::TEXTURE_BINDING,
+                        view_formats: &[],
+                    });
 
-                let render_texture_view =
-                    render_texture.create_view(&vello::wgpu::TextureViewDescriptor::default());
+                    let render_texture_view =
+                        render_texture.create_view(&vello::wgpu::TextureViewDescriptor::default());
+
+                    state.render_target =
+                        Some((width, height, render_texture, render_texture_view));
+                    state.render_target_allocations += 1;
+                }
+                let render_texture_view = &state.render_target.as_ref().unwrap().3;
 
                 // Render Vello to the intermediate texture
                 if let Err(e) = state.vello_renderer.render_to_texture(
@@ -5147,6 +5168,8 @@ impl ApplicationHandler for App {
                     log::error!("Failed to render: {:?}", e);
                     return;
                 }
+
+                state.shape_renderer.recycle_scene(scene);
 
                 let surface_view = surface_texture
                     .texture
@@ -6171,6 +6194,7 @@ impl ApplicationHandler for App {
                                             #[cfg(target_arch = "wasm32")]
                                             {
                                                 spawn_png_export_async(
+                                                    &mut state.vello_renderer,
                                                     device,
                                                     queue,
                                                     scene,
@@ -6251,8 +6275,15 @@ impl ApplicationHandler for App {
                                                 let scene_json =
                                                     state.canvas.document.to_json().ok();
                                                 spawn_png_export_async(
-                                                    device, queue, scene, width, height, filename,
-                                                    false, scene_json,
+                                                    &mut state.vello_renderer,
+                                                    device,
+                                                    queue,
+                                                    scene,
+                                                    width,
+                                                    height,
+                                                    filename,
+                                                    false,
+                                                    scene_json,
                                                 );
                                             }
                                         } else {
@@ -6362,6 +6393,7 @@ impl ApplicationHandler for App {
                                             #[cfg(target_arch = "wasm32")]
                                             {
                                                 spawn_png_export_async(
+                                                    &mut state.vello_renderer,
                                                     device,
                                                     queue,
                                                     scene,

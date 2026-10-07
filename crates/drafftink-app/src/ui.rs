@@ -856,6 +856,15 @@ fn render_tab_bar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                                 })
                                 .corner_radius(egui::CornerRadius::same(4));
                             let response = ui.add(btn);
+                            ui_state.test_controls.insert(
+                                format!("Canvas {i}"),
+                                [
+                                    response.rect.min.x,
+                                    response.rect.min.y,
+                                    response.rect.max.x,
+                                    response.rect.max.y,
+                                ],
+                            );
                             if response.clicked() {
                                 action = Some(UiAction::SwitchTab(i));
                             }
@@ -901,11 +910,19 @@ fn render_tab_bar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                     )
                     .fill(Color32::TRANSPARENT)
                     .corner_radius(egui::CornerRadius::same(4));
-                    if ui
+                    let response = ui
                         .add(add_canvas)
-                        .on_hover_text("Ajouter un nouveau canvas vide")
-                        .clicked()
-                    {
+                        .on_hover_text("Ajouter un nouveau canvas vide");
+                    ui_state.test_controls.insert(
+                        "New canvas".into(),
+                        [
+                            response.rect.min.x,
+                            response.rect.min.y,
+                            response.rect.max.x,
+                            response.rect.max.y,
+                        ],
+                    );
+                    if response.clicked() {
                         action = Some(UiAction::NewCanvas);
                     }
 

@@ -73,10 +73,12 @@ pub struct VelloRenderer {
     zoom: f64,
     /// Image cache to avoid re-decoding images every frame.
     /// Key is the shape ID (as string), value is the decoded peniko ImageData.
-    image_cache: std::collections::HashMap<u64, peniko::ImageData>,
+    image_cache: std::collections::HashMap<u64, CachedImage>,
+    image_cache_clock: u64,
+    full_resolution_images: bool,
     /// Shape path cache for hand-drawn effects.
     /// Key: (shape_id, seed, stroke_index, roughness_bits, zoom_bucket, path_hash)
-    shape_cache: std::collections::HashMap<(String, u32, u32, u64, i32, u64), BezPath>,
+    shape_cache: std::collections::HashMap<(String, u32, u32, u64, i32, u64), CachedPath>,
     /// Text layout cache. Key: (shape_id, content_hash)
     text_cache: std::collections::HashMap<(drafftink_core::shapes::ShapeId, u64), CachedTextLayout>,
     cache_scope_prepared: bool,
@@ -86,6 +88,52 @@ pub struct VelloRenderer {
     registered_fonts: std::collections::HashMap<String, String>,
     #[cfg(test)]
     math_layout_builds: usize,
+}
+
+const IMAGE_CACHE_BUDGET: usize = 32 * 1024 * 1024;
+const MAX_PREVIEW_SIDE: u32 = 2048;
+const PATH_CACHE_BUDGET: usize = 4 * 1024 * 1024;
+struct CachedPath {
+    path: BezPath,
+    last_used: u64,
+}
+struct CachedImage {
+    image: peniko::ImageData,
+    bucket: u32,
+    last_used: u64,
+}
+impl CachedImage {
+    fn bytes(&self) -> usize {
+        self.image.width as usize * self.image.height as usize * 4
+    }
+}
+fn decode_image_preview(
+    image: &drafftink_core::shapes::Image,
+    max_side: u32,
+) -> Option<peniko::ImageData> {
+    let encoded = image.data()?;
+    let decoded = ::image::load_from_memory(&encoded).ok()?;
+    drop(encoded);
+    // Consume RGBA data instead of cloning a second full-size pixel buffer.
+    let mut rgba = decoded.into_rgba8();
+    let side = rgba.width().max(rgba.height());
+    if max_side != 0 && side > max_side {
+        let width = ((rgba.width() as u64 * max_side as u64) / side as u64).max(1) as u32;
+        let height = ((rgba.height() as u64 * max_side as u64) / side as u64).max(1) as u32;
+        rgba = ::image::imageops::resize(
+            &rgba,
+            width,
+            height,
+            ::image::imageops::FilterType::Triangle,
+        );
+    }
+    Some(peniko::ImageData {
+        width: rgba.width(),
+        height: rgba.height(),
+        data: peniko::Blob::new(std::sync::Arc::new(rgba.into_vec())),
+        format: peniko::ImageFormat::Rgba8,
+        alpha_type: peniko::ImageAlphaType::Alpha,
+    })
 }
 
 struct CachedMath {
@@ -382,6 +430,8 @@ impl VelloRenderer {
             layout_cx: LayoutContext::new(),
             zoom: 1.0,
             image_cache: std::collections::HashMap::new(),
+            image_cache_clock: 0,
+            full_resolution_images: false,
             shape_cache: std::collections::HashMap::new(),
             text_cache: std::collections::HashMap::new(),
             cache_scope_prepared: false,
@@ -433,7 +483,38 @@ impl VelloRenderer {
         self.image_cache.retain(|key, _| live_images.contains(key));
         self.math_cache.retain(|id, _| live_ids.contains(id));
         self.text_cache.retain(|(id, _), _| live_ids.contains(id));
+        self.shape_cache.retain(|key, _| {
+            key.0
+                .parse::<drafftink_core::shapes::ShapeId>()
+                .ok()
+                .is_some_and(|id| live_ids.contains(&id))
+        });
         self.cache_scope_prepared = true;
+    }
+
+    pub fn image_cache_bytes(&self) -> usize {
+        self.image_cache.values().map(CachedImage::bytes).sum()
+    }
+    pub fn path_cache_bytes(&self) -> usize {
+        self.shape_cache
+            .iter()
+            .map(|(key, entry)| {
+                key.0.capacity() + entry.path.elements().len() * std::mem::size_of::<PathEl>()
+            })
+            .sum()
+    }
+    fn trim_image_cache(&mut self) {
+        while self.image_cache_bytes() > IMAGE_CACHE_BUDGET {
+            let Some(key) = self
+                .image_cache
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_used)
+                .map(|(key, _)| *key)
+            else {
+                break;
+            };
+            self.image_cache.remove(&key);
+        }
     }
 
     /// Get the built scene for rendering.
@@ -444,6 +525,11 @@ impl VelloRenderer {
     /// Take ownership of the scene (resets internal scene).
     pub fn take_scene(&mut self) -> Scene {
         std::mem::take(&mut self.scene)
+    }
+
+    pub fn recycle_scene(&mut self, mut scene: Scene) {
+        scene.reset();
+        self.scene = scene;
     }
 
     /// Get mutable references to both font and layout contexts for text editing.
@@ -514,12 +600,14 @@ impl VelloRenderer {
         scale: f64,
     ) -> (Scene, Option<Rect>) {
         self.scene.reset();
+        self.full_resolution_images = true;
         self.zoom = scale;
 
         let bounds = document.bounds();
 
         // If no shapes, return empty scene
         if bounds.is_none() {
+            self.full_resolution_images = false;
             return (std::mem::take(&mut self.scene), None);
         }
 
@@ -554,7 +642,10 @@ impl VelloRenderer {
 
         // Return scaled bounds for texture dimensions
         let scaled_bounds = Rect::new(0.0, 0.0, scaled_width, scaled_height);
-        (std::mem::take(&mut self.scene), Some(scaled_bounds))
+        {
+            self.full_resolution_images = false;
+            (std::mem::take(&mut self.scene), Some(scaled_bounds))
+        }
     }
 
     /// Build a scene for exporting selected shapes only.
@@ -567,9 +658,11 @@ impl VelloRenderer {
         scale: f64,
     ) -> (Scene, Option<Rect>) {
         self.scene.reset();
+        self.full_resolution_images = true;
         self.zoom = scale;
 
         if selection.is_empty() {
+            self.full_resolution_images = false;
             return (std::mem::take(&mut self.scene), None);
         }
 
@@ -592,6 +685,7 @@ impl VelloRenderer {
         }
 
         if shapes_to_render.is_empty() {
+            self.full_resolution_images = false;
             return (std::mem::take(&mut self.scene), None);
         }
 
@@ -626,7 +720,10 @@ impl VelloRenderer {
 
         // Return scaled bounds for texture dimensions
         let scaled_bounds = Rect::new(0.0, 0.0, scaled_width, scaled_height);
-        (std::mem::take(&mut self.scene), Some(scaled_bounds))
+        {
+            self.full_resolution_images = false;
+            (std::mem::take(&mut self.scene), Some(scaled_bounds))
+        }
     }
 
     /// Get or compute a cached hand-drawn path.
@@ -679,26 +776,33 @@ impl VelloRenderer {
             path_hash,
         );
 
-        if let Some(cached) = self.shape_cache.get(&key) {
-            return cached.clone();
+        self.image_cache_clock = self.image_cache_clock.wrapping_add(1);
+        if let Some(cached) = self.shape_cache.get_mut(&key) {
+            cached.last_used = self.image_cache_clock;
+            return cached.path.clone();
         }
 
         let result = apply_hand_drawn_effect(path, roughness, self.zoom, seed, stroke_index);
-        self.shape_cache.insert(key, result.clone());
-        // Evict stale entries to prevent unbounded growth during drags
-        if self.shape_cache.len() > 500 {
-            self.shape_cache.clear();
-            self.shape_cache.insert(
-                (
-                    shape_id.to_string(),
-                    seed,
-                    stroke_index,
-                    roughness_bits,
-                    zoom_bucket,
-                    path_hash,
-                ),
-                result.clone(),
-            );
+        // A stroke needs its current geometry/zoom only, not hundreds of old drag versions.
+        self.shape_cache
+            .retain(|(id, _, stroke, _, _, _), _| id != shape_id || *stroke != stroke_index);
+        self.shape_cache.insert(
+            key,
+            CachedPath {
+                path: result.clone(),
+                last_used: self.image_cache_clock,
+            },
+        );
+        while self.path_cache_bytes() > PATH_CACHE_BUDGET {
+            let Some(oldest) = self
+                .shape_cache
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_used)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            self.shape_cache.remove(&oldest);
         }
         result
     }
@@ -1365,40 +1469,40 @@ impl VelloRenderer {
 
     /// Render an image shape.
     fn render_image(&mut self, image: &drafftink_core::shapes::Image, transform: Affine) {
-        use std::sync::Arc;
-
         let source_key = image.data_base64.key();
-
-        // Check if we have a cached decoded image
-        let image_data = if let Some(cached) = self.image_cache.get(&source_key) {
-            cached.clone()
+        self.image_cache_clock = self.image_cache_clock.wrapping_add(1);
+        let needed = ((image.width * self.zoom / image.crop.width().max(0.001))
+            .max(image.height * self.zoom / image.crop.height().max(0.001)))
+        .ceil();
+        let bucket = (needed.clamp(1.0, MAX_PREVIEW_SIDE as f64) as u32).next_power_of_two();
+        let image_data = if self.full_resolution_images {
+            // Full-quality exports don't replace or retain the display preview.
+            decode_image_preview(image, 0)
+        } else if let Some(cached) = self
+            .image_cache
+            .get_mut(&source_key)
+            .filter(|entry| entry.bucket == bucket)
+        {
+            cached.last_used = self.image_cache_clock;
+            Some(cached.image.clone())
         } else {
-            // Decode the image data
-            if let Some(raw_data) = image.data() {
-                // Try to decode using the image crate
-                if let Ok(decoded) = ::image::load_from_memory(&raw_data) {
-                    let rgba = decoded.to_rgba8();
-                    let (width, height) = rgba.dimensions();
-                    let blob = peniko::Blob::new(Arc::new(rgba.into_vec()));
-                    let img_data = peniko::ImageData {
-                        data: blob,
-                        format: peniko::ImageFormat::Rgba8,
-                        width,
-                        height,
-                        alpha_type: peniko::ImageAlphaType::Alpha,
-                    };
-                    self.image_cache.insert(source_key, img_data.clone());
-                    img_data
-                } else {
-                    // Failed to decode - draw placeholder
-                    self.render_image_placeholder(image, transform);
-                    return;
-                }
-            } else {
-                // No data - draw placeholder
-                self.render_image_placeholder(image, transform);
-                return;
+            let decoded = decode_image_preview(image, bucket);
+            if let Some(data) = &decoded {
+                self.image_cache.insert(
+                    source_key,
+                    CachedImage {
+                        image: data.clone(),
+                        bucket,
+                        last_used: self.image_cache_clock,
+                    },
+                );
+                self.trim_image_cache();
             }
+            decoded
+        };
+        let Some(image_data) = image_data else {
+            self.render_image_placeholder(image, transform);
+            return;
         };
 
         // Calculate the transform to scale and position the image
@@ -3264,5 +3368,95 @@ mod inline_axis_tests {
             }
         }
         assert!(text.bounds().height() >= line.metrics().line_height as f64);
+    }
+}
+
+#[cfg(test)]
+mod memory_budget_tests {
+    use super::*;
+    use drafftink_core::shapes::{Image, ImageFormat};
+    fn fixture_image() -> Image {
+        let raw = ::image::DynamicImage::ImageRgba8(::image::RgbaImage::from_pixel(
+            1200,
+            2000,
+            ::image::Rgba([20, 150, 220, 255]),
+        ));
+        let mut png = std::io::Cursor::new(Vec::new());
+        raw.write_to(&mut png, ::image::ImageFormat::Png).unwrap();
+        Image::new(Point::ZERO, png.get_ref(), 1200, 2000, ImageFormat::Png).with_size(160.0, 120.0)
+    }
+    #[test]
+    fn small_display_uses_small_preview_but_export_retains_original() {
+        let image = fixture_image();
+        let source = image.data_base64.clone();
+        let mut renderer = VelloRenderer::new();
+        renderer.render_image(&image, Affine::IDENTITY);
+        let cached = &renderer.image_cache[&image.data_base64.key()];
+        assert_eq!((cached.image.width, cached.image.height), (153, 256));
+        assert_eq!(renderer.image_cache_bytes(), 156672);
+        let full = decode_image_preview(&image, 0).unwrap();
+        assert_eq!((full.width, full.height), (1200, 2000));
+        let mut document = drafftink_core::canvas::CanvasDocument::new();
+        document.add_shape(Shape::Image(image.clone()));
+        let (scene, bounds) = renderer.build_export_scene(&document, 1.0);
+        assert!(bounds.is_some() && !scene.encoding().is_empty());
+        assert!(!renderer.full_resolution_images);
+        assert_eq!(renderer.image_cache_bytes(), 156672);
+        assert!(source.shares_storage(&image.data_base64));
+        // A zoom increase refreshes the preview without changing source/crop/geometry.
+        renderer.zoom = 10.0;
+        renderer.render_image(&image, Affine::IDENTITY);
+        assert!(renderer.image_cache_bytes() > 156672);
+        assert!(renderer.image_cache_bytes() <= IMAGE_CACHE_BUDGET);
+        assert_eq!(source, image.data_base64);
+    }
+    #[test]
+    fn lru_budget_evicts_oldest_and_switching_canvas_releases_decoded_images() {
+        let mut renderer = VelloRenderer::new();
+        for key in 0..33u64 {
+            renderer.image_cache.insert(
+                key,
+                CachedImage {
+                    image: peniko::ImageData {
+                        data: peniko::Blob::new(std::sync::Arc::new(vec![0u8; 512 * 512 * 4])),
+                        width: 512,
+                        height: 512,
+                        format: peniko::ImageFormat::Rgba8,
+                        alpha_type: peniko::ImageAlphaType::Alpha,
+                    },
+                    bucket: 512,
+                    last_used: key,
+                },
+            );
+        }
+        renderer.trim_image_cache();
+        assert_eq!(renderer.image_cache_bytes(), IMAGE_CACHE_BUDGET);
+        assert!(!renderer.image_cache.contains_key(&0) && renderer.image_cache.contains_key(&32));
+        let empty = drafftink_core::canvas::CanvasDocument::new();
+        renderer.retain_open_document_caches(std::iter::once(&empty));
+        assert_eq!(renderer.image_cache_bytes(), 0);
+    }
+}
+
+#[cfg(test)]
+mod path_cache_memory_tests {
+    use super::*;
+    #[test]
+    fn drags_keep_only_current_stroke_and_deleted_objects_release_paths() {
+        let mut renderer = VelloRenderer::new();
+        let id = drafftink_core::shapes::Rectangle::new(Point::ZERO, 40.0, 20.0)
+            .id()
+            .to_string();
+        for n in 0..600 {
+            let mut path = BezPath::new();
+            path.move_to((n as f64, 0.0));
+            path.line_to((n as f64 + 20.0, 10.0));
+            renderer.get_cached_hand_drawn(&id, &path, 1.0, 42, 0);
+        }
+        assert_eq!(renderer.shape_cache.len(), 1);
+        assert!(renderer.path_cache_bytes() <= PATH_CACHE_BUDGET);
+        let empty = drafftink_core::canvas::CanvasDocument::new();
+        renderer.retain_open_document_caches(std::iter::once(&empty));
+        assert_eq!(renderer.path_cache_bytes(), 0);
     }
 }
