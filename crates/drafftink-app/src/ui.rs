@@ -244,6 +244,14 @@ pub struct PeerInfo {
 }
 
 #[derive(Debug, Clone)]
+pub struct InlineFormulaDraft {
+    pub text_id: drafftink_core::shapes::ShapeId,
+    pub range: std::ops::Range<usize>,
+    pub kind: String,
+    pub parts: [String; 4],
+}
+
+#[derive(Debug, Clone)]
 pub struct MathEditorState {
     pub shape_id: ShapeId,
     pub input: String,
@@ -254,6 +262,9 @@ pub struct MathEditorState {
 
 /// UI state and actions.
 pub struct UiState {
+    pub presentation_mode: bool,
+    pub inline_formula_draft: Option<InlineFormulaDraft>,
+    pub inline_formula_error: String,
     /// Currently selected tool (mirrored from canvas).
     pub current_tool: ToolKind,
     /// Eraser behavior (whole object vs manual stroke trimming).
@@ -375,6 +386,9 @@ impl Default for UiState {
             .unwrap_or_else(|| settings.default_font_postscript.clone());
         Self {
             current_tool: ToolKind::Select,
+            presentation_mode: false,
+            inline_formula_draft: None,
+            inline_formula_error: String::new(),
             eraser_mode: EraserMode::Classic,
             stroke_color: TAILWIND_COLORS[11].shades[6], // Indigo 500
             fill_color: None,
@@ -483,6 +497,9 @@ pub enum UiAction {
     SetDefaultFont(String, String),
     SetLaserColor(Color32),
     ResetFloatingPanels,
+    InsertTextSymbol(String),
+    OpenInlineFormula(String),
+    CommitInlineFormula(String, String, [String; 4]),
     /// Change stroke color.
     SetStrokeColor(Color32),
     /// Change fill color.
@@ -725,6 +742,9 @@ pub fn render_ui(
     ui_state: &mut UiState,
     selected_props: &SelectedShapeProps,
 ) -> Option<UiAction> {
+    if ui_state.presentation_mode {
+        return None;
+    }
     egui_extras::install_image_loaders(ctx);
 
     let toolbar_action = render_toolbar(ctx, ui_state);
@@ -733,6 +753,7 @@ pub fn render_ui(
     let bottom_action = render_bottom_toolbar(ctx, ui_state);
     let right_panel_action = render_right_panel(ctx, ui_state, selected_props);
     let math_action = render_math_editor(ctx, ui_state);
+    let inline_action = render_inline_formula_dialog(ctx, ui_state);
     let settings_action = render_settings_dialog(ctx, ui_state);
     let tab_action = render_tab_bar(ctx, ui_state);
 
@@ -746,6 +767,7 @@ pub fn render_ui(
         .or(bottom_action)
         .or(right_panel_action)
         .or(math_action)
+        .or(inline_action)
         .or(settings_action)
         .or(tab_action)
 }
@@ -1697,6 +1719,40 @@ fn render_right_panel(
 
                     // Text-specific properties
                     if props.is_text {
+                        ui.horizontal_wrapped(|ui| {
+                            for (label, value) in [
+                                ("Σ", "Σ"),
+                                ("∏", "∏"),
+                                ("∫", "∫"),
+                                ("lim", "lim"),
+                                ("≥", "≥"),
+                                ("≤", "≤"),
+                                ("∞", "∞"),
+                            ] {
+                                if ui.button(label).clicked() {
+                                    action = Some(UiAction::InsertTextSymbol(value.into()));
+                                }
+                            }
+                        });
+                        ui.horizontal_wrapped(|ui| {
+                            for label in [
+                                "Fraction",
+                                "Racine",
+                                "Racine n-ième",
+                                "Somme",
+                                "Produit",
+                                "Intégrale",
+                                "Limite",
+                            ] {
+                                if ui.small_button(label).clicked() {
+                                    action = Some(UiAction::OpenInlineFormula(label.into()));
+                                }
+                            }
+                        });
+                        ui.label(
+                            egui::RichText::new("Sélection : Ctrl+B / I / U · Exposant : Ctrl+↑")
+                                .size(10.0),
+                        );
                         // Font Family
                         ui.label(
                             egui::RichText::new("Font Family")
@@ -3817,4 +3873,89 @@ mod floating_panel_regressions {
         });
         assert!(rect.width() < 80.0, "toolbar width {}", rect.width());
     }
+}
+
+fn render_inline_formula_dialog(ctx: &Context, state: &mut UiState) -> Option<UiAction> {
+    let draft = state.inline_formula_draft.as_mut()?;
+    let mut action = None;
+    let mut close = false;
+    egui::Window::new("Insérer dans Text")
+        .collapsible(false)
+        .resizable(false)
+        .default_width(340.0)
+        .show(ctx, |ui| {
+            egui::ComboBox::from_id_salt("inline_formula_kind")
+                .selected_text(&draft.kind)
+                .show_ui(ui, |ui| {
+                    for kind in [
+                        "Fraction",
+                        "Racine",
+                        "Racine n-ième",
+                        "Somme",
+                        "Produit",
+                        "Intégrale",
+                        "Limite",
+                    ] {
+                        ui.selectable_value(&mut draft.kind, kind.to_string(), kind);
+                    }
+                });
+            let labels: &[&str] = match draft.kind.as_str() {
+                "Fraction" => &["Numérateur", "Dénominateur"],
+                "Racine" => &["Expression"],
+                "Racine n-ième" => &["Expression", "Indice de la racine"],
+                "Limite" => &["Expression", "Variable", "Vers"],
+                _ => &[
+                    "Expression",
+                    "Variable",
+                    "Borne inférieure",
+                    "Borne supérieure",
+                ],
+            };
+            for (i, label) in labels.iter().enumerate() {
+                ui.label(*label);
+                ui.add(egui::TextEdit::singleline(&mut draft.parts[i]).desired_width(320.0));
+            }
+            ui.label("Fractions imbriquées : (a/b)/(c/d) · sqrt(x) · x^2");
+            if !state.inline_formula_error.is_empty() {
+                ui.colored_label(Color32::RED, &state.inline_formula_error);
+            }
+            ui.horizontal(|ui| {
+                if ui.button("Insérer / mettre à jour").clicked() {
+                    let parts = draft
+                        .parts
+                        .each_ref()
+                        .map(|p| crate::math_input::friendly_math_to_latex(p));
+                    let latex = match draft.kind.as_str() {
+                        "Fraction" => format!(r"\frac{{{}}}{{{}}}", parts[0], parts[1]),
+                        "Racine" => format!(r"\sqrt{{{}}}", parts[0]),
+                        "Racine n-ième" => format!(r"\sqrt[{}]{{{}}}", parts[1], parts[0]),
+                        "Somme" => format!(
+                            r"\sum_{{{}={}}}^{{{}}} {}",
+                            parts[1], parts[2], parts[3], parts[0]
+                        ),
+                        "Produit" => format!(
+                            r"\prod_{{{}={}}}^{{{}}} {}",
+                            parts[1], parts[2], parts[3], parts[0]
+                        ),
+                        "Intégrale" => format!(
+                            r"\int_{{{}}}^{{{}}} {}\,d{}",
+                            parts[2], parts[3], parts[0], parts[1]
+                        ),
+                        _ => format!(r"\lim_{{{}\to {}}} {}", parts[1], parts[2], parts[0]),
+                    };
+                    action = Some(UiAction::CommitInlineFormula(
+                        latex,
+                        draft.kind.clone(),
+                        draft.parts.clone(),
+                    ));
+                }
+                if ui.button("Fermer").clicked() {
+                    close = true;
+                }
+            });
+        });
+    if close {
+        state.inline_formula_draft = None;
+    }
+    action
 }

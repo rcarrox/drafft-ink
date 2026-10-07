@@ -405,6 +405,11 @@ impl VelloRenderer {
                 Shape::Image(image) => {
                     keys.insert(image.data_base64.key());
                 }
+                Shape::Text(text) => {
+                    for formula in &text.formulas {
+                        ids.insert(formula.math.id());
+                    }
+                }
                 Shape::Group(group) => {
                     for child in group.children() {
                         image_keys(child, keys, ids);
@@ -900,6 +905,88 @@ impl VelloRenderer {
             .fill(Fill::NonZero, transform, color, None, &path);
     }
 
+    fn draw_underlines(&mut self, layout: &parley::Layout<Brush>, transform: Affine) {
+        for line in layout.lines() {
+            for item in line.items() {
+                if let PositionedLayoutItem::GlyphRun(run) = item {
+                    if let Some(decoration) = &run.style().underline {
+                        let thickness = decoration
+                            .size
+                            .unwrap_or((run.run().font_size() / 16.0).max(1.0));
+                        let y = run.baseline()
+                            + decoration.offset.unwrap_or(run.run().font_size() / 10.0);
+                        let width: f32 = run.glyphs().map(|g| g.advance).sum();
+                        self.scene.fill(
+                            Fill::NonZero,
+                            transform,
+                            &decoration.brush,
+                            None,
+                            &Rect::new(
+                                run.offset() as f64,
+                                y as f64,
+                                (run.offset() + width) as f64,
+                                (y + thickness) as f64,
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    fn prepare_inline_formulas(
+        &mut self,
+        text: &drafftink_core::shapes::Text,
+    ) -> Vec<(u64, usize, f32, f32)> {
+        let mut boxes = Vec::new();
+        for (index, formula) in text.formulas.iter().enumerate() {
+            let mut math = formula.math.clone();
+            math.font_size = text.font_size;
+            math.style = text.style.clone();
+            if self.prepare_math(&math) {
+                if let Some((width, height, depth)) = math.cached_size() {
+                    if let Some((byte, '\u{fffc}')) = text.content.char_indices().nth(formula.at) {
+                        boxes.push((
+                            index as u64,
+                            byte,
+                            width as f32 + 4.0,
+                            (height + depth) as f32 + 4.0,
+                        ));
+                    }
+                }
+            }
+        }
+        boxes
+    }
+
+    fn append_inline_formulas(
+        &mut self,
+        text: &drafftink_core::shapes::Text,
+        layout: &parley::Layout<Brush>,
+        transform: Affine,
+    ) {
+        for line in layout.lines() {
+            for item in line.items() {
+                if let PositionedLayoutItem::InlineBox(inline) = item {
+                    if let Some(formula) = text.formulas.get(inline.id as usize) {
+                        if let Some(cached) = self.math_cache.get(&formula.math.id()) {
+                            self.scene.append(
+                                &cached.scene,
+                                Some(
+                                    transform
+                                        * Affine::translate((
+                                            inline.x as f64 + 2.0,
+                                            inline.y as f64 + cached.size.1 + 2.0,
+                                        )),
+                                ),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Render a text shape using Parley for proper text layout.
     fn render_text(&mut self, text: &drafftink_core::shapes::Text, transform: Affine) {
         use parley::StyleProperty;
@@ -926,6 +1013,7 @@ impl VelloRenderer {
 
         use drafftink_core::shapes::{FontFamily, FontWeight};
 
+        let inline = self.prepare_inline_formulas(text);
         // Build cache key from content hash
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         text.content.hash(&mut hasher);
@@ -933,6 +1021,11 @@ impl VelloRenderer {
         text.custom_font.hash(&mut hasher);
         (text.font_weight as u8).hash(&mut hasher);
         text.font_size.to_bits().hash(&mut hasher);
+        for formula in &text.formulas {
+            formula.at.hash(&mut hasher);
+            formula.math.latex.hash(&mut hasher);
+        }
+        text.char_styles.hash(&mut hasher);
         text.char_colors.len().hash(&mut hasher);
         for c in &text.char_colors {
             c.is_some().hash(&mut hasher);
@@ -950,7 +1043,11 @@ impl VelloRenderer {
         let cache_key = (text.id(), hasher.finish());
 
         // Check cache
-        if let Some(cached) = self.text_cache.get(&cache_key) {
+        if let Some(cached) = self
+            .text_cache
+            .get(&cache_key)
+            .filter(|_| text.formulas.is_empty() && text.char_styles.iter().all(|s| !s.underline))
+        {
             text.set_cached_size(cached.width, cached.height);
             let text_transform = transform
                 * Affine::translate((text.position.x, text.position.y))
@@ -1026,6 +1123,15 @@ impl VelloRenderer {
         let mut builder =
             self.layout_cx
                 .ranged_builder(&mut self.font_cx, &text.content, 1.0, false);
+        for &(id, index, width, height) in &inline {
+            builder.push_inline_box(parley::InlineBox {
+                id,
+                index,
+                width,
+                height,
+            });
+            builder.push(StyleProperty::FontSize(0.0), index..index + 3);
+        }
         builder.push_default(StyleProperty::FontSize(font_size));
         builder.push_default(StyleProperty::Brush(brush.clone()));
         builder.push_default(StyleProperty::FontWeight(parley_weight));
@@ -1047,6 +1153,24 @@ impl VelloRenderer {
                     byte_offset..byte_offset + char_len,
                 );
             }
+            if let Some(style) = text.char_styles.get(char_idx) {
+                let range = byte_offset..byte_offset + ch.len_utf8();
+                if style.bold {
+                    builder.push(
+                        parley::StyleProperty::FontWeight(parley::FontWeight::BOLD),
+                        range.clone(),
+                    );
+                }
+                if style.italic {
+                    builder.push(
+                        parley::StyleProperty::FontStyle(parley::FontStyle::Italic),
+                        range.clone(),
+                    );
+                }
+                if style.underline {
+                    builder.push(parley::StyleProperty::Underline(true), range);
+                }
+            }
             byte_offset += ch.len_utf8();
         }
 
@@ -1061,11 +1185,18 @@ impl VelloRenderer {
         let layout_width = layout.width() as f64;
         let layout_height = layout.height() as f64;
         text.set_cached_size(layout_width, layout_height);
+        self.draw_underlines(
+            &layout,
+            transform
+                * Affine::translate((text.position.x, text.position.y))
+                * Affine::scale_non_uniform(text.display_scale[0], text.display_scale[1]),
+        );
 
         let text_transform = transform
             * Affine::translate((text.position.x, text.position.y))
             * Affine::scale_non_uniform(text.display_scale[0], text.display_scale[1]);
 
+        self.append_inline_formulas(text, &layout, text_transform);
         let mut cached_runs = Vec::new();
         let mut glyph_count = 0;
 
@@ -1190,7 +1321,14 @@ impl VelloRenderer {
         let scale_x = bounds.width() / (image.crop.width() * image_data.width as f64);
         let scale_y = bounds.height() / (image.crop.height() * image_data.height as f64);
 
+        let mirror = Affine::translate((bounds.center().x, bounds.center().y))
+            * Affine::scale_non_uniform(
+                if image.flip_x { -1.0 } else { 1.0 },
+                if image.flip_y { -1.0 } else { 1.0 },
+            )
+            * Affine::translate((-bounds.center().x, -bounds.center().y));
         let image_transform = transform
+            * mirror
             * Affine::translate((
                 bounds.x0 - image.crop.x0 * image_data.width as f64 * scale_x,
                 bounds.y0 - image.crop.y0 * image_data.height as f64 * scale_y,
@@ -1243,6 +1381,13 @@ impl VelloRenderer {
             None,
             &rect_path,
         );
+    }
+
+    pub fn formula_is_valid(&mut self, latex: &str) -> bool {
+        self.prepare_math(&drafftink_core::shapes::Math::new(
+            Point::ZERO,
+            latex.to_string(),
+        ))
     }
 
     fn prepare_math(&mut self, math: &drafftink_core::shapes::Math) -> bool {
@@ -1447,10 +1592,20 @@ impl VelloRenderer {
         // Get the current text content from the editor
         let editor_text: String = edit_state.editor().text().to_string();
 
+        let inline = self.prepare_inline_formulas(text);
         // Build a layout with per-character colors (PlainEditor doesn't support ranged styles)
         let mut builder =
             self.layout_cx
                 .ranged_builder(&mut self.font_cx, &editor_text, 1.0, false);
+        for &(id, index, width, height) in &inline {
+            builder.push_inline_box(parley::InlineBox {
+                id,
+                index,
+                width,
+                height,
+            });
+            builder.push(parley::StyleProperty::FontSize(0.0), index..index + 3);
+        }
         builder.push_default(parley::StyleProperty::FontSize(text.font_size as f32));
         builder.push_default(parley::StyleProperty::Brush(brush.clone()));
         builder.push_default(parley::StyleProperty::FontWeight(parley_weight));
@@ -1470,6 +1625,24 @@ impl VelloRenderer {
                     byte_offset..byte_offset + char_len,
                 );
             }
+            if let Some(style) = text.char_styles.get(char_idx) {
+                let range = byte_offset..byte_offset + ch.len_utf8();
+                if style.bold {
+                    builder.push(
+                        parley::StyleProperty::FontWeight(parley::FontWeight::BOLD),
+                        range.clone(),
+                    );
+                }
+                if style.italic {
+                    builder.push(
+                        parley::StyleProperty::FontStyle(parley::FontStyle::Italic),
+                        range.clone(),
+                    );
+                }
+                if style.underline {
+                    builder.push(parley::StyleProperty::Underline(true), range);
+                }
+            }
             byte_offset += ch.len_utf8();
         }
 
@@ -1485,8 +1658,10 @@ impl VelloRenderer {
         let layout = edit_state
             .editor_mut()
             .layout(&mut self.font_cx, &mut self.layout_cx);
-        let layout_width = layout.width() as f64;
-        let layout_height = layout.height() as f64;
+        let _ = layout;
+        let layout_width = styled_layout.width() as f64;
+        let layout_height = styled_layout.height() as f64;
+        edit_state.set_rich_layout(styled_layout.clone());
 
         // Update cached size so bounds() returns correct values
         text.set_cached_size(layout_width, layout_height);
@@ -1528,6 +1703,8 @@ impl VelloRenderer {
         let text_transform = text_transform
             * Affine::scale_non_uniform(text.display_scale[0], text.display_scale[1]);
 
+        self.append_inline_formulas(text, &styled_layout, text_transform);
+        self.draw_underlines(&styled_layout, text_transform);
         // Render glyphs first (text content) - use styled_layout which has color spans
         for line in styled_layout.lines() {
             for item in line.items() {
@@ -1577,7 +1754,7 @@ impl VelloRenderer {
         let selection_color = Color::from_rgba8(70, 130, 180, 128); // STEEL_BLUE-ish
 
         // Draw selection background (now layout is computed)
-        edit_state.editor().selection_geometry_with(|rect, _| {
+        edit_state.selection_geometry_with(|rect, _| {
             self.scene.fill(
                 Fill::NonZero,
                 text_transform,
@@ -1589,7 +1766,7 @@ impl VelloRenderer {
 
         // Draw cursor if visible (now layout is computed)
         if edit_state.is_cursor_visible() {
-            if let Some(cursor) = edit_state.editor().cursor_geometry(1.5) {
+            if let Some(cursor) = edit_state.cursor_geometry(1.5) {
                 // Cursor color (contrasting with text)
                 let cursor_color = Color::from_rgba8(0, 0, 0, 255);
                 self.scene.fill(

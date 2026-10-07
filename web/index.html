@@ -73,9 +73,18 @@
             if ((e.ctrlKey || e.metaKey) && (
                 e.key === 'e' || e.key === 'E' ||
                 e.key === 's' || e.key === 'S' ||
-                e.key === 'g' || e.key === 'G'
+                e.key === 'g' || e.key === 'G' ||
+                ['p', 'b', 'i', 'u'].includes(e.key.toLowerCase())
             )) {
                 e.preventDefault();
+            }
+        });
+
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'F11' && !e.repeat) {
+                e.preventDefault();
+                const task = document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+                task.catch(err => console.warn('Fullscreen unavailable', err));
             }
         });
 

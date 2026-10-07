@@ -162,6 +162,25 @@ impl TextFont {
     }
 }
 
+/// Formatting stored per Unicode scalar, independently of font and color.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct CharacterStyle {
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+}
+
+/// A formula occupies one object-replacement character in the text flow.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InlineFormula {
+    pub at: usize,
+    pub math: super::Math,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub parts: [String; 4],
+}
+
 /// A text shape.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Text {
@@ -191,6 +210,10 @@ pub struct Text {
     /// Per-character colors (one per char, None = use default style color).
     #[serde(default)]
     pub char_colors: Vec<Option<super::SerializableColor>>,
+    #[serde(default)]
+    pub char_styles: Vec<CharacterStyle>,
+    #[serde(default)]
+    pub formulas: Vec<InlineFormula>,
     /// Cached layout size (width, height) computed by the renderer.
     /// This is set after text layout and provides accurate bounds.
     /// Uses RwLock for thread-safe interior mutability.
@@ -214,6 +237,8 @@ impl Clone for Text {
             display_scale: self.display_scale,
             style: self.style.clone(),
             char_colors: self.char_colors.clone(),
+            char_styles: self.char_styles.clone(),
+            formulas: self.formulas.clone(),
             // Clone the cached size value, not the lock
             cached_size: RwLock::new(self.cached_size.read().ok().and_then(|guard| *guard)),
         }
@@ -248,6 +273,8 @@ impl Text {
             display_scale: [1.0, 1.0],
             style: ShapeStyle::default(),
             char_colors: vec![None; char_count],
+            char_styles: Vec::new(),
+            formulas: Vec::new(),
             cached_size: RwLock::new(None),
         }
     }
@@ -281,6 +308,76 @@ impl Text {
         for i in start_char..end_char.min(char_count) {
             self.char_colors[i] = Some(color);
         }
+    }
+
+    /// Synchronize spans using the actual replacement, including deletion before
+    /// the caret and equal-length replacement (external text expanders).
+    pub fn sync_spans_after_edit(&mut self, old: &str) {
+        let before: Vec<char> = old.chars().collect();
+        let after: Vec<char> = self.content.chars().collect();
+        let prefix = before
+            .iter()
+            .zip(&after)
+            .take_while(|(a, b)| a == b)
+            .count();
+        let suffix = before[prefix..]
+            .iter()
+            .rev()
+            .zip(after[prefix..].iter().rev())
+            .take_while(|(a, b)| a == b)
+            .count();
+        if prefix == before.len() && prefix == after.len() {
+            return;
+        }
+        self.char_colors.resize(before.len(), None);
+        self.char_styles
+            .resize(before.len(), CharacterStyle::default());
+        let inherited = self
+            .char_styles
+            .get(prefix.saturating_sub(1))
+            .copied()
+            .unwrap_or_default();
+        let inserted = after.len() - prefix - suffix;
+        self.char_colors.splice(
+            prefix..before.len() - suffix,
+            std::iter::repeat_n(None, inserted),
+        );
+        self.char_styles.splice(
+            prefix..before.len() - suffix,
+            std::iter::repeat_n(inherited, inserted),
+        );
+        self.formulas.retain_mut(|formula| {
+            if formula.at < prefix {
+                return true;
+            }
+            if formula.at < before.len() - suffix {
+                return false;
+            }
+            formula.at = formula.at - (before.len() - prefix - suffix) + inserted;
+            true
+        });
+        self.invalidate_cache();
+    }
+
+    pub fn toggle_format(&mut self, range: std::ops::Range<usize>, kind: char) {
+        self.char_styles
+            .resize(self.content.chars().count(), CharacterStyle::default());
+        let start = self.content[..range.start].chars().count();
+        let end = self.content[..range.end].chars().count();
+        let selected = &mut self.char_styles[start..end];
+        let active = !selected.iter().all(|s| match kind {
+            'b' => s.bold,
+            'i' => s.italic,
+            _ => s.underline,
+        });
+        for style in selected {
+            match kind {
+                'b' => style.bold = active,
+                'i' => style.italic = active,
+                _ => style.underline = active,
+            }
+        }
+        self.invalidate_cache();
     }
 
     /// Sync char_colors with content after text edit.
@@ -349,6 +446,8 @@ impl Text {
             display_scale: [1.0, 1.0],
             style,
             char_colors,
+            char_styles: Vec::new(),
+            formulas: Vec::new(),
             cached_size: RwLock::new(None),
         }
     }
@@ -529,5 +628,35 @@ mod tests {
         let bounds = text.bounds();
         assert!(bounds.width() > 0.0);
         assert!(bounds.height() > 0.0);
+    }
+}
+
+#[cfg(test)]
+mod formatting_tests {
+    use super::*;
+    #[test]
+    fn formatting_tracks_unicode_edits_and_formula_positions() {
+        let mut text = Text::new(Point::ZERO, "éabc\u{fffc}".into());
+        text.toggle_format(2..4, 'b');
+        text.toggle_format(3..4, 'i');
+        text.toggle_format(2..4, 'u');
+        text.formulas.push(InlineFormula {
+            at: 4,
+            math: super::super::Math::new(Point::ZERO, r"\frac{1}{2}".into()),
+            kind: "Fraction".into(),
+            parts: ["1".into(), "2".into(), String::new(), String::new()],
+        });
+        let old = text.content.clone();
+        text.content = "éaxc\u{fffc}".into();
+        text.sync_spans_after_edit(&old);
+        assert!(text.char_styles[1].bold && text.char_styles[2].bold);
+        assert_eq!(text.formulas[0].at, 4);
+        let old = text.content.clone();
+        text.content = "éc\u{fffc}".into();
+        text.sync_spans_after_edit(&old);
+        assert_eq!(text.formulas[0].at, 2);
+        let restored: Text = serde_json::from_str(&serde_json::to_string(&text).unwrap()).unwrap();
+        assert_eq!(restored.char_styles, text.char_styles);
+        assert_eq!(restored.formulas[0].math.latex, r"\frac{1}{2}");
     }
 }

@@ -2611,6 +2611,29 @@ impl ApplicationHandler for App {
         // Process input events through WinitInputHelper
         state.input.process_window_event(&event);
         state.event_handler.text_font = state.ui_state.current_text_font.clone();
+        if let WindowEvent::KeyboardInput { event, .. } = &event {
+            if event.state == ElementState::Pressed && !event.repeat {
+                if state.input.ctrl()
+                    && matches!(&event.logical_key, Key::Character(c) if c.eq_ignore_ascii_case("p"))
+                {
+                    state.ui_state.presentation_mode = !state.ui_state.presentation_mode;
+                    state.needs_redraw = true;
+                    state.window.request_redraw();
+                    return;
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                if matches!(event.logical_key, Key::Named(NamedKey::F11)) {
+                    use winit::window::Fullscreen;
+                    let fullscreen = state
+                        .window
+                        .fullscreen()
+                        .is_none()
+                        .then(|| Fullscreen::Borderless(None));
+                    state.window.set_fullscreen(fullscreen);
+                    return;
+                }
+            }
+        }
 
         if let WindowEvent::KeyboardInput { event, .. } = &event {
             // French layouts expose ^ as a dead key. When the inline math
@@ -2962,7 +2985,7 @@ impl ApplicationHandler for App {
                                 state.canvas.document.get_shape_mut(text_id)
                             {
                                 text.content = new_text;
-                                text.sync_char_colors_after_edit(edit_char_pos, old_char_count);
+                                text.sync_spans_after_edit(&old_text);
                             }
                         }
                     }
@@ -3642,6 +3665,109 @@ impl ApplicationHandler for App {
                                 #[cfg(target_arch = "wasm32")]
                                 if !postscript.is_empty() {
                                     file_ops::load_local_font_async(family, postscript);
+                                }
+                            }
+                            UiAction::InsertTextSymbol(symbol) => {
+                                if let (Some(id), Some(editor)) = (
+                                    state.event_handler.editing_text,
+                                    state.text_edit_state.as_mut(),
+                                ) {
+                                    let old = editor.text();
+                                    let (fonts, layouts) = state.shape_renderer.contexts_mut();
+                                    editor.handle_key(
+                                        TextKey::Character(symbol),
+                                        TextModifiers::default(),
+                                        fonts,
+                                        layouts,
+                                    );
+                                    if let Some(Shape::Text(text)) =
+                                        state.canvas.document.get_shape_mut(id)
+                                    {
+                                        text.content = editor.text();
+                                        text.sync_spans_after_edit(&old);
+                                    }
+                                }
+                            }
+                            UiAction::OpenInlineFormula(kind) => {
+                                if let (Some(id), Some(editor)) = (
+                                    state.event_handler.editing_text,
+                                    state.text_edit_state.as_ref(),
+                                ) {
+                                    let range = editor.selection_range().unwrap_or_else(|| {
+                                        let p = editor.cursor_byte_offset();
+                                        p..p
+                                    });
+                                    let mut draft = crate::ui::InlineFormulaDraft {
+                                        text_id: id,
+                                        range: range.clone(),
+                                        kind,
+                                        parts: ["x".into(), "2".into(), "0".into(), "1".into()],
+                                    };
+                                    if let Some(Shape::Text(text)) =
+                                        state.canvas.document.get_shape(id)
+                                    {
+                                        let at = text.content[..range.start].chars().count();
+                                        if let Some(formula) = text
+                                            .formulas
+                                            .iter()
+                                            .find(|f| f.at == at && range.end > range.start)
+                                        {
+                                            draft.kind = formula.kind.clone();
+                                            draft.parts = formula.parts.clone();
+                                        }
+                                    }
+                                    state.ui_state.inline_formula_error.clear();
+                                    state.ui_state.inline_formula_draft = Some(draft);
+                                }
+                            }
+                            UiAction::CommitInlineFormula(latex, kind, parts) => {
+                                if state.shape_renderer.formula_is_valid(&latex) {
+                                    if let Some(draft) = state.ui_state.inline_formula_draft.take()
+                                    {
+                                        if state.event_handler.editing_text == Some(draft.text_id) {
+                                            if let Some(editor) = state.text_edit_state.as_mut() {
+                                                let old = editor.text();
+                                                let at = old[..draft.range.start].chars().count();
+                                                let (fonts, layouts) =
+                                                    state.shape_renderer.contexts_mut();
+                                                editor.driver(fonts, layouts).select_byte_range(
+                                                    draft.range.start,
+                                                    draft.range.end,
+                                                );
+                                                editor.handle_key(
+                                                    TextKey::Character("\u{fffc}".into()),
+                                                    TextModifiers::default(),
+                                                    fonts,
+                                                    layouts,
+                                                );
+                                                if let Some(Shape::Text(text)) = state
+                                                    .canvas
+                                                    .document
+                                                    .get_shape_mut(draft.text_id)
+                                                {
+                                                    text.content = editor.text();
+                                                    text.sync_spans_after_edit(&old);
+                                                    text.formulas.retain(|f| f.at != at);
+                                                    text.formulas.push(
+                                                        drafftink_core::shapes::InlineFormula {
+                                                            at,
+                                                            math: drafftink_core::shapes::Math::new(
+                                                                Point::ZERO,
+                                                                latex,
+                                                            ),
+                                                            kind,
+                                                            parts,
+                                                        },
+                                                    );
+                                                    text.invalidate_cache();
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    state.ui_state.inline_formula_error =
+                                        "Expression incomplète ou invalide : vérifiez les champs."
+                                            .into();
                                 }
                             }
                             UiAction::SetLaserColor(color) => {
@@ -5550,14 +5676,34 @@ impl ApplicationHandler for App {
                             }
                         }
 
+                        if state.input.ctrl() {
+                            if let Key::Character(c) = &event.logical_key {
+                                let kind = c.to_ascii_lowercase();
+                                if matches!(kind.as_str(), "b" | "i" | "u") {
+                                    if let Some(range) = state
+                                        .text_edit_state
+                                        .as_ref()
+                                        .and_then(|e| e.selection_range())
+                                    {
+                                        if let Some(Shape::Text(text)) =
+                                            state.canvas.document.get_shape_mut(text_id)
+                                        {
+                                            text.toggle_format(range, kind.chars().next().unwrap());
+                                        }
+                                    }
+                                    state.needs_redraw = true;
+                                    state.window.request_redraw();
+                                    return;
+                                }
+                            }
+                        }
+
                         // Script shortcuts are handled before clipboard shortcuts.
-                        // ^ (including the French dead-key form) enters superscript.
+                        // Literal ^ belongs to composition and external expanders.
                         // Ctrl+ArrowUp / Ctrl+Shift+= enters superscript.
                         // Ctrl+ArrowDown / Ctrl+= enters subscript.
                         let has_ctrl = state.input.ctrl();
                         let script_key = match &event.logical_key {
-                            Key::Dead(Some('^')) => Some(TextKey::ToggleSuperscript),
-                            Key::Character(c) if c == "^" => Some(TextKey::ToggleSuperscript),
                             Key::Character(c) if has_ctrl && c == "_" => {
                                 Some(TextKey::ToggleSubscript)
                             }
@@ -5640,7 +5786,13 @@ impl ApplicationHandler for App {
                             Key::Named(NamedKey::Space) => {
                                 Some(TextKey::Character(" ".to_string()))
                             }
-                            Key::Character(c) => Some(TextKey::Character(c.to_string())),
+                            Key::Character(c) => Some(TextKey::Character(
+                                event
+                                    .text
+                                    .as_ref()
+                                    .map(|s| s.to_string())
+                                    .unwrap_or_else(|| c.to_string()),
+                            )),
                             _ => None,
                         });
 
@@ -5679,10 +5831,7 @@ impl ApplicationHandler for App {
                                             state.canvas.document.get_shape_mut(text_id)
                                         {
                                             text.content = new_text;
-                                            text.sync_char_colors_after_edit(
-                                                edit_char_pos,
-                                                old_char_count,
-                                            );
+                                            text.sync_spans_after_edit(&old_text);
                                         }
                                         state.event_handler.exit_text_edit(&mut state.canvas);
                                         state.text_edit_state = None;
@@ -5694,10 +5843,7 @@ impl ApplicationHandler for App {
                                             state.canvas.document.get_shape_mut(text_id)
                                         {
                                             text.content = new_text;
-                                            text.sync_char_colors_after_edit(
-                                                edit_char_pos,
-                                                old_char_count,
-                                            );
+                                            text.sync_spans_after_edit(&old_text);
                                         }
                                     }
                                     TextEditResult::Copy(text_to_copy) => {
@@ -5714,10 +5860,7 @@ impl ApplicationHandler for App {
                                             state.canvas.document.get_shape_mut(text_id)
                                         {
                                             text.content = new_text;
-                                            text.sync_char_colors_after_edit(
-                                                edit_char_pos,
-                                                old_char_count,
-                                            );
+                                            text.sync_spans_after_edit(&old_text);
                                         }
                                     }
                                     TextEditResult::NotHandled => {}

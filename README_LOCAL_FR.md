@@ -1,10 +1,10 @@
-# DrafftInk Local 0.7.0
+# DrafftInk Local 0.8.0
 
 Version personnelle du tableau DrafftInk, sans collaboration reseau.
 
 ## Utilisation sous Windows
 
-Le ZIP **DrafftInk_Windows_Portable_0.7.0.zip** produit par GitHub Actions est deja compile.
+Le ZIP **DrafftInk_Windows_Portable_0.8.0.zip** produit par GitHub Actions est deja compile.
 Il ne faut installer ni Rust, ni wasm-pack, ni Visual Studio.
 
 1. Decompresser le ZIP.
@@ -26,8 +26,8 @@ Workflow : `.github/workflows/build-portable.yml`.
 
 A chaque push sur `main`, deux artefacts sont produits :
 
-- `DrafftInk-Windows-Portable-0.7.0` : version locale Windows precompilee ;
-- `DrafftInk-Web-0.7.0` : fichiers statiques a deposer sur un serveur web.
+- `DrafftInk-Windows-Portable-0.8.0` : version locale Windows precompilee ;
+- `DrafftInk-Web-0.8.0` : fichiers statiques a deposer sur un serveur web.
 
 ## Modifications de cette branche
 
@@ -96,7 +96,7 @@ Chrome et Edge recents sont les cibles prioritaires car DrafftInk utilise WebGPU
 - Images tournees : resize dans le repere local, coin oppose fixe.
 - Ctrl + glisser une poignee d'image : rognage non destructif, y compris apres rotation. Relacher Ctrl et glisser pour redimensionner. Undo/Redo et JSON conservent le rognage et les pixels source.
 
-## Nouveautes 0.7.0
+## Nouveautes 0.8.0
 
 - La police choisie est conservee pour les prochains textes, y compris apres redemarrage. Settings permet de choisir la police par defaut (Google Sans Medium initialement).
 - Le lanceur Windows rend automatiquement disponibles les polices installees sur le PC, via son serveur loopback existant. Settings permet de choisir la police par defaut et d'actualiser la liste. La version web statique utilise Local Font Access si necessaire. Le bouton "Polices installees sur le PC" disparait des Properties Text. Les fontes sont mises en cache uniquement sur le PC, sans redistribution.

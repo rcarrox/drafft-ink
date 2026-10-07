@@ -147,6 +147,7 @@ pub struct TextEditState {
     /// Cached layout height for bounds calculation.
     cached_height: f32,
     script_mode: ScriptMode,
+    rich_layout: Option<parley::Layout<Brush>>,
 }
 
 impl TextEditState {
@@ -173,6 +174,34 @@ impl TextEditState {
             cached_width: 0.0,
             cached_height: 0.0,
             script_mode: ScriptMode::Normal,
+            rich_layout: None,
+        }
+    }
+
+    pub fn set_rich_layout(&mut self, layout: parley::Layout<Brush>) {
+        self.rich_layout = Some(layout);
+    }
+    pub fn selection_geometry_with(&self, f: impl FnMut(parley::BoundingBox, usize)) {
+        if let Some(layout) = &self.rich_layout {
+            self.editor
+                .raw_selection()
+                .refresh(layout)
+                .geometry_with(layout, f);
+        } else {
+            self.editor.selection_geometry_with(f);
+        }
+    }
+    pub fn cursor_geometry(&self, size: f32) -> Option<parley::BoundingBox> {
+        if let Some(layout) = &self.rich_layout {
+            Some(
+                self.editor
+                    .raw_selection()
+                    .focus()
+                    .refresh(layout)
+                    .geometry(layout, size),
+            )
+        } else {
+            self.editor.cursor_geometry(size)
         }
     }
 
@@ -320,6 +349,27 @@ impl TextEditState {
         let action_mod = modifiers.action_mod();
         let shift = modifiers.shift;
 
+        if let Some(layout) = &self.rich_layout {
+            let selection = self.editor.raw_selection().refresh(layout);
+            let next = match key {
+                TextKey::Left if !action_mod => Some(selection.previous_visual(layout, shift)),
+                TextKey::Right if !action_mod && self.script_mode == ScriptMode::Normal => {
+                    Some(selection.next_visual(layout, shift))
+                }
+                TextKey::Up => Some(selection.previous_line(layout, shift)),
+                TextKey::Down => Some(selection.next_line(layout, shift)),
+                TextKey::Home if !action_mod => Some(selection.line_start(layout, shift)),
+                TextKey::End if !action_mod => Some(selection.line_end(layout, shift)),
+                _ => None,
+            };
+            if let Some(next) = next {
+                self.editor
+                    .driver(font_cx, layout_cx)
+                    .select_byte_range(next.anchor().index(), next.focus().index());
+                return TextEditResult::Handled;
+            }
+        }
+        self.rich_layout = None;
         let mut drv = self.editor.driver(font_cx, layout_cx);
 
         match key {
@@ -519,6 +569,20 @@ impl TextEditState {
         self.cursor_reset();
         self.is_dragging = true;
 
+        if let Some(layout) = &self.rich_layout {
+            let next = if shift {
+                self.editor
+                    .raw_selection()
+                    .refresh(layout)
+                    .extend_to_point(layout, local_x, local_y)
+            } else {
+                parley::editing::Selection::from_point(layout, local_x, local_y)
+            };
+            self.editor
+                .driver(font_cx, layout_cx)
+                .select_byte_range(next.anchor().index(), next.focus().index());
+            return;
+        }
         let mut drv = self.editor.driver(font_cx, layout_cx);
         if shift {
             drv.extend_selection_to_point(local_x, local_y);
@@ -540,6 +604,17 @@ impl TextEditState {
         }
 
         self.cursor_reset();
+        if let Some(layout) = &self.rich_layout {
+            let next = self
+                .editor
+                .raw_selection()
+                .refresh(layout)
+                .extend_to_point(layout, local_x, local_y);
+            self.editor
+                .driver(font_cx, layout_cx)
+                .select_byte_range(next.anchor().index(), next.focus().index());
+            return;
+        }
         let mut drv = self.editor.driver(font_cx, layout_cx);
         drv.extend_selection_to_point(local_x, local_y);
     }
@@ -617,5 +692,41 @@ mod escape_regression {
             TextEditResult::ExitEdit
         );
         assert_eq!(editor.text(), "Bonjour monde");
+    }
+}
+
+#[cfg(test)]
+mod expander_tests {
+    use super::*;
+    #[test]
+    fn literal_caret_and_unicode_replacements_do_not_delete_prefix() {
+        let mut fonts = FontContext::new();
+        let mut layouts = LayoutContext::new();
+        let mut editor = TextEditState::new("123", 20.0);
+        editor.handle_key(
+            TextKey::End,
+            TextModifiers::default(),
+            &mut fonts,
+            &mut layouts,
+        );
+        for key in [
+            TextKey::Character("^".into()),
+            TextKey::Character("4".into()),
+            TextKey::Backspace,
+            TextKey::Backspace,
+            TextKey::Character("⁴".into()),
+        ] {
+            editor.handle_key(key, TextModifiers::default(), &mut fonts, &mut layouts);
+        }
+        assert_eq!(editor.text(), "123⁴");
+        for text in ["^^", "^p", "≥", "≤", "^3"] {
+            editor.handle_key(
+                TextKey::Character(text.into()),
+                TextModifiers::default(),
+                &mut fonts,
+                &mut layouts,
+            );
+        }
+        assert_eq!(editor.text(), "123⁴^^^p≥≤^3");
     }
 }

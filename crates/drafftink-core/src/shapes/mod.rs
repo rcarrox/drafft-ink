@@ -18,7 +18,7 @@ pub use image::{Image, ImageFormat};
 pub use line::{Line, PathStyle};
 pub use math::Math;
 pub use rectangle::Rectangle;
-pub use text::{FontFamily, FontWeight, Text, TextFont};
+pub use text::{CharacterStyle, FontFamily, FontWeight, InlineFormula, Text, TextFont};
 
 pub fn unit_display_scale() -> [f64; 2] {
     [1.0, 1.0]
