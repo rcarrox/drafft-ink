@@ -153,6 +153,7 @@ pub struct TextEditState {
     script_mode: ScriptMode,
     rich_layout: Option<parley::Layout<Brush>>,
     pending_dead_caret: bool,
+    font_size: f32,
 }
 
 impl TextEditState {
@@ -168,7 +169,7 @@ impl TextEditState {
         styles.insert(StyleProperty::FontStack(parley::FontStack::List(
             vec![
                 parley::FontFamily::Named("Noto Sans".into()),
-                parley::FontFamily::Named("XITS Math".into()),
+                parley::FontFamily::Named("STIX Two Math".into()),
             ]
             .into(),
         )));
@@ -185,34 +186,86 @@ impl TextEditState {
             script_mode: ScriptMode::Normal,
             rich_layout: None,
             pending_dead_caret: false,
+            font_size,
         }
     }
 
     pub fn set_rich_layout(&mut self, layout: parley::Layout<Brush>) {
         self.rich_layout = Some(layout);
     }
-    pub fn selection_geometry_with(&self, f: impl FnMut(parley::BoundingBox, usize)) {
+    pub fn selection_geometry_with(&self, mut f: impl FnMut(parley::BoundingBox, usize)) {
         if let Some(layout) = &self.rich_layout {
-            self.editor
-                .raw_selection()
-                .refresh(layout)
-                .geometry_with(layout, f);
+            let selection = self.editor.raw_selection().refresh(layout);
+            selection.geometry_with(layout, &mut f);
+            let range = selection.text_range();
+            for (line_index, line) in layout.lines().enumerate() {
+                for item in line.items() {
+                    if let parley::PositionedLayoutItem::InlineBox(b) = item {
+                        if layout.inline_boxes().iter().any(|raw| {
+                            raw.id == b.id && range.start <= raw.index && range.end >= raw.index + 3
+                        }) {
+                            f(
+                                parley::BoundingBox::new(
+                                    b.x as f64,
+                                    b.y as f64,
+                                    (b.x + b.width) as f64,
+                                    (b.y + b.height) as f64,
+                                ),
+                                line_index,
+                            );
+                        }
+                    }
+                }
+            }
         } else {
             self.editor.selection_geometry_with(f);
         }
     }
     pub fn cursor_geometry(&self, size: f32) -> Option<parley::BoundingBox> {
         if let Some(layout) = &self.rich_layout {
-            Some(
-                self.editor
-                    .raw_selection()
-                    .focus()
-                    .refresh(layout)
-                    .geometry(layout, size),
-            )
+            let cursor = self.editor.raw_selection().focus().refresh(layout);
+            for line in layout.lines() {
+                for item in line.items() {
+                    if let parley::PositionedLayoutItem::InlineBox(b) = item {
+                        if layout
+                            .inline_boxes()
+                            .iter()
+                            .any(|raw| raw.id == b.id && raw.index == cursor.index())
+                        {
+                            return Some(parley::BoundingBox::new(
+                                b.x as f64,
+                                b.y as f64,
+                                (b.x + size) as f64,
+                                (b.y + b.height) as f64,
+                            ));
+                        }
+                    }
+                }
+            }
+            let mut rect = cursor.geometry(layout, size);
+            if rect.height() < 1.0 {
+                rect.y0 = rect.y1 - self.font_size as f64 * 1.2;
+            }
+            Some(rect)
         } else {
             self.editor.cursor_geometry(size)
         }
+    }
+
+    fn inline_at(&self, x: f32, y: f32) -> Option<(usize, bool)> {
+        let layout = self.rich_layout.as_ref()?;
+        for line in layout.lines() {
+            for item in line.items() {
+                if let parley::PositionedLayoutItem::InlineBox(b) = item {
+                    if x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height {
+                        if let Some(raw) = layout.inline_boxes().iter().find(|raw| raw.id == b.id) {
+                            return Some((raw.index, x > b.x + b.width / 2.0));
+                        }
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// Get a mutable reference to the PlainEditor.
@@ -252,6 +305,7 @@ impl TextEditState {
 
     /// Set the font size.
     pub fn set_font_size(&mut self, size: f32) {
+        self.font_size = size;
         let styles = self.editor.edit_styles();
         styles.insert(StyleProperty::FontSize(size));
     }
@@ -609,6 +663,19 @@ impl TextEditState {
     ) {
         self.cursor_reset();
         self.is_dragging = true;
+        self.pending_dead_caret = false;
+        if let Some((start, after)) = self.inline_at(local_x, local_y) {
+            let byte = start + if after { 3 } else { 0 };
+            let anchor = if shift {
+                self.editor.raw_selection().anchor().index()
+            } else {
+                byte
+            };
+            self.editor
+                .driver(font_cx, layout_cx)
+                .select_byte_range(anchor, byte);
+            return;
+        }
 
         if let Some(layout) = &self.rich_layout {
             let next = if shift {
@@ -679,6 +746,13 @@ impl TextEditState {
         layout_cx: &mut LayoutContext<Brush>,
     ) {
         self.cursor_reset();
+        self.pending_dead_caret = false;
+        if let Some((start, _)) = self.inline_at(local_x, local_y) {
+            self.editor
+                .driver(font_cx, layout_cx)
+                .select_byte_range(start, start + 3);
+            return;
+        }
         if let Some(layout) = &self.rich_layout {
             let next = parley::editing::Selection::word_from_point(layout, local_x, local_y);
             self.editor

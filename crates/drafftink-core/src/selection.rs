@@ -220,9 +220,7 @@ pub fn hit_test_handles(shape: &Shape, point: Point, tolerance: f64) -> Option<H
             .into_iter()
             .filter(|h| matches!(h.kind, HandleKind::Corner(_)))
         {
-            let c = Affine::rotate_about(-shape.rotation(), bounds.center()) * corner.position;
-            let outward = (local.x - c.x) * (c.x - bounds.center().x) >= 0.0
-                && (local.y - c.y) * (c.y - bounds.center().y) >= 0.0;
+            let outward = !bounds.contains(local);
             if outward && point.distance(corner.position) <= tolerance * 2.75 {
                 return Some(HandleKind::Rotate);
             }

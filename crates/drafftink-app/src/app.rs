@@ -3726,6 +3726,7 @@ impl ApplicationHandler for App {
                                         kind,
                                         parts: ["x".into(), "2".into(), "0".into(), "1".into()],
                                         active_field: 0,
+                                        request_focus: true,
                                     };
                                     if let Some(Shape::Text(text)) =
                                         state.canvas.document.get_shape(id)
@@ -5766,7 +5767,6 @@ impl ApplicationHandler for App {
                                         .as_ref()
                                         .and_then(|e| e.selection_range())
                                     {
-                                        state.canvas.document.push_undo();
                                         state.canvas.document.push_undo();
                                         if let Some(Shape::Text(text)) =
                                             state.canvas.document.get_shape_mut(text_id)

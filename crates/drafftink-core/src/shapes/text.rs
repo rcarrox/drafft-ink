@@ -30,7 +30,7 @@ impl FontFamily {
             FontFamily::NotoSans => "Noto Sans",
             FontFamily::GelPenSerif => "GelPen Serif",
             FontFamily::VanillaExtract => "Vanilla Extract",
-            FontFamily::XitsMath => "XITS Math",
+            FontFamily::XitsMath => "STIX Two Math",
         }
     }
 

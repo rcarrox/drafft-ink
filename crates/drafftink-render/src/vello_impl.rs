@@ -44,7 +44,7 @@ fn text_font_stack(name: &str) -> parley::FontStack<'static> {
         vec![
             parley::FontFamily::Named(name.to_string().into()),
             parley::FontFamily::Named("Noto Sans".into()),
-            parley::FontFamily::Named("XITS Math".into()),
+            parley::FontFamily::Named("STIX Two Math".into()),
         ]
         .into(),
     )
@@ -1061,54 +1061,55 @@ impl VelloRenderer {
         let brush = Brush::Solid(style.stroke_with_opacity());
         let font_size = text.font_size as f32;
 
-        let (font_name, parley_weight, is_italic) =
-            if let Some(custom) = text.custom_font.as_deref() {
-                (
-                    self.font_aliases
-                        .get(custom)
-                        .map(String::as_str)
-                        .unwrap_or("Noto Sans"),
-                    parley::FontWeight::new(text.font_weight.value()),
-                    false,
-                )
-            } else {
-                match (&text.font_family, &text.font_weight) {
-                    (FontFamily::GelPen, FontWeight::Light) => {
-                        ("GelPenLight", parley::FontWeight::NORMAL, false)
-                    }
-                    (FontFamily::GelPen, FontWeight::Regular | FontWeight::Medium) => {
-                        ("GelPen", parley::FontWeight::NORMAL, false)
-                    }
-                    (FontFamily::GelPen, FontWeight::Heavy) => {
-                        ("GelPenHeavy", parley::FontWeight::NORMAL, false)
-                    }
-                    (FontFamily::NotoSans, FontWeight::Light) => {
-                        ("Noto Sans", parley::FontWeight::NORMAL, true)
-                    }
-                    (FontFamily::NotoSans, FontWeight::Medium) => {
-                        ("Noto Sans", parley::FontWeight::new(500.0), false)
-                    }
-                    (FontFamily::NotoSans, FontWeight::Regular) => {
-                        ("Noto Sans", parley::FontWeight::NORMAL, false)
-                    }
-                    (FontFamily::NotoSans, FontWeight::Heavy) => {
-                        ("Noto Sans", parley::FontWeight::BOLD, false)
-                    }
-                    (FontFamily::GelPenSerif, FontWeight::Light) => {
-                        ("GelPenSerifLight", parley::FontWeight::NORMAL, false)
-                    }
-                    (FontFamily::GelPenSerif, FontWeight::Regular | FontWeight::Medium) => {
-                        ("GelPenSerif", parley::FontWeight::NORMAL, false)
-                    }
-                    (FontFamily::GelPenSerif, FontWeight::Heavy) => {
-                        ("GelPenSerifHeavy", parley::FontWeight::NORMAL, false)
-                    }
-                    (FontFamily::VanillaExtract, _) => {
-                        ("Vanilla Extract", parley::FontWeight::NORMAL, false)
-                    }
-                    (FontFamily::XitsMath, _) => ("XITS Math", parley::FontWeight::NORMAL, false),
+        let (font_name, parley_weight, is_italic) = if let Some(custom) =
+            text.custom_font.as_deref()
+        {
+            (
+                self.font_aliases
+                    .get(custom)
+                    .map(String::as_str)
+                    .unwrap_or("Noto Sans"),
+                parley::FontWeight::new(text.font_weight.value()),
+                false,
+            )
+        } else {
+            match (&text.font_family, &text.font_weight) {
+                (FontFamily::GelPen, FontWeight::Light) => {
+                    ("GelPenLight", parley::FontWeight::NORMAL, false)
                 }
-            };
+                (FontFamily::GelPen, FontWeight::Regular | FontWeight::Medium) => {
+                    ("GelPen", parley::FontWeight::NORMAL, false)
+                }
+                (FontFamily::GelPen, FontWeight::Heavy) => {
+                    ("GelPenHeavy", parley::FontWeight::NORMAL, false)
+                }
+                (FontFamily::NotoSans, FontWeight::Light) => {
+                    ("Noto Sans", parley::FontWeight::NORMAL, true)
+                }
+                (FontFamily::NotoSans, FontWeight::Medium) => {
+                    ("Noto Sans", parley::FontWeight::new(500.0), false)
+                }
+                (FontFamily::NotoSans, FontWeight::Regular) => {
+                    ("Noto Sans", parley::FontWeight::NORMAL, false)
+                }
+                (FontFamily::NotoSans, FontWeight::Heavy) => {
+                    ("Noto Sans", parley::FontWeight::BOLD, false)
+                }
+                (FontFamily::GelPenSerif, FontWeight::Light) => {
+                    ("GelPenSerifLight", parley::FontWeight::NORMAL, false)
+                }
+                (FontFamily::GelPenSerif, FontWeight::Regular | FontWeight::Medium) => {
+                    ("GelPenSerif", parley::FontWeight::NORMAL, false)
+                }
+                (FontFamily::GelPenSerif, FontWeight::Heavy) => {
+                    ("GelPenSerifHeavy", parley::FontWeight::NORMAL, false)
+                }
+                (FontFamily::VanillaExtract, _) => {
+                    ("Vanilla Extract", parley::FontWeight::NORMAL, false)
+                }
+                (FontFamily::XitsMath, _) => ("STIX Two Math", parley::FontWeight::NORMAL, false),
+            }
+        };
 
         let mut builder =
             self.layout_cx
@@ -1121,6 +1122,10 @@ impl VelloRenderer {
                 height,
             });
             builder.push(StyleProperty::FontSize(0.0), index..index + 3);
+            builder.push(
+                StyleProperty::LineHeight(parley::LineHeight::Absolute(height + font_size * 0.4)),
+                index..index + 3,
+            );
         }
         builder.push_default(StyleProperty::FontSize(font_size));
         builder.push_default(StyleProperty::Brush(brush.clone()));
@@ -1524,55 +1529,56 @@ impl VelloRenderer {
         // Determine font name and parley weight based on family and weight
         let inline = self.prepare_inline_formulas(text);
         // Use same logic as render_text - all Roboto variants use "Roboto" family with weight
-        let (font_name, parley_weight, is_italic) = if let Some(custom) =
-            text.custom_font.as_deref()
-        {
-            (
-                self.font_aliases
-                    .get(custom)
-                    .map(String::as_str)
-                    .unwrap_or("Noto Sans"),
-                parley::FontWeight::new(text.font_weight.value()),
-                false,
-            )
-        } else {
-            match (&text.font_family, &text.font_weight) {
-                (ShapeFontFamily::GelPen, FontWeight::Light) => {
-                    ("GelPenLight", parley::FontWeight::NORMAL, false)
+        let (font_name, parley_weight, is_italic) =
+            if let Some(custom) = text.custom_font.as_deref() {
+                (
+                    self.font_aliases
+                        .get(custom)
+                        .map(String::as_str)
+                        .unwrap_or("Noto Sans"),
+                    parley::FontWeight::new(text.font_weight.value()),
+                    false,
+                )
+            } else {
+                match (&text.font_family, &text.font_weight) {
+                    (ShapeFontFamily::GelPen, FontWeight::Light) => {
+                        ("GelPenLight", parley::FontWeight::NORMAL, false)
+                    }
+                    (ShapeFontFamily::GelPen, FontWeight::Regular | FontWeight::Medium) => {
+                        ("GelPen", parley::FontWeight::NORMAL, false)
+                    }
+                    (ShapeFontFamily::GelPen, FontWeight::Heavy) => {
+                        ("GelPenHeavy", parley::FontWeight::NORMAL, false)
+                    }
+                    (ShapeFontFamily::NotoSans, FontWeight::Light) => {
+                        ("Noto Sans", parley::FontWeight::NORMAL, true)
+                    }
+                    (ShapeFontFamily::NotoSans, FontWeight::Medium) => {
+                        ("Noto Sans", parley::FontWeight::new(500.0), false)
+                    }
+                    (ShapeFontFamily::NotoSans, FontWeight::Regular) => {
+                        ("Noto Sans", parley::FontWeight::NORMAL, false)
+                    }
+                    (ShapeFontFamily::NotoSans, FontWeight::Heavy) => {
+                        ("Noto Sans", parley::FontWeight::BOLD, false)
+                    }
+                    (ShapeFontFamily::GelPenSerif, FontWeight::Light) => {
+                        ("GelPenSerifLight", parley::FontWeight::NORMAL, false)
+                    }
+                    (ShapeFontFamily::GelPenSerif, FontWeight::Regular | FontWeight::Medium) => {
+                        ("GelPenSerif", parley::FontWeight::NORMAL, false)
+                    }
+                    (ShapeFontFamily::GelPenSerif, FontWeight::Heavy) => {
+                        ("GelPenSerifHeavy", parley::FontWeight::NORMAL, false)
+                    }
+                    (ShapeFontFamily::VanillaExtract, _) => {
+                        ("Vanilla Extract", parley::FontWeight::NORMAL, false)
+                    }
+                    (ShapeFontFamily::XitsMath, _) => {
+                        ("STIX Two Math", parley::FontWeight::NORMAL, false)
+                    }
                 }
-                (ShapeFontFamily::GelPen, FontWeight::Regular | FontWeight::Medium) => {
-                    ("GelPen", parley::FontWeight::NORMAL, false)
-                }
-                (ShapeFontFamily::GelPen, FontWeight::Heavy) => {
-                    ("GelPenHeavy", parley::FontWeight::NORMAL, false)
-                }
-                (ShapeFontFamily::NotoSans, FontWeight::Light) => {
-                    ("Noto Sans", parley::FontWeight::NORMAL, true)
-                }
-                (ShapeFontFamily::NotoSans, FontWeight::Medium) => {
-                    ("Noto Sans", parley::FontWeight::new(500.0), false)
-                }
-                (ShapeFontFamily::NotoSans, FontWeight::Regular) => {
-                    ("Noto Sans", parley::FontWeight::NORMAL, false)
-                }
-                (ShapeFontFamily::NotoSans, FontWeight::Heavy) => {
-                    ("Noto Sans", parley::FontWeight::BOLD, false)
-                }
-                (ShapeFontFamily::GelPenSerif, FontWeight::Light) => {
-                    ("GelPenSerifLight", parley::FontWeight::NORMAL, false)
-                }
-                (ShapeFontFamily::GelPenSerif, FontWeight::Regular | FontWeight::Medium) => {
-                    ("GelPenSerif", parley::FontWeight::NORMAL, false)
-                }
-                (ShapeFontFamily::GelPenSerif, FontWeight::Heavy) => {
-                    ("GelPenSerifHeavy", parley::FontWeight::NORMAL, false)
-                }
-                (ShapeFontFamily::VanillaExtract, _) => {
-                    ("Vanilla Extract", parley::FontWeight::NORMAL, false)
-                }
-                (ShapeFontFamily::XitsMath, _) => ("XITS Math", parley::FontWeight::NORMAL, false),
-            }
-        };
+            };
 
         // Configure the editor styles
         edit_state.set_font_size(text.font_size as f32);
@@ -1604,6 +1610,12 @@ impl VelloRenderer {
                 height,
             });
             builder.push(parley::StyleProperty::FontSize(0.0), index..index + 3);
+            builder.push(
+                parley::StyleProperty::LineHeight(parley::LineHeight::Absolute(
+                    height + text.font_size as f32 * 0.4,
+                )),
+                index..index + 3,
+            );
         }
         builder.push_default(parley::StyleProperty::FontSize(text.font_size as f32));
         builder.push_default(parley::StyleProperty::Brush(brush.clone()));
@@ -3044,6 +3056,14 @@ mod inline_formula_render_tests {
             let mut editor = crate::TextEditState::new(&text.content, text.font_size as f32);
             renderer.render_text_editing(&text, &mut editor, Affine::IDENTITY, None);
             assert!(editor.cursor_geometry(1.5).is_some());
+            let mut only = Text::new(Point::ZERO, "\u{fffc}".into());
+            only.formulas = text.formulas.clone();
+            only.formulas[0].at = 0;
+            renderer.render_text(&only, Affine::IDENTITY);
+            assert!(
+                only.bounds().height() >= inline[0].3 as f64,
+                "formula escaped bounds: {latex}"
+            );
         }
     }
     #[test]

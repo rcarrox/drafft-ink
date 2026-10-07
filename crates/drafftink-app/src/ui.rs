@@ -250,6 +250,7 @@ pub struct InlineFormulaDraft {
     pub kind: String,
     pub parts: [String; 4],
     pub active_field: usize,
+    pub request_focus: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1840,7 +1841,7 @@ fn render_right_panel(
                                     .selectable_label(
                                         props.custom_font.is_none()
                                             && props.font_family == FontFamily::XitsMath,
-                                        "XITS Symbols",
+                                        "STIX Symbols",
                                     )
                                     .clicked()
                                 {
@@ -3940,7 +3941,7 @@ fn render_inline_formula_dialog(ctx: &Context, state: &mut UiState) -> Option<Ui
             for (i, label) in labels.iter().enumerate() {
                 ui.label(*label);
                 let id = egui::Id::new(("inline_formula_part", draft.text_id, i));
-                if finish_requested && draft.active_field == i {
+                if (finish_requested || draft.request_focus) && draft.active_field == i {
                     ui.memory_mut(|m| m.request_focus(id));
                 }
                 let response = ui.add(
@@ -3961,6 +3962,7 @@ fn render_inline_formula_dialog(ctx: &Context, state: &mut UiState) -> Option<Ui
                     ],
                 );
             }
+            draft.request_focus = false;
             ui.label("Fractions imbriquées : (a/b)/(c/d) · sqrt(x) · x^2");
             if !state.inline_formula_error.is_empty() {
                 ui.colored_label(Color32::RED, &state.inline_formula_error);
