@@ -150,7 +150,7 @@ function inspectCapture(file) {
     await keys('a,frac(b,c))');await wait(s=>s.command_editor==='frac(a,frac(b,c))');
     await wait(s=>commandText(s)?.formulas.some(f=>f.math.latex==='\\frac{a}{\\frac{b}{c}}'));
     await snapshot(page,'live-text-command.png');
-    await page.keyboard.press('Enter');await keys(' suite');
+    await page.keyboard.press('Enter');await wait(s=>s.command_editor===null&&!!s.editing_text);await keys(' suite');
     await wait(s=>commandText(s)?.content.endsWith(' suite'));
     await page.keyboard.press('Escape');await wait(s=>s.editing_text===null);
 

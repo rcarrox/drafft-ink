@@ -6944,6 +6944,7 @@ fn open_selected_text_command(state: &mut AppState) -> bool {
         source: formula.math.source.clone(),
         request_focus: true,
     });
+    state.canvas.document.push_undo();
     position_text_command_panel(state, id);
     state.ui_keyboard_pending = true;
     true
