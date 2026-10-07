@@ -550,11 +550,12 @@ impl ShapeTrait for Text {
                 )
             });
         // Position is top-left corner
-        Rect::new(
-            self.position.x,
-            self.position.y,
-            self.position.x + width * self.display_scale[0],
-            self.position.y + height * self.display_scale[1],
+        Rect::from_points(
+            self.position,
+            Point::new(
+                self.position.x + width * self.display_scale[0],
+                self.position.y + height * self.display_scale[1],
+            ),
         )
     }
 
@@ -589,6 +590,10 @@ impl ShapeTrait for Text {
         let c = affine.as_coeffs();
         self.display_scale[0] *= c[0].hypot(c[1]);
         self.display_scale[1] *= c[2].hypot(c[3]);
+        if affine.as_coeffs()[1].abs() < 1e-10 && affine.as_coeffs()[2].abs() < 1e-10 {
+            self.display_scale[0] *= affine.as_coeffs()[0].signum();
+            self.display_scale[1] *= affine.as_coeffs()[3].signum();
+        }
     }
 
     fn clone_box(&self) -> Box<dyn ShapeTrait + Send + Sync> {

@@ -683,20 +683,20 @@ fn apply_box_resize(shape: &mut Shape, kind: HandleKind, delta: kurbo::Vec2, asp
         d.x
     } else {
         0.0
-    })
-    .max(1.0);
+    });
     let mut nh = (h + if top {
         -d.y
     } else if bottom {
         d.y
     } else {
         0.0
-    })
-    .max(1.0);
+    });
+    nw = nw.abs().max(0.001).copysign(nw);
+    nh = nh.abs().max(0.001).copysign(nh);
     if aspect && matches!(kind, HandleKind::Corner(_)) {
-        let scale = (nw / w).max(nh / h);
-        nw = w * scale;
-        nh = h * scale;
+        let scale = (nw.abs() / w).max(nh.abs() / h);
+        nw = (w * scale).copysign(nw);
+        nh = (h * scale).copysign(nh);
     }
     let shift = rotate_delta(
         kurbo::Vec2::new(
@@ -720,20 +720,20 @@ fn apply_box_resize(shape: &mut Shape, kind: HandleKind, delta: kurbo::Vec2, asp
         rotation,
     );
     let center = old.center() + shift;
-    let next = Rect::from_center_size(center, kurbo::Size::new(nw, nh));
-    let scale = Affine::translate((next.x0, next.y0))
+    let next = Rect::from_center_size(center, kurbo::Size::new(nw.abs(), nh.abs()));
+    let scale = Affine::translate((center.x, center.y))
         * Affine::scale_non_uniform(nw / w, nh / h)
-        * Affine::translate((-old.x0, -old.y0));
+        * Affine::translate((-old.center().x, -old.center().y));
     match shape {
         Shape::Rectangle(rect) => {
             rect.position = Point::new(next.x0, next.y0);
-            rect.width = nw;
-            rect.height = nh;
+            rect.width = nw.abs();
+            rect.height = nh.abs();
         }
         Shape::Ellipse(ellipse) => {
             ellipse.center = center;
-            ellipse.radius_x = nw / 2.0;
-            ellipse.radius_y = nh / 2.0;
+            ellipse.radius_x = nw.abs() / 2.0;
+            ellipse.radius_y = nh.abs() / 2.0;
         }
         Shape::Image(image) => {
             image.position = Point::new(next.x0, next.y0);
@@ -753,13 +753,12 @@ fn apply_box_resize(shape: &mut Shape, kind: HandleKind, delta: kurbo::Vec2, asp
         Shape::Text(text) => {
             text.display_scale[0] *= nw / w;
             text.display_scale[1] *= nh / h;
-            text.position = Point::new(next.x0, next.y0);
+            text.position = scale * text.position;
         }
         Shape::Math(math) => {
-            let baseline = (math.position.y - old.y0) * nh / h;
             math.display_scale[0] *= nw / w;
             math.display_scale[1] *= nh / h;
-            math.position = Point::new(next.x0, next.y0 + baseline);
+            math.position = scale * math.position;
         }
         _ => {}
     }
@@ -1166,6 +1165,39 @@ mod edge_handle_regressions {
             shape.set_rotation(angle);
         }
         shapes
+    }
+    #[test]
+    fn all_box_objects_cross_opposite_corner_after_rotation() {
+        for angle in [0.0, 0.7, 1.8] {
+            for shape in shapes(angle) {
+                let old = shape.bounds();
+                let anchor = get_handles(&shape)[0].position;
+                let delta = rotate_delta(
+                    kurbo::Vec2::new(-old.width() * 1.4, -old.height() * 1.5),
+                    angle,
+                );
+                let next = apply_manipulation(
+                    &shape,
+                    Some(HandleKind::Corner(Corner::BottomRight)),
+                    delta,
+                    false,
+                );
+                assert!((next.bounds().width() - old.width() * 0.4).abs() < 1e-8);
+                assert!((next.bounds().height() - old.height() * 0.5).abs() < 1e-8);
+                assert!(get_handles(&next)[3].position.distance(anchor) < 1e-8);
+                match &next {
+                    Shape::Text(t) => assert!(t.display_scale[0] < 0.0 && t.display_scale[1] < 0.0),
+                    Shape::Math(m) => assert!(m.display_scale[0] < 0.0 && m.display_scale[1] < 0.0),
+                    _ => {}
+                }
+                let restored: Shape =
+                    serde_json::from_str(&serde_json::to_string(&next).unwrap()).unwrap();
+                assert_eq!(
+                    serde_json::to_value(next).unwrap(),
+                    serde_json::to_value(restored).unwrap()
+                );
+            }
+        }
     }
     fn edge(shape: &Shape, kind: Edge) -> Point {
         get_handles(shape)

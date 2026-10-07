@@ -74,6 +74,11 @@ fn call_body<'a>(s: &'a str, name: &str) -> Option<&'a str> {
 fn render_call(name: &str, body: &str) -> Option<String> {
     let args = split_top_level_args(body);
     match name {
+        "root" if args.len() == 2 => Some(format!(
+            r"\sqrt[{}]{{{}}}",
+            convert_expr(&args[1]),
+            convert_expr(&args[0])
+        )),
         "sqrt" if args.len() == 1 => Some(format!(r"\sqrt{{{}}}", convert_expr(&args[0]))),
         "vec" | "vector" if args.len() == 1 => Some(format!(r"\vec{{{}}}", convert_expr(&args[0]))),
         "abs" if args.len() == 1 => Some(format!(r"\left|{}\right|", convert_expr(&args[0]))),
@@ -549,7 +554,7 @@ pub fn live_command_latex(source: &str) -> Option<String> {
         "sum" | "prod" | "int" => 4,
         "lim" => 3,
         "sqrt" => 1,
-        "frac" => 2,
+        "frac" | "root" => 2,
         _ => return None,
     };
     let mut completed = source.to_string();

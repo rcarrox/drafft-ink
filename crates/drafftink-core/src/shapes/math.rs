@@ -136,11 +136,15 @@ impl ShapeTrait for Math {
 
         // Bounds are local, as for other shapes. Rotation is applied once by the
         // renderer and handle system, around this rectangle's center.
-        Rect::new(
-            self.position.x,
-            self.position.y - height * self.display_scale[1],
-            self.position.x + width * self.display_scale[0],
-            self.position.y - depth * self.display_scale[1],
+        Rect::from_points(
+            Point::new(
+                self.position.x,
+                self.position.y - height * self.display_scale[1],
+            ),
+            Point::new(
+                self.position.x + width * self.display_scale[0],
+                self.position.y - depth * self.display_scale[1],
+            ),
         )
     }
 
@@ -172,9 +176,13 @@ impl ShapeTrait for Math {
         let coeffs = affine.as_coeffs();
         self.display_scale[0] *= coeffs[0].hypot(coeffs[1]);
         self.display_scale[1] *= coeffs[2].hypot(coeffs[3]);
+        if affine.as_coeffs()[1].abs() < 1e-10 && affine.as_coeffs()[2].abs() < 1e-10 {
+            self.display_scale[0] *= affine.as_coeffs()[0].signum();
+            self.display_scale[1] *= affine.as_coeffs()[3].signum();
+        }
         // Extract rotation from affine
         let rotation = coeffs[1].atan2(coeffs[0]);
-        if rotation.abs() > 0.001 {
+        if rotation.abs() > 0.001 && (coeffs[1].abs() > 1e-10 || coeffs[2].abs() > 1e-10) {
             self.rotation += rotation;
         }
     }

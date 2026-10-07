@@ -53,6 +53,7 @@ fn text_font_stack(name: &str) -> parley::FontStack<'static> {
 /// Cached text layout data for rendering.
 #[derive(Clone)]
 struct CachedTextLayout {
+    layout: parley::Layout<Brush>,
     scene: Scene,
     width: f64,
     height: f64,
@@ -909,7 +910,12 @@ impl VelloRenderer {
             .fill(Fill::NonZero, transform, color, None, &path);
     }
 
-    fn draw_underlines(&mut self, layout: &parley::Layout<Brush>, transform: Affine) {
+    fn draw_underlines(
+        &mut self,
+        layout: &parley::Layout<Brush>,
+        transform: Affine,
+        font_size: f32,
+    ) {
         for line in layout.lines() {
             for item in line.items() {
                 if let PositionedLayoutItem::GlyphRun(run) = item {
@@ -918,6 +924,7 @@ impl VelloRenderer {
                             .size
                             .unwrap_or((run.run().font_size() / 16.0).max(1.0));
                         let y = run.baseline()
+                            - crate::text_editor::inline_baseline_shift(line, font_size)
                             + decoration.offset.unwrap_or(run.run().font_size() / 10.0);
                         let width: f32 = run.glyphs().map(|g| g.advance).sum();
                         self.scene.fill(
@@ -938,6 +945,51 @@ impl VelloRenderer {
         }
     }
 
+    pub fn text_formula_geometry(
+        &self,
+        text: &drafftink_core::shapes::Text,
+        byte: usize,
+    ) -> Option<Rect> {
+        let cached = self
+            .text_cache
+            .iter()
+            .find(|((id, _), _)| *id == text.id())?
+            .1;
+        let id = cached
+            .layout
+            .inline_boxes()
+            .iter()
+            .find(|b| b.index == byte)?
+            .id;
+        for line in cached.layout.lines() {
+            for item in line.items() {
+                if let parley::PositionedLayoutItem::InlineBox(b) = item {
+                    if b.id == id {
+                        return Some(Rect::new(
+                            b.x as f64,
+                            b.y as f64,
+                            (b.x + b.width) as f64,
+                            (b.y + b.height) as f64,
+                        ));
+                    }
+                }
+            }
+        }
+        None
+    }
+    pub fn text_formula_at(
+        &self,
+        text: &drafftink_core::shapes::Text,
+        local: Point,
+    ) -> Option<usize> {
+        text.formulas.iter().find_map(|formula| {
+            let byte = text.content.char_indices().nth(formula.at)?.0;
+            self.text_formula_geometry(text, byte)?
+                .contains(local)
+                .then_some(byte)
+        })
+    }
+
     fn prepare_inline_formulas(
         &mut self,
         text: &drafftink_core::shapes::Text,
@@ -954,11 +1006,29 @@ impl VelloRenderer {
                             index as u64,
                             byte,
                             width as f32 + 4.0,
-                            (height - depth) as f32 + 4.0,
+                            2.0 * ((height as f32
+                                - crate::text_editor::font_math_axis(
+                                    XITS_MATH,
+                                    0,
+                                    text.font_size as f32,
+                                ))
+                            .max(
+                                crate::text_editor::font_math_axis(
+                                    XITS_MATH,
+                                    0,
+                                    text.font_size as f32,
+                                ) - depth as f32,
+                            ))
+                            .max(text.font_size as f32 * 0.8)
+                                + 4.0,
                         ));
                     }
                 }
             }
+        }
+        let height = boxes.iter().map(|b| b.3).fold(0.0f32, f32::max);
+        for b in &mut boxes {
+            b.3 = height;
         }
         boxes
     }
@@ -980,7 +1050,14 @@ impl VelloRenderer {
                                     transform
                                         * Affine::translate((
                                             inline.x as f64 + 2.0,
-                                            inline.y as f64 + cached.size.1 + 2.0,
+                                            inline.y as f64
+                                                + inline.height as f64 * 0.5
+                                                + crate::text_editor::font_math_axis(
+                                                    XITS_MATH,
+                                                    0,
+                                                    text.font_size as f32,
+                                                )
+                                                    as f64,
                                         )),
                                 ),
                             );
@@ -1180,7 +1257,7 @@ impl VelloRenderer {
         text.set_cached_size(layout_width, layout_height);
         let previous_scene = std::mem::take(&mut self.scene);
         let text_transform = Affine::IDENTITY;
-        self.draw_underlines(&layout, text_transform);
+        self.draw_underlines(&layout, text_transform, text.font_size as f32);
         self.append_inline_formulas(text, &layout, text_transform);
         let mut glyph_count = 0;
 
@@ -1190,7 +1267,8 @@ impl VelloRenderer {
                     continue;
                 };
                 let mut x = glyph_run.offset();
-                let y = glyph_run.baseline();
+                let y = glyph_run.baseline()
+                    - crate::text_editor::inline_baseline_shift(line, text.font_size as f32);
                 let run = glyph_run.run();
                 let font = run.font();
                 let run_font_size = run.font_size();
@@ -1259,6 +1337,7 @@ impl VelloRenderer {
         self.text_cache.insert(
             cache_key,
             CachedTextLayout {
+                layout: layout.clone(),
                 scene,
                 width: layout_width,
                 height: layout_height,
@@ -1713,7 +1792,7 @@ impl VelloRenderer {
             * Affine::scale_non_uniform(text.display_scale[0], text.display_scale[1]);
 
         self.append_inline_formulas(text, &styled_layout, text_transform);
-        self.draw_underlines(&styled_layout, text_transform);
+        self.draw_underlines(&styled_layout, text_transform, text.font_size as f32);
         // Render glyphs first (text content) - use styled_layout which has color spans
         for line in styled_layout.lines() {
             for item in line.items() {
@@ -1722,7 +1801,8 @@ impl VelloRenderer {
                 };
                 let glyph_style = glyph_run.style();
                 let mut x = glyph_run.offset();
-                let y = glyph_run.baseline();
+                let y = glyph_run.baseline()
+                    - crate::text_editor::inline_baseline_shift(line, text.font_size as f32);
                 let run = glyph_run.run();
                 let font = run.font();
                 let font_size = run.font_size();
@@ -3129,5 +3209,60 @@ mod symbol_font_tests {
             glyphs.iter().all(|id| *id != 0),
             "missing mathematical glyphs: {glyphs:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod inline_axis_tests {
+    use super::*;
+    use drafftink_core::shapes::{InlineFormula, Math, Text};
+    #[test]
+    fn formula_axes_match_equals_and_stay_in_bounds() {
+        let mut renderer = VelloRenderer::new();
+        let mut text = Text::new(Point::ZERO, "a = \u{fffc} = \u{fffc} z".into());
+        text.formulas = vec![
+            InlineFormula {
+                at: 4,
+                math: Math::new(Point::ZERO, r"\frac{1}{8}".into()),
+                kind: "Code".into(),
+                parts: Default::default(),
+            },
+            InlineFormula {
+                at: 8,
+                math: Math::new(Point::ZERO, r"\int_{1}^{5} x\,dx".into()),
+                kind: "Code".into(),
+                parts: Default::default(),
+            },
+        ];
+        renderer.render_text(&text, Affine::IDENTITY);
+        let layout = &renderer.text_cache.values().next().unwrap().layout;
+        let line = layout.lines().next().unwrap();
+        let shift = crate::text_editor::inline_baseline_shift(line, text.font_size as f32);
+        let axis = line
+            .items()
+            .filter_map(|item| match item {
+                parley::PositionedLayoutItem::InlineBox(b) => Some(b.y + b.height / 2.0),
+                _ => None,
+            })
+            .next()
+            .unwrap();
+        for item in line.items() {
+            match item {
+                parley::PositionedLayoutItem::GlyphRun(g) if g.run().font_size() > 0.0 => {
+                    let font = g.run().font();
+                    let a = crate::text_editor::font_math_axis(
+                        font.data.data(),
+                        font.index,
+                        g.run().font_size(),
+                    );
+                    assert!((g.baseline() - shift - a - axis).abs() < 0.001);
+                }
+                parley::PositionedLayoutItem::InlineBox(b) => {
+                    assert!((b.y + b.height / 2.0 - axis).abs() < 0.001)
+                }
+                _ => {}
+            }
+        }
+        assert!(text.bounds().height() >= line.metrics().line_height as f64);
     }
 }

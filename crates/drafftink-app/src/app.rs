@@ -3298,6 +3298,9 @@ impl ApplicationHandler for App {
                 let mut deferred_action: Option<UiAction> = None;
                 let mut tab_action: Option<UiAction> = None;
                 let mut ui_action_taken = false;
+                if let Some(editor) = state.ui_state.text_command_editor.as_ref() {
+                    position_text_command_panel(state, editor.text_id);
+                }
                 let frame_ctx = state.egui_ctx.clone();
                 let egui_output = frame_ctx.run(egui_input, |ctx| {
                     if let Some(action) = render_ui(ctx, &mut state.ui_state, &selected_props) {
@@ -5047,6 +5050,15 @@ impl ApplicationHandler for App {
                     }
                 }
 
+                if let Some(editor) = state.ui_state.text_command_editor.as_ref() {
+                    let id = editor.text_id;
+                    let previous = state.ui_state.text_command_pos;
+                    position_text_command_panel(state, id);
+                    if previous != state.ui_state.text_command_pos {
+                        state.window.request_redraw();
+                    }
+                }
+
                 // Render remote peer cursors
                 {
                     let camera = &state.canvas.camera;
@@ -5480,6 +5492,7 @@ impl ApplicationHandler for App {
                                         }
                                     }
                                     if state.input.is_double_click() {
+                                        select_formula_at(state, world_point);
                                         open_selected_text_command(state);
                                     }
                                     // Handled click on editing text
@@ -5525,6 +5538,11 @@ impl ApplicationHandler for App {
                                             text.content
                                         );
                                     }
+                                }
+
+                                if state.input.is_double_click() {
+                                    select_formula_at(state, world_point);
+                                    open_selected_text_command(state);
                                 }
 
                                 // Check if we need to open math editor
@@ -6854,12 +6872,39 @@ mod unicode_png_metadata_tests {
 }
 
 fn position_text_command_panel(state: &mut AppState, text_id: drafftink_core::shapes::ShapeId) {
-    if let Some(Shape::Text(text)) = state.canvas.document.get_shape(text_id) {
-        let p = state.canvas.camera.world_to_screen(text.bounds().center());
-        let scale = state.egui_ctx.pixels_per_point() as f64;
-        state.ui_state.text_command_pos =
-            egui::Pos2::new((p.x / scale + 24.0) as f32, (p.y / scale + 36.0) as f32);
-    }
+    let Some(Shape::Text(text)) = state.canvas.document.get_shape(text_id) else {
+        return;
+    };
+    let bounds = state
+        .ui_state
+        .text_command_editor
+        .as_ref()
+        .and_then(|editor| {
+            let formula = text
+                .formulas
+                .iter()
+                .find(|f| f.math.id() == editor.formula_id)?;
+            let byte = text.content.char_indices().nth(formula.at)?.0;
+            state
+                .text_edit_state
+                .as_ref()
+                .and_then(|e| e.formula_bounds(byte))
+                .or_else(|| state.shape_renderer.text_formula_geometry(text, byte))
+        });
+    let world = if let Some(b) = bounds {
+        let transform = kurbo::Affine::rotate_about(text.rotation, text.bounds().center())
+            * kurbo::Affine::translate((text.position.x, text.position.y))
+            * kurbo::Affine::scale_non_uniform(text.display_scale[0], text.display_scale[1]);
+        rect_corners(b).map(|p| transform * p)
+    } else {
+        rect_corners(text.bounds())
+    };
+    let screen = world.map(|p| state.canvas.camera.world_to_screen(p));
+    let scale = state.egui_ctx.pixels_per_point() as f64;
+    let left = screen.iter().map(|p| p.x).fold(f64::INFINITY, f64::min);
+    let bottom = screen.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max);
+    state.ui_state.text_command_pos =
+        egui::Pos2::new((left / scale) as f32, ((bottom + 10.0) / scale) as f32);
 }
 fn activate_text_command(state: &mut AppState) {
     if state.ui_state.text_command_editor.is_some() {
@@ -6931,17 +6976,34 @@ fn open_selected_text_command(state: &mut AppState) -> bool {
     };
     let start = text.content[..range.start].chars().count();
     let end = text.content[..range.end].chars().count();
-    let Some(formula) = text
-        .formulas
-        .iter()
-        .find(|f| f.kind == "Code" && f.at >= start && f.at < end)
-    else {
+    let Some(formula) = text.formulas.iter().find(|f| f.at >= start && f.at < end) else {
         return false;
     };
     state.ui_state.text_command_editor = Some(crate::ui::TextCommandEditor {
         text_id: id,
         formula_id: formula.math.id(),
-        source: formula.math.source.clone(),
+        source: match formula.kind.as_str() {
+            "Fraction" => format!("frac({},{})", formula.parts[0], formula.parts[1]),
+            "Racine" => format!("sqrt({})", formula.parts[0]),
+            "Racine n-ième" => format!("root({},{})", formula.parts[0], formula.parts[1]),
+            "Somme" => format!(
+                "sum({},{},{},{})",
+                formula.parts[0], formula.parts[1], formula.parts[2], formula.parts[3]
+            ),
+            "Produit" => format!(
+                "prod({},{},{},{})",
+                formula.parts[0], formula.parts[1], formula.parts[2], formula.parts[3]
+            ),
+            "Intégrale" => format!(
+                "int({},{},{},{})",
+                formula.parts[0], formula.parts[1], formula.parts[2], formula.parts[3]
+            ),
+            "Limite" => format!(
+                "lim({},{},{})",
+                formula.parts[0], formula.parts[1], formula.parts[2]
+            ),
+            _ => formula.math.source.clone(),
+        },
         request_focus: true,
     });
     state.canvas.document.push_undo();
@@ -6968,6 +7030,7 @@ fn update_text_command(state: &mut AppState, source: String, finished: bool, exi
             }
             formula.math.source = source.clone();
             formula.parts[0] = source;
+            formula.kind = "Code".into();
             text.invalidate_cache();
         }
     }
@@ -6998,4 +7061,33 @@ fn update_text_command(state: &mut AppState, source: String, finished: bool, exi
             state.text_edit_state = None;
         }
     }
+}
+
+fn select_formula_at(state: &mut AppState, world: Point) {
+    let Some(id) = state.event_handler.editing_text else {
+        return;
+    };
+    let Some(Shape::Text(text)) = state.canvas.document.get_shape(id) else {
+        return;
+    };
+    let local = text.editing_local_point(world);
+    let byte = state
+        .text_edit_state
+        .as_ref()
+        .and_then(|edit| edit.formula_byte_at(local.x as f32, local.y as f32))
+        .or_else(|| state.shape_renderer.text_formula_at(text, local));
+    if let (Some(byte), Some(edit)) = (byte, state.text_edit_state.as_mut()) {
+        let (fonts, layouts) = state.shape_renderer.contexts_mut();
+        edit.driver(fonts, layouts)
+            .select_byte_range(byte, byte + 3);
+    }
+}
+
+fn rect_corners(b: kurbo::Rect) -> [Point; 4] {
+    [
+        Point::new(b.x0, b.y0),
+        Point::new(b.x1, b.y0),
+        Point::new(b.x1, b.y1),
+        Point::new(b.x0, b.y1),
+    ]
 }

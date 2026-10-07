@@ -4093,7 +4093,9 @@ fn render_text_command_editor(ctx: &Context, state: &mut UiState) -> Option<UiAc
         .collapsible(false)
         .resizable(false)
         .default_width(340.0)
-        .default_pos(state.text_command_pos)
+        .current_pos(state.text_command_pos)
+        .constrain(false)
+        .movable(false)
         .frame(
             Frame::new()
                 .fill(Color32::from_gray(250))
