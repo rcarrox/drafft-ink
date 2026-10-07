@@ -993,7 +993,20 @@ pub(crate) fn math_layout_axis(bytes: &[u8], index: u32, size: f32) -> f32 {
         .ok()
         .and_then(|face| {
             let constants = face.tables().math?.constants?;
-            Some(constants.axis_height().value as f32 * size / face.units_per_em() as f32)
+            Some(
+                constants.axis_height().value as f32 * size * (96.0 / 72.0)
+                    / face.units_per_em() as f32,
+            )
         })
         .unwrap_or_else(|| font_math_axis(bytes, index, size))
+}
+
+#[cfg(test)]
+mod math_axis_units_test {
+    #[test]
+    fn rex_axis_uses_point_to_pixel_conversion() {
+        let axis = super::math_layout_axis(include_bytes!("../assets/rex-xits.otf"), 0, 20.0);
+        // STIX Two Math: AxisHeight=258, UPM=1000; ReX lays out 20pt at 96px/in.
+        assert!((axis - 6.88).abs() < 0.0001);
+    }
 }
