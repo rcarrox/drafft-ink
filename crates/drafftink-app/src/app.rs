@@ -2753,13 +2753,21 @@ impl ApplicationHandler for App {
         {
             state.ui_keyboard_pending = true;
         }
-        let egui_wants_input = egui_response.consumed
-            || match &event {
-                WindowEvent::KeyboardInput { .. } | WindowEvent::Ime(_) => {
-                    state.ui_keyboard_pending || state.egui_ctx.wants_keyboard_input()
-                }
-                _ => pointer_over_ui || state.egui_ctx.wants_pointer_input(),
-            };
+        let returning_to_text = matches!(
+            &event,
+            WindowEvent::KeyboardInput { .. } | WindowEvent::Ime(_)
+        ) && state.text_edit_state.is_some()
+            && state.ui_state.text_command_editor.is_none()
+            && !state.ui_keyboard_pending
+            && state.egui_ctx.memory(|m| m.focused().is_none());
+        let egui_wants_input = !returning_to_text
+            && (egui_response.consumed
+                || match &event {
+                    WindowEvent::KeyboardInput { .. } | WindowEvent::Ime(_) => {
+                        state.ui_keyboard_pending || state.egui_ctx.wants_keyboard_input()
+                    }
+                    _ => pointer_over_ui || state.egui_ctx.wants_pointer_input(),
+                });
 
         match event {
             WindowEvent::CloseRequested => {
@@ -6963,6 +6971,7 @@ fn update_text_command(state: &mut AppState, source: String, finished: bool, exi
         }
     }
     if finished {
+        state.ui_keyboard_pending = false;
         state.ui_state.text_command_editor = None;
         // Continue after the embedded formula, including when reopening an old block.
         if let Some(Shape::Text(text)) = state.canvas.document.get_shape(editor.text_id) {
