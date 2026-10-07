@@ -6845,7 +6845,7 @@ mod unicode_png_metadata_tests {
     }
 }
 
-fn position_text_command_panel(state: &mut AppState, text_id: ShapeId) {
+fn position_text_command_panel(state: &mut AppState, text_id: drafftink_core::shapes::ShapeId) {
     if let Some(Shape::Text(text)) = state.canvas.document.get_shape(text_id) {
         let p = state.canvas.camera.world_to_screen(text.bounds().center());
         let scale = state.egui_ctx.pixels_per_point() as f64;

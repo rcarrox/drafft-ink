@@ -4112,6 +4112,7 @@ fn render_text_command_editor(ctx: &Context, state: &mut UiState) -> Option<UiAc
                 .id(id)
                 .desired_width(340.0)
                 .show(ui);
+            output.response.request_focus();
             if editor.request_focus {
                 output
                     .state
