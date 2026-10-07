@@ -1861,6 +1861,7 @@ struct AppState {
     egui_state: egui_winit::State,
     egui_renderer: egui_wgpu::Renderer,
     ui_state: UiState,
+    ui_keyboard_pending: bool,
 
     // State
     canvas: Canvas,
@@ -2216,6 +2217,7 @@ impl App {
             egui_state,
             egui_renderer,
             ui_state: UiState::default(),
+            ui_keyboard_pending: false,
             canvas,
             tabs: vec![TabState {
                 name: "Canvas".to_string(),
@@ -2711,10 +2713,32 @@ impl ApplicationHandler for App {
 
         // If egui wants this event exclusively, don't process it for canvas
         // Check both: if egui consumed the event OR if the pointer is over an egui area
+        let pointer = state.input.mouse_position();
+        let scale = state.egui_ctx.pixels_per_point();
+        let pointer_over_ui = state
+            .egui_ctx
+            .layer_id_at(egui::Pos2::new(
+                pointer.x as f32 / scale,
+                pointer.y as f32 / scale,
+            ))
+            .is_some_and(|layer| layer.order != egui::Order::Background);
+        if matches!(
+            event,
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                ..
+            }
+        ) && pointer_over_ui
+        {
+            state.ui_keyboard_pending = true;
+        }
         let egui_wants_input = egui_response.consumed
-            || state.egui_ctx.is_pointer_over_area()
-            || state.egui_ctx.wants_pointer_input()
-            || state.egui_ctx.wants_keyboard_input();
+            || match &event {
+                WindowEvent::KeyboardInput { .. } | WindowEvent::Ime(_) => {
+                    state.ui_keyboard_pending || state.egui_ctx.wants_keyboard_input()
+                }
+                _ => pointer_over_ui || state.egui_ctx.wants_pointer_input(),
+            };
 
         match event {
             WindowEvent::CloseRequested => {
@@ -4646,6 +4670,7 @@ impl ApplicationHandler for App {
                     }
                 });
 
+                state.ui_keyboard_pending = false;
                 state
                     .egui_state
                     .handle_platform_output(&state.window, egui_output.platform_output);

@@ -709,6 +709,12 @@ mod expander_tests {
         );
         let mut layouts = LayoutContext::new();
         let mut editor = TextEditState::new("123", 20.0);
+        editor
+            .editor_mut()
+            .edit_styles()
+            .insert(parley::StyleProperty::FontStack(parley::FontStack::Single(
+                parley::FontFamily::Named("Noto Sans".into()),
+            )));
         editor.handle_key(
             TextKey::End,
             TextModifiers::default(),

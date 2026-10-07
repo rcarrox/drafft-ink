@@ -1077,7 +1077,7 @@ impl VelloRenderer {
                     self.font_aliases
                         .get(custom)
                         .map(String::as_str)
-                        .unwrap_or(custom),
+                        .unwrap_or("Noto Sans"),
                     parley::FontWeight::new(text.font_weight.value()),
                     false,
                 )
@@ -1530,7 +1530,7 @@ impl VelloRenderer {
                 self.font_aliases
                     .get(custom)
                     .map(String::as_str)
-                    .unwrap_or(custom),
+                    .unwrap_or("Noto Sans"),
                 parley::FontWeight::new(text.font_weight.value()),
                 false,
             )
@@ -2987,5 +2987,75 @@ mod cache_regressions {
         let canvas = drafftink_core::Canvas::new();
         renderer.build_scene(&RenderContext::new(&canvas, kurbo::Size::new(800.0, 600.0)));
         assert!(renderer.image_cache.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod inline_formula_render_tests {
+    use super::*;
+    use drafftink_core::shapes::{CharacterStyle, InlineFormula, Math, Text};
+    #[test]
+    fn structured_text_formulas_have_real_layout_and_keep_following_text() {
+        let mut renderer = VelloRenderer::new();
+        let mut text = Text::new(Point::ZERO, "Avant \u{fffc} après".into());
+        text.font_family = drafftink_core::shapes::FontFamily::NotoSans;
+        text.char_styles = vec![
+            CharacterStyle {
+                bold: true,
+                italic: true,
+                underline: true
+            };
+            text.content.chars().count()
+        ];
+        for latex in [
+            r"\frac{\frac{1}{2}}{\frac{3}{4}}",
+            r"\sqrt{x+1}",
+            r"\sqrt[3]{x+1}",
+            r"\sum_{i=1}^{n} i",
+            r"\prod_{i=1}^{n} i",
+            r"\int_{0}^{1} x\,dx",
+            r"\lim_{x\to 0} x",
+        ] {
+            text.formulas = vec![InlineFormula {
+                at: 6,
+                math: Math::new(Point::ZERO, latex.into()),
+                kind: "test".into(),
+                parts: Default::default(),
+            }];
+            assert!(
+                renderer.formula_is_valid(latex),
+                "unsupported formula {latex}"
+            );
+            renderer.render_text(&text, Affine::IDENTITY);
+            let inline = renderer.prepare_inline_formulas(&text);
+            assert_eq!(inline.len(), 1);
+            assert!(inline[0].2 > 0.0 && inline[0].3 > 0.0);
+            let mut editor = crate::TextEditState::new(&text.content, text.font_size as f32);
+            renderer.render_text_editing(&text, &mut editor, Affine::IDENTITY, None);
+            assert!(editor.cursor_geometry(1.5).is_some());
+        }
+    }
+    #[test]
+    fn unavailable_custom_font_still_renders_and_edits() {
+        let mut renderer = VelloRenderer::new();
+        let mut text = Text::new(Point::ZERO, "123^4".into());
+        text.custom_font = Some("Unavailable Private Font".into());
+        renderer.render_text(&text, Affine::IDENTITY);
+        let mut editor = crate::TextEditState::new(&text.content, text.font_size as f32);
+        renderer.render_text_editing(&text, &mut editor, Affine::IDENTITY, None);
+        let (fonts, layouts) = renderer.contexts_mut();
+        editor.handle_key(
+            crate::TextKey::End,
+            crate::TextModifiers::default(),
+            fonts,
+            layouts,
+        );
+        editor.handle_key(
+            crate::TextKey::Backspace,
+            crate::TextModifiers::default(),
+            fonts,
+            layouts,
+        );
+        assert_eq!(editor.text(), "123^");
     }
 }

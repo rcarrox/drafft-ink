@@ -1722,6 +1722,13 @@ fn render_right_panel(
 
                     // Text-specific properties
                     if props.is_text {
+                        let visuals = ui.visuals_mut();
+                        visuals.widgets.inactive.weak_bg_fill = Color32::from_gray(245);
+                        visuals.widgets.inactive.bg_fill = Color32::from_gray(245);
+                        visuals.widgets.inactive.fg_stroke =
+                            Stroke::new(1.0, Color32::from_gray(65));
+                        visuals.widgets.hovered = visuals.widgets.inactive;
+                        visuals.widgets.active = visuals.widgets.inactive;
                         ui.horizontal_wrapped(|ui| {
                             for (label, value) in [
                                 ("Σ", "Σ"),
@@ -3897,6 +3904,8 @@ fn render_inline_formula_dialog(ctx: &Context, state: &mut UiState) -> Option<Ui
         .resizable(false)
         .default_width(340.0)
         .show(ctx, |ui| {
+            *ui.visuals_mut() = egui::Visuals::light();
+            ui.visuals_mut().text_cursor.stroke = Stroke::new(2.0, Color32::BLACK);
             egui::ComboBox::from_id_salt("inline_formula_kind")
                 .selected_text(&draft.kind)
                 .show_ui(ui, |ui| {
