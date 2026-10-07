@@ -235,6 +235,7 @@ jobs:
           work/e2e/node_modules/.bin/playwright install --with-deps chromium
       - name: Exercise real WASM application
         run: |
+          python3 utils/generate_cloud_fixtures.py --out work/e2e/fixtures
           python3 scripts/cloud/preview.py --port 8888 > work/e2e/server.log 2>&1 &
           node utils/test_browser_interactions.cjs
       - name: Upload interaction evidence

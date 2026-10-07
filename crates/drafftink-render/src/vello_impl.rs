@@ -42,14 +42,7 @@ static NOTO_SANS_ITALIC: &[u8] = include_bytes!("../assets/NotoSans-Italic.ttf")
 /// Cached text layout data for rendering.
 #[derive(Clone)]
 struct CachedTextLayout {
-    /// Glyph runs ready for rendering: (font_data, font_size, brush, glyphs, skew_angle)
-    glyph_runs: Vec<(
-        vello::peniko::FontData,
-        f32,
-        Brush,
-        Vec<vello::Glyph>,
-        Option<f64>,
-    )>,
+    scene: Scene,
     width: f64,
     height: f64,
 }
@@ -1043,27 +1036,13 @@ impl VelloRenderer {
         let cache_key = (text.id(), hasher.finish());
 
         // Check cache
-        if let Some(cached) = self
-            .text_cache
-            .get(&cache_key)
-            .filter(|_| text.formulas.is_empty() && text.char_styles.iter().all(|s| !s.underline))
-        {
+        if let Some(cached) = self.text_cache.get(&cache_key) {
             text.set_cached_size(cached.width, cached.height);
             let text_transform = transform
                 * Affine::translate((text.position.x, text.position.y))
                 * Affine::scale_non_uniform(text.display_scale[0], text.display_scale[1]);
 
-            for (font_data, font_size, brush, glyphs, skew) in &cached.glyph_runs {
-                let glyph_xform = skew.map(|angle| Affine::skew(angle, 0.0));
-                self.scene
-                    .draw_glyphs(font_data)
-                    .brush(brush)
-                    .hint(true)
-                    .transform(text_transform)
-                    .glyph_transform(glyph_xform)
-                    .font_size(*font_size)
-                    .draw(Fill::NonZero, glyphs.iter().cloned());
-            }
+            self.scene.append(&cached.scene, Some(text_transform));
             return;
         }
 
@@ -1185,19 +1164,10 @@ impl VelloRenderer {
         let layout_width = layout.width() as f64;
         let layout_height = layout.height() as f64;
         text.set_cached_size(layout_width, layout_height);
-        self.draw_underlines(
-            &layout,
-            transform
-                * Affine::translate((text.position.x, text.position.y))
-                * Affine::scale_non_uniform(text.display_scale[0], text.display_scale[1]),
-        );
-
-        let text_transform = transform
-            * Affine::translate((text.position.x, text.position.y))
-            * Affine::scale_non_uniform(text.display_scale[0], text.display_scale[1]);
-
+        let previous_scene = std::mem::take(&mut self.scene);
+        let text_transform = Affine::IDENTITY;
+        self.draw_underlines(&layout, text_transform);
         self.append_inline_formulas(text, &layout, text_transform);
-        let mut cached_runs = Vec::new();
         let mut glyph_count = 0;
 
         for line in layout.lines() {
@@ -1243,17 +1213,39 @@ impl VelloRenderer {
                         .normalized_coords(run.normalized_coords())
                         .draw(Fill::NonZero, glyphs.iter().cloned());
 
-                    cached_runs.push((font.clone(), run_font_size, run_brush, glyphs, skew_angle));
+                    if synthesis.embolden() {
+                        self.scene
+                            .draw_glyphs(font)
+                            .brush(&run_brush)
+                            .hint(true)
+                            .transform(text_transform)
+                            .glyph_transform(glyph_xform)
+                            .font_size(run_font_size)
+                            .normalized_coords(run.normalized_coords())
+                            .draw(
+                                &Stroke::new(run_font_size as f64 / 24.0),
+                                glyphs.iter().cloned(),
+                            );
+                    }
                 }
             }
         }
 
+        let scene = std::mem::replace(&mut self.scene, previous_scene);
+        self.scene.append(
+            &scene,
+            Some(
+                transform
+                    * Affine::translate((text.position.x, text.position.y))
+                    * Affine::scale_non_uniform(text.display_scale[0], text.display_scale[1]),
+            ),
+        );
         // One layout per text object; old edit versions must not accumulate.
         self.text_cache.retain(|(id, _), _| *id != text.id());
         self.text_cache.insert(
             cache_key,
             CachedTextLayout {
-                glyph_runs: cached_runs,
+                scene,
                 width: layout_width,
                 height: layout_height,
             },
@@ -1745,7 +1737,21 @@ impl VelloRenderer {
                         .glyph_transform(glyph_xform)
                         .font_size(font_size)
                         .normalized_coords(run.normalized_coords())
-                        .draw(Fill::NonZero, glyphs.into_iter());
+                        .draw(Fill::NonZero, glyphs.iter().cloned());
+                    if synthesis.embolden() {
+                        self.scene
+                            .draw_glyphs(font)
+                            .brush(&glyph_style.brush)
+                            .hint(true)
+                            .transform(text_transform)
+                            .glyph_transform(glyph_xform)
+                            .font_size(font_size)
+                            .normalized_coords(run.normalized_coords())
+                            .draw(
+                                &Stroke::new(font_size as f64 / 24.0),
+                                glyphs.iter().cloned(),
+                            );
+                    }
                 }
             }
         }

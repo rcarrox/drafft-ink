@@ -76,10 +76,10 @@ fs.mkdirSync(evidence, { recursive: true });
     await wait(s => !s.editing_text && text(s)?.formulas.length === 2);
     assert(!logs.some(line => line.startsWith('PAGEERROR:')), logs.join('\n'));
     fs.writeFileSync(path.join(evidence, 'state.json'), JSON.stringify(await state(), null, 2));
-    // Separate browser context with a public, deterministic 1x1 PNG fixture.
+    // Separate browser context with a public, deterministic 1200x2000 PNG fixture.
     const imageContext = await browser.newContext({viewport:{width:1280,height:720}});
     const imageId='00000000-0000-4000-8000-000000000001';
-    const image={id:imageId,position:{x:0,y:0},width:160,height:120,source_width:1,source_height:1,format:'Png',data_base64:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j8l0AAAAASUVORK5CYII=',rotation:0,crop:{x0:0,y0:0,x1:1,y1:1},style:{stroke_color:{r:0,g:0,b:0,a:255},stroke_width:2,fill_color:null,opacity:1}};
+    const image={id:imageId,position:{x:200,y:150},width:160,height:120,source_width:1200,source_height:2000,format:'Png',data_base64:fs.readFileSync('work/e2e/fixtures/image-1200x2000.png').toString('base64'),rotation:0,crop:{x0:0,y0:0,x1:1,y1:1},style:{stroke_color:{r:0,g:0,b:0,a:255},stroke_width:2,fill_color:null,opacity:1}};
     // ShapeStyle carries additional defaults, filled from the real Text shape.
     image.style=text(before).style;
     const fixture={id:'image-fixture',name:'Image',shapes:{[imageId]:{Image:image}},z_order:[imageId]};
@@ -88,7 +88,7 @@ fs.mkdirSync(evidence, { recursive: true });
     await imagePage.goto('http://127.0.0.1:8888/?drafftink-test=1');
     await imagePage.waitForFunction(() => window.__drafftinkTestState && JSON.parse(window.__drafftinkTestState).shapes.some(s=>s.shape.Image));
     const imageState=async()=>JSON.parse(await imagePage.evaluate(()=>window.__drafftinkTestState));
-    const waitImage=async predicate=> { for(let i=0;i<100;i++){const state=await imageState();if(predicate(state.shapes.find(s=>s.shape.Image)))return state;await imagePage.waitForTimeout(100);}throw new Error('Image transform failed: '+JSON.stringify(await imageState())); };
+    const waitImage=async predicate=> { for(let i=0;i<100;i++){const state=await imageState();if(predicate(state.shapes.find(s=>s.shape.Image)))return state;await imagePage.waitForTimeout(100);}throw new Error('Image transform failed: '+JSON.stringify((await imageState()).shapes.map(s=>({bounds:s.bounds,rotation:s.shape.Image?.rotation,flip_x:s.shape.Image?.flip_x,flip_y:s.shape.Image?.flip_y})))); };
     let item=(await imageState()).shapes.find(s=>s.shape.Image);
     await imagePage.mouse.click((item.bounds[0]+item.bounds[2])/2,(item.bounds[1]+item.bounds[3])/2);
     const handle=item.handles.find(h=>h.kind==='Corner(BottomRight)');
