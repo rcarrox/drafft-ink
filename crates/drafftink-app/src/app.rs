@@ -849,8 +849,19 @@ pub mod file_ops {
         };
         a.set_href(&url);
         a.set_download(filename);
+        // Keep the Blob URL alive until Chromium has started reading it.
+        // Immediate revocation can cancel the asynchronous download entirely.
+        a.style().set_property("display", "none").ok();
+        if let Some(body) = document.body() {
+            body.append_child(&a).ok();
+        }
         a.click();
-        let _ = web_sys::Url::revoke_object_url(&url);
+        a.remove();
+        let cleanup = wasm_bindgen::closure::Closure::once_into_js(move || {
+            let _ = web_sys::Url::revoke_object_url(&url);
+        });
+        let _ = window
+            .set_timeout_with_callback_and_timeout_and_arguments_0(cleanup.unchecked_ref(), 1000);
     }
 
     fn trigger_file_input_async() {

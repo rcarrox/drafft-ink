@@ -127,9 +127,6 @@ function inspectCapture(file) {
     await snapshot(page,'presentation.png');
     await page.keyboard.press('Control+p'); await wait(s => !s.presentation);
     assert.equal(text(await state()).content, text(before).content);
-    await page.keyboard.press('F11');
-    await page.waitForFunction(() => !!document.fullscreenElement);
-    await page.keyboard.press('F11'); await page.waitForFunction(() => !document.fullscreenElement);
     await page.keyboard.press('Escape');
     await wait(s => !s.editing_text && text(s)?.formulas.length === 2);
     await page.keyboard.press('Control+z');await wait(s=>text(s)?.formulas.length===1);
@@ -171,6 +168,13 @@ function inspectCapture(file) {
     fs.writeFileSync(path.join(evidence,'image-state.json'),JSON.stringify(await imageState(),null,2));
     const imagePixels=await exportPixels(imagePage,'image-render-export.png');
     await imageContext.close();
+    // Fullscreen is a DOM behavior check. Keep software-GPU readback checks
+    // before display-mode transitions in Chromium's headless compositor.
+    await page.bringToFront();
+    await page.keyboard.press('F11');
+    await page.waitForFunction(() => !!document.fullscreenElement);
+    await page.keyboard.press('F11'); await page.waitForFunction(() => !document.fullscreenElement);
+
 
     const captures=['inline-dialog.png','text-fraction.png','text-root.png','presentation.png','image-flipped.png','image-rotated.png'].map(file=>inspectCapture(path.join(evidence,file)));
     fs.writeFileSync(path.join(evidence,'capture-validation.json'),JSON.stringify({screen_captures:captures,gpu_exports:[textPixels,imagePixels]},null,2));
