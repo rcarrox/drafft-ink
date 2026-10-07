@@ -3290,7 +3290,8 @@ impl ApplicationHandler for App {
                 let mut deferred_action: Option<UiAction> = None;
                 let mut tab_action: Option<UiAction> = None;
                 let mut ui_action_taken = false;
-                let egui_output = state.egui_ctx.run(egui_input, |ctx| {
+                let frame_ctx = state.egui_ctx.clone();
+                let egui_output = frame_ctx.run(egui_input, |ctx| {
                     if let Some(action) = render_ui(ctx, &mut state.ui_state, &selected_props) {
                         ui_action_taken = true;
                         match action.clone() {
