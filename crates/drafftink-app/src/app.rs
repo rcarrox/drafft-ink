@@ -1,3 +1,4 @@
+use drafftink_core::shapes::ShapeTrait;
 //! Core application state and lifecycle.
 
 use drafftink_core::canvas::Canvas;
