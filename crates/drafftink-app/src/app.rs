@@ -7007,6 +7007,11 @@ fn open_selected_text_command(state: &mut AppState) -> bool {
         request_focus: true,
     });
     state.canvas.document.push_undo();
+    // The code panel owns focus; don't obscure the live formula with its selection.
+    if let Some(edit) = state.text_edit_state.as_mut() {
+        let (fonts, layouts) = state.shape_renderer.contexts_mut();
+        edit.driver(fonts, layouts).move_to_byte(range.end);
+    }
     position_text_command_panel(state, id);
     state.ui_keyboard_pending = true;
     true
