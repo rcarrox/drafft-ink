@@ -1521,6 +1521,7 @@ impl VelloRenderer {
         let brush = Brush::Solid(style.stroke_with_opacity());
 
         // Determine font name and parley weight based on family and weight
+        let inline = self.prepare_inline_formulas(text);
         // Use same logic as render_text - all Roboto variants use "Roboto" family with weight
         let (font_name, parley_weight, is_italic) = if let Some(custom) =
             text.custom_font.as_deref()
@@ -1592,7 +1593,6 @@ impl VelloRenderer {
         // Get the current text content from the editor
         let editor_text: String = edit_state.editor().text().to_string();
 
-        let inline = self.prepare_inline_formulas(text);
         // Build a layout with per-character colors (PlainEditor doesn't support ranged styles)
         let mut builder =
             self.layout_cx

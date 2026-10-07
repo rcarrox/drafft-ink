@@ -4922,6 +4922,34 @@ impl ApplicationHandler for App {
                     ),
                 );
                 state.shape_renderer.build_scene(&render_ctx);
+                #[cfg(target_arch = "wasm32")]
+                if let Some(window) = web_sys::window() {
+                    use wasm_bindgen::JsValue;
+                    if window
+                        .location()
+                        .search()
+                        .unwrap_or_default()
+                        .contains("drafftink-test=1")
+                    {
+                        let shapes: Vec<_> = state.canvas.document.shapes_ordered().map(|shape| {
+                            let bounds=shape.bounds();
+                            let top_left=state.canvas.camera.world_to_screen(Point::new(bounds.x0,bounds.y0));
+                            let bottom_right=state.canvas.camera.world_to_screen(Point::new(bounds.x1,bounds.y1));
+                            let handles:Vec<_>=drafftink_core::selection::get_handles(shape).into_iter().map(|handle| {
+                                let p=state.canvas.camera.world_to_screen(handle.position);
+                                serde_json::json!({"kind":format!("{:?}",handle.kind),"x":p.x,"y":p.y})
+                            }).collect();
+                            serde_json::json!({"id":shape.id(),"shape":shape,"bounds":[top_left.x,top_left.y,bottom_right.x,bottom_right.y],"handles":handles})
+                        }).collect();
+
+                        let status = serde_json::json!({"shapes":shapes,"presentation":state.ui_state.presentation_mode,"tool":format!("{:?}",state.ui_state.current_tool),"editing_text":state.event_handler.editing_text,"inline_dialog":state.ui_state.inline_formula_draft.is_some(),"inline_error":state.ui_state.inline_formula_error,"controls":state.ui_state.test_controls});
+                        let _ = js_sys::Reflect::set(
+                            window.as_ref(),
+                            &JsValue::from_str("__drafftinkTestState"),
+                            &JsValue::from_str(&status.to_string()),
+                        );
+                    }
+                }
 
                 // Render text in edit mode (with cursor and selection)
                 if let Some(text_id) = state.event_handler.editing_text {

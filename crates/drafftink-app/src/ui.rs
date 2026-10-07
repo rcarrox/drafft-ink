@@ -263,6 +263,7 @@ pub struct MathEditorState {
 /// UI state and actions.
 pub struct UiState {
     pub presentation_mode: bool,
+    pub test_controls: std::collections::BTreeMap<String, [f32; 4]>,
     pub inline_formula_draft: Option<InlineFormulaDraft>,
     pub inline_formula_error: String,
     /// Currently selected tool (mirrored from canvas).
@@ -387,6 +388,7 @@ impl Default for UiState {
         Self {
             current_tool: ToolKind::Select,
             presentation_mode: false,
+            test_controls: Default::default(),
             inline_formula_draft: None,
             inline_formula_error: String::new(),
             eraser_mode: EraserMode::Classic,
@@ -742,6 +744,7 @@ pub fn render_ui(
     ui_state: &mut UiState,
     selected_props: &SelectedShapeProps,
 ) -> Option<UiAction> {
+    ui_state.test_controls.clear();
     if ui_state.presentation_mode {
         return None;
     }
@@ -1744,7 +1747,17 @@ fn render_right_panel(
                                 "Intégrale",
                                 "Limite",
                             ] {
-                                if ui.small_button(label).clicked() {
+                                let response = ui.small_button(label);
+                                ui_state.test_controls.insert(
+                                    label.into(),
+                                    [
+                                        response.rect.min.x,
+                                        response.rect.min.y,
+                                        response.rect.max.x,
+                                        response.rect.max.y,
+                                    ],
+                                );
+                                if response.clicked() {
                                     action = Some(UiAction::OpenInlineFormula(label.into()));
                                 }
                             }
@@ -3913,14 +3926,34 @@ fn render_inline_formula_dialog(ctx: &Context, state: &mut UiState) -> Option<Ui
             };
             for (i, label) in labels.iter().enumerate() {
                 ui.label(*label);
-                ui.add(egui::TextEdit::singleline(&mut draft.parts[i]).desired_width(320.0));
+                let response =
+                    ui.add(egui::TextEdit::singleline(&mut draft.parts[i]).desired_width(320.0));
+                state.test_controls.insert(
+                    label.to_string(),
+                    [
+                        response.rect.min.x,
+                        response.rect.min.y,
+                        response.rect.max.x,
+                        response.rect.max.y,
+                    ],
+                );
             }
             ui.label("Fractions imbriquées : (a/b)/(c/d) · sqrt(x) · x^2");
             if !state.inline_formula_error.is_empty() {
                 ui.colored_label(Color32::RED, &state.inline_formula_error);
             }
             ui.horizontal(|ui| {
-                if ui.button("Insérer / mettre à jour").clicked() {
+                let response = ui.button("Insérer / mettre à jour");
+                state.test_controls.insert(
+                    "Insérer".into(),
+                    [
+                        response.rect.min.x,
+                        response.rect.min.y,
+                        response.rect.max.x,
+                        response.rect.max.y,
+                    ],
+                );
+                if response.clicked() {
                     let parts = draft
                         .parts
                         .each_ref()

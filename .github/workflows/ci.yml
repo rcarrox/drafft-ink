@@ -214,3 +214,32 @@ jobs:
         with:
           name: drafftink-wasm
           path: web/pkg/
+
+  browser-interactions:
+    name: Chromium Interactions
+    runs-on: ubuntu-latest
+    needs: build-wasm
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@v4
+        with:
+          name: drafftink-wasm
+          path: web/pkg
+      - name: Install pinned browser test runner
+        run: |
+          npm install --prefix work/e2e playwright@1.55.1
+          work/e2e/node_modules/.bin/playwright install --with-deps chromium
+      - name: Exercise real WASM application
+        run: |
+          python3 scripts/cloud/preview.py --port 8888 > work/e2e/server.log 2>&1 &
+          node utils/test_browser_interactions.cjs
+      - name: Upload interaction evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chromium-interaction-evidence
+          path: work/e2e/evidence
