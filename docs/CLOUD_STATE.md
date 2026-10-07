@@ -1,11 +1,13 @@
-# État de reprise — 0.9.0
+# État de reprise — 0.10.0
 
-Date : 7 octobre 2026.
+7 octobre 2026. Travail local autorisé, compilateur Rust/WASM : GitHub Actions.
+Branche codex/0.10.0-transform-math-alignment, PR #11 : https://github.com/rcarrox/drafft-ink/pull/11. Lire la description de la PR de cette branche pour les statuts CI/fusion/artefact finaux.
 
-- Dépôt : `rcarrox/drafft-ink`, application locale Windows/Rust/WASM.
-- Travail 0.9 : branche `codex/0.9.0-live-text-commands`, [PR #10](https://github.com/rcarrox/drafft-ink/pull/10).
-- Le 7 octobre, l’utilisateur a explicitement demandé de continuer en local pour le moment. Cette exception remplace l’exigence cloud pour ce travail ; GitHub Actions reste le compilateur Rust/WASM.
-- **Publication exacte** : lire l’état de fusion et la description de PR #10. Sa description de livraison contient le commit `main`, le dernier CI, le workflow portable et l’identifiant/hash du ZIP effectivement vérifié. Ne pas assimiler un build de branche à l’artefact final.
+Demandes : traverser les bords avec les poignées de tous les objets, conserver le pivot après rotation et le miroir du texte/math ; axe des formules aligné sur les caractères et le signe égal ; rééditer les blocs validés par double-clic ; mini panneau 10 pixels sous la formule et suivant sa hauteur.
+
+Implémentation en cours de validation. Tests Rust géométrie et axes, puis interactions réelles WASM Chromium. Aucun test Rust local, aucune police privée publiée, aucun changement volontaire du pinch/pan. Les limites WebGPU du CI logiciel restent à signaler ; un screenshot uniforme ne valide pas le rendu.
+
+Dernière livraison : 0.9.0, main 4b37c23931533e33a4f330bcb4877246d4886614 ; PR #10, CI 37625716688 et portable 37625716813 réussis. ZIP SHA256 4059f85414f56d3eaca91358f3a77615dab66f0a8ca38c59029f3a9734a0125c.
 
 ## Nouveautés 0.9
 

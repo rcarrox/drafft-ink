@@ -94,8 +94,9 @@ function inspectCapture(file) {
   try {
     await page.goto(process.env.DRAFFTINK_TEST_URL || 'http://127.0.0.1:8888/?drafftink-test=1');
     await wait(s => s.shapes.length === 0);
+    await snapshot(page,'initial.png');
     await page.mouse.click(370,270);
-    await page.keyboard.press('t');
+    await page.keyboard.press('t');await wait(s=>s.tool==='Text');
     await page.mouse.click(370, 270);
     await wait(s => !!s.editing_text);
     await keys('123'); await caretPacket('Dead'); await keys('4');
@@ -153,6 +154,24 @@ function inspectCapture(file) {
     await page.keyboard.press('Enter');await wait(s=>s.command_editor===null&&!!s.editing_text);await keys(' suite');
     await wait(s=>commandText(s)?.content.endsWith(' suite'));
     await page.keyboard.press('Escape');await wait(s=>s.editing_text===null);
+    // A validated formula reopens with a direct double-click.
+    const validCommand=await state();
+    const commandId=validCommand.shapes.find(item=>item.shape.Text?.formulas.some(f=>f.kind==='Code')).id;
+    const commandBounds=validCommand.shapes.find(item=>item.id===commandId).bounds;
+    await page.keyboard.press('s');
+    await page.mouse.dblclick(commandBounds[0]+15,(commandBounds[1]+commandBounds[3])/2);
+    await wait(s=>s.command_editor==='sum(kx,k,1,n)');
+    await page.keyboard.press('Control+a');await keys('sum(k²,k,1,n)');
+    await wait(s=>s.command_editor==='sum(k²,k,1,n)');
+    await page.keyboard.press('Escape');await wait(s=>s.editing_text===null);
+    // Cross the left edge with the right edge handle of the Text object.
+    const beforeFlip=(await state()).shapes.find(item=>item.id===commandId);
+    await page.keyboard.press('s');await page.mouse.click(beforeFlip.bounds[0]+10,(beforeFlip.bounds[1]+beforeFlip.bounds[3])/2);
+    const right=beforeFlip.handles.find(h=>h.kind==='Edge(Right)');
+    await page.mouse.move(right.x,right.y);await page.mouse.down();
+    await page.mouse.move(beforeFlip.bounds[0]-60,right.y,{steps:8});await page.mouse.up();
+    await wait(s=>s.shapes.find(item=>item.id===commandId)?.shape.Text.display_scale[0]<0);
+    await page.keyboard.press('Control+z');await wait(s=>s.shapes.find(item=>item.id===commandId)?.shape.Text.display_scale[0]>0);
 
     // Separate browser context with a public, deterministic 1200x2000 PNG fixture.
     const imageContext = await browser.newContext({viewport:{width:1280,height:720}});

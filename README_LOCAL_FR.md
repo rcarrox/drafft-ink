@@ -1,4 +1,4 @@
-# DrafftInk Local 0.9.0
+# DrafftInk Local 0.10.0
 
 Version personnelle du tableau DrafftInk, sans collaboration reseau.
 
@@ -26,7 +26,7 @@ Workflow : `.github/workflows/build-portable.yml`.
 
 A chaque push sur `main`, deux artefacts sont produits :
 
-- `DrafftInk-Windows-Portable-0.9.0` : version locale Windows precompilee ;
+- `DrafftInk-Windows-Portable-0.10.0` : version locale Windows precompilee ;
 - `DrafftInk-Web-0.9.0` : fichiers statiques a deposer sur un serveur web.
 
 ## Modifications de cette branche
@@ -126,3 +126,9 @@ Chrome et Edge recents sont les cibles prioritaires car DrafftInk utilise WebGPU
 Dans Text, taper sum(, prod(, int(, lim(, sqrt( ou frac( cree immediatement un bloc math et ouvre un mini editeur de code. Le symbole et ses arguments sont actualises sur la feuille pendant la frappe. Entree valide et continue le texte ; Escape valide et termine l'edition Text. Selectionner un bloc de code puis Ctrl+Entree (ou double clic sur le bloc deja en edition) permet de le modifier. Les champs 0.8 restent disponibles.
 
 Exemples : sum(kx,k,1,n), prod(k,k,1,n), int(x²,x,1,2), lim(x,x,5), sqrt(x²), frac(a,b), frac(a,frac(b,c)). La source reste dans le JSON avec le bloc ; les arguments manquants du rendu provisoire sont des points. Le code saisi n'est pas remplace par une chaine normalisee pendant la frappe, pour conserver le caret.
+
+## Nouveautés 0.10.0
+
+Poignées traversantes pour les objets, y compris textes/formules en miroir et objets tournés. Axe des formules aligné sur le signe égal. Double-clic sur un bloc validé pour rouvrir son code ; Ctrl+Entrée reste disponible. Le mini panneau suit la formule, 10 pixels sous le bloc.
+
+Pour rééditer une formule validée : sélectionner l’outil Select puis double-cliquer directement sur le bloc de formule. Le panneau de code se rouvre sous ce bloc.

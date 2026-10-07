@@ -123,6 +123,9 @@ impl ShapeTrait for Ellipse {
         let scale = affine.as_coeffs();
         self.radius_x *= scale[0].abs();
         self.radius_y *= scale[3].abs();
+        if scale[1].abs() < 1e-10 && scale[2].abs() < 1e-10 && scale[0] * scale[3] < 0.0 {
+            self.rotation = -self.rotation;
+        }
     }
 
     fn clone_box(&self) -> Box<dyn ShapeTrait + Send + Sync> {

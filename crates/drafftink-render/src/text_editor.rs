@@ -196,7 +196,14 @@ impl TextEditState {
     pub fn selection_geometry_with(&self, mut f: impl FnMut(parley::BoundingBox, usize)) {
         if let Some(layout) = &self.rich_layout {
             let selection = self.editor.raw_selection().refresh(layout);
-            selection.geometry_with(layout, &mut f);
+            selection.geometry_with(layout, |mut rect, line_index| {
+                if let Some(line) = layout.lines().nth(line_index) {
+                    let shift = inline_baseline_shift(&line, self.font_size) as f64;
+                    rect.y0 -= shift;
+                    rect.y1 -= shift;
+                }
+                f(rect, line_index);
+            });
             let range = selection.text_range();
             for (line_index, line) in layout.lines().enumerate() {
                 for item in line.items() {
@@ -246,6 +253,13 @@ impl TextEditState {
             if rect.height() < 1.0 {
                 rect.y0 = rect.y1 - self.font_size as f64 * 1.2;
             }
+            if let Some(line) = layout.lines().find(|l| {
+                l.text_range().contains(&cursor.index()) || l.text_range().end == cursor.index()
+            }) {
+                let shift = inline_baseline_shift(&line, self.font_size) as f64;
+                rect.y0 -= shift;
+                rect.y1 -= shift;
+            }
             Some(rect)
         } else {
             self.editor.cursor_geometry(size)
@@ -268,6 +282,28 @@ impl TextEditState {
         None
     }
 
+    pub fn formula_byte_at(&self, x: f32, y: f32) -> Option<usize> {
+        self.inline_at(x, y).map(|(byte, _)| byte)
+    }
+    pub fn formula_bounds(&self, byte: usize) -> Option<kurbo::Rect> {
+        let layout = self.rich_layout.as_ref()?;
+        let id = layout.inline_boxes().iter().find(|b| b.index == byte)?.id;
+        for line in layout.lines() {
+            for item in line.items() {
+                if let parley::PositionedLayoutItem::InlineBox(b) = item {
+                    if b.id == id {
+                        return Some(kurbo::Rect::new(
+                            b.x as f64,
+                            b.y as f64,
+                            (b.x + b.width) as f64,
+                            (b.y + b.height) as f64,
+                        ));
+                    }
+                }
+            }
+        }
+        None
+    }
     /// Get a mutable reference to the PlainEditor.
     pub fn editor_mut(&mut self) -> &mut PlainEditor<Brush> {
         &mut self.editor
@@ -678,6 +714,12 @@ impl TextEditState {
         }
 
         if let Some(layout) = &self.rich_layout {
+            let local_y = local_y
+                + layout
+                    .lines()
+                    .find(|l| local_y >= l.metrics().min_coord && local_y <= l.metrics().max_coord)
+                    .map(|l| inline_baseline_shift(&l, self.font_size))
+                    .unwrap_or(0.0);
             let next = if shift {
                 self.editor
                     .raw_selection()
@@ -905,5 +947,66 @@ mod dead_key_regressions {
             editor.handle_key(key, TextModifiers::default(), fonts, layouts);
         }
         assert_eq!(editor.text(), "^^^pâ");
+    }
+}
+
+/// Optical axis of an equals glyph, measured from the font baseline.
+pub(crate) fn font_math_axis(bytes: &[u8], index: u32, size: f32) -> f32 {
+    ttf_parser::Face::parse(bytes, index)
+        .ok()
+        .and_then(|face| {
+            let glyph = face.glyph_index('=')?;
+            let bounds = face.glyph_bounding_box(glyph)?;
+            Some(
+                (bounds.y_min as f32 + bounds.y_max as f32) * 0.5 * size
+                    / face.units_per_em() as f32,
+            )
+        })
+        .unwrap_or(size * 0.27)
+}
+/// Parley aligns boxes at their bottom; move ordinary text to their math axis.
+pub(crate) fn inline_baseline_shift(line: &parley::layout::Line<'_, Brush>, size: f32) -> f32 {
+    let height = line
+        .items()
+        .filter_map(|item| match item {
+            parley::PositionedLayoutItem::InlineBox(b) => Some(b.height),
+            _ => None,
+        })
+        .fold(0.0f32, f32::max);
+    if height == 0.0 {
+        return 0.0;
+    }
+    let axis = line
+        .runs()
+        .find(|run| run.font_size() > 0.0)
+        .map(|run| {
+            let font = run.font();
+            font_math_axis(font.data.data(), font.index, run.font_size())
+        })
+        .unwrap_or(size * 0.27);
+    height * 0.5 - axis
+}
+
+/// ReX uses the MATH table axis, which can differ from the equals glyph's ink center.
+pub(crate) fn math_layout_axis(bytes: &[u8], index: u32, size: f32) -> f32 {
+    ttf_parser::Face::parse(bytes, index)
+        .ok()
+        .and_then(|face| {
+            let constants = face.tables().math?.constants?;
+            Some(
+                constants.axis_height().value as f32 * size * (96.0 / 72.0)
+                    / face.units_per_em() as f32,
+            )
+        })
+        .unwrap_or_else(|| font_math_axis(bytes, index, size))
+}
+
+#[cfg(test)]
+mod math_axis_units_test {
+    #[test]
+    fn rex_axis_uses_point_to_pixel_conversion() {
+        let axis = super::math_layout_axis(include_bytes!("../assets/rex-xits.otf"), 0, 20.0);
+        // STIX Two Math: AxisHeight=258, UPM=1000; ReX lays out 20pt at 96px/in.
+        assert!((axis - 6.88).abs() < 0.0001);
     }
 }

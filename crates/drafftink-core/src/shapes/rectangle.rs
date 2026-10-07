@@ -134,11 +134,15 @@ impl ShapeTrait for Rectangle {
     }
 
     fn transform(&mut self, affine: Affine) {
-        self.position = affine * self.position;
+        let center = affine * self.bounds().center();
         // Note: This is a simplified transform that doesn't handle rotation/skew
         let scale = affine.as_coeffs();
         self.width *= scale[0].abs();
         self.height *= scale[3].abs();
+        if scale[1].abs() < 1e-10 && scale[2].abs() < 1e-10 && scale[0] * scale[3] < 0.0 {
+            self.rotation = -self.rotation;
+        }
+        self.position = Point::new(center.x - self.width / 2.0, center.y - self.height / 2.0);
     }
 
     fn clone_box(&self) -> Box<dyn ShapeTrait + Send + Sync> {

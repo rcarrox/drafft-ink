@@ -291,11 +291,18 @@ impl ShapeTrait for Image {
     }
 
     fn transform(&mut self, affine: Affine) {
-        self.position = affine * self.position;
-        // Scale dimensions
+        let center = affine * self.bounds().center();
         let scale = affine.as_coeffs();
-        self.width *= scale[0].abs();
-        self.height *= scale[3].abs();
+        self.width *= scale[0].hypot(scale[1]);
+        self.height *= scale[2].hypot(scale[3]);
+        self.position = Point::new(center.x - self.width / 2.0, center.y - self.height / 2.0);
+        if scale[1].abs() < 1e-10 && scale[2].abs() < 1e-10 {
+            if scale[0] * scale[3] < 0.0 {
+                self.rotation = -self.rotation;
+            }
+            self.flip_x ^= scale[0] < 0.0;
+            self.flip_y ^= scale[3] < 0.0;
+        }
     }
 
     fn clone_box(&self) -> Box<dyn ShapeTrait + Send + Sync> {
