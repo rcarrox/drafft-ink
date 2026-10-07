@@ -1,10 +1,10 @@
-# DrafftInk Local 0.6.0
+# DrafftInk Local 0.7.0
 
 Version personnelle du tableau DrafftInk, sans collaboration reseau.
 
 ## Utilisation sous Windows
 
-Le ZIP **DrafftInk_Windows_Portable_0.6.0.zip** produit par GitHub Actions est deja compile.
+Le ZIP **DrafftInk_Windows_Portable_0.7.0.zip** produit par GitHub Actions est deja compile.
 Il ne faut installer ni Rust, ni wasm-pack, ni Visual Studio.
 
 1. Decompresser le ZIP.
@@ -26,8 +26,8 @@ Workflow : `.github/workflows/build-portable.yml`.
 
 A chaque push sur `main`, deux artefacts sont produits :
 
-- `DrafftInk-Windows-Portable-0.6.0` : version locale Windows precompilee ;
-- `DrafftInk-Web-0.6.0` : fichiers statiques a deposer sur un serveur web.
+- `DrafftInk-Windows-Portable-0.7.0` : version locale Windows precompilee ;
+- `DrafftInk-Web-0.7.0` : fichiers statiques a deposer sur un serveur web.
 
 ## Modifications de cette branche
 
@@ -76,7 +76,7 @@ Chrome et Edge recents sont les cibles prioritaires car DrafftInk utilise WebGPU
 - fractions imbriquees possibles sans parenthese, avec un espace par niveau de sortie.
 
 
-## Nouveautes 0.6.0
+## Nouveautes 0.5.0
 
 - champs de raccourcis Settings lisibles : texte noir sur fond blanc ;
 - raccourcis par defaut : D = Draw, M = Math, H = Pan ;
@@ -95,3 +95,15 @@ Chrome et Edge recents sont les cibles prioritaires car DrafftInk utilise WebGPU
 - Properties : Solid, Dashed 1 (long), Dashed 2 (court), Dotted sous Stroke width.
 - Images tournees : resize dans le repere local, coin oppose fixe.
 - Ctrl + glisser une poignee d'image : rognage non destructif, y compris apres rotation. Relacher Ctrl et glisser pour redimensionner. Undo/Redo et JSON conservent le rognage et les pixels source.
+
+## Nouveautes 0.7.0
+
+- La police choisie est conservee pour les prochains textes, y compris apres redemarrage. Settings permet de choisir la police par defaut (Google Sans Medium initialement).
+- Le lanceur Windows rend automatiquement disponibles les polices installees sur le PC, via son serveur loopback existant. Settings permet de choisir la police par defaut et d'actualiser la liste. La version web statique utilise Local Font Access si necessaire. Le bouton "Polices installees sur le PC" disparait des Properties Text. Les fontes sont mises en cache uniquement sur le PC, sans redistribution.
+- Google Sans Medium est utilise pour les lettres/chiffres Math et pour son champ de saisie ; les symboles mathematiques absents utilisent XITS. Si la police locale est absente ou inaccessible, Noto Sans sert de secours.
+- Clic droit sur Laser : palette de couleur. La couleur est memorisee.
+- Panneaux Outils, Properties, couleurs/traits, zoom et palettes deplacables ; les positions des panneaux principaux sont memorisees et peuvent etre reinitialisees dans Settings.
+- Panneau couleurs/traits sur deux colonnes et deux rangees, avec quatre styles de contour illustres.
+- Curseurs SVG personnalises : fleche blanche avec ombre/contour configurable et curseur Text/Math.
+- Poignees au centre des quatre bords : resize sur un seul axe, y compris apres rotation. Le crop Ctrl des images fonctionne aussi avec les poignees des bords. Text/Math conservent leur geometrie et leur source lors du redimensionnement.
+- Optimisations : sources d'images partagees entre duplications et Undo/Redo, decode unique par source, nettoyage des caches supprimes, cache des formules et du cmap des glyphes, animations du caret planifiees au lieu d'un rendu continu. Les pixels source restent intacts et l'export conserve sa resolution.

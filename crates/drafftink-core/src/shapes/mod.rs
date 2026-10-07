@@ -18,7 +18,11 @@ pub use image::{Image, ImageFormat};
 pub use line::{Line, PathStyle};
 pub use math::Math;
 pub use rectangle::Rectangle;
-pub use text::{FontFamily, FontWeight, Text};
+pub use text::{FontFamily, FontWeight, Text, TextFont};
+
+pub fn unit_display_scale() -> [f64; 2] {
+    [1.0, 1.0]
+}
 
 use kurbo::{Affine, BezPath, Point, Rect};
 use peniko::Color;
@@ -390,6 +394,11 @@ impl Shape {
     }
 
     pub fn hit_test(&self, point: Point, tolerance: f64) -> bool {
+        let point = if self.rotation().abs() > 0.001 {
+            Affine::rotate_about(-self.rotation(), self.bounds().center()) * point
+        } else {
+            point
+        };
         match self {
             Shape::Rectangle(s) => s.hit_test(point, tolerance),
             Shape::Ellipse(s) => s.hit_test(point, tolerance),

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 /// Handle size in screen pixels.
 pub const HANDLE_SIZE: f64 = 16.0;
 /// Handle hit tolerance in screen pixels.
-pub const HANDLE_HIT_TOLERANCE: f64 = 24.0;
+pub const HANDLE_HIT_TOLERANCE: f64 = 8.0;
 
 /// Type of selection handle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -115,10 +115,10 @@ pub fn get_handles(shape: &Shape) -> Vec<Handle> {
             corner_and_rotate_handles(bounds, rotation)
         }
         Shape::Text(_) | Shape::Math(_) => {
-            // Text and Math only get rotation handle (no resize)
+            // Text and Math support nonuniform display scaling, including edge handles.
             let bounds = shape.bounds();
             let rotation = shape.rotation();
-            rotate_only_handle(bounds, rotation)
+            corner_and_rotate_handles(bounds, rotation)
         }
         Shape::Freehand(_) => {
             // Freehand uses bounding box corners (no rotation)
@@ -134,7 +134,7 @@ pub fn get_handles(shape: &Shape) -> Vec<Handle> {
 
 /// Generate corner handles for a bounding rectangle.
 fn corner_handles(bounds: Rect) -> Vec<Handle> {
-    vec![
+    let mut handles = vec![
         Handle::new(
             Point::new(bounds.x0, bounds.y0),
             HandleKind::Corner(Corner::TopLeft),
@@ -151,7 +151,9 @@ fn corner_handles(bounds: Rect) -> Vec<Handle> {
             Point::new(bounds.x1, bounds.y1),
             HandleKind::Corner(Corner::BottomRight),
         ),
-    ]
+    ];
+    handles.extend(edge_handles(bounds, 0.0));
+    handles
 }
 
 /// Distance from shape edge to rotation handle (in world units).
@@ -174,7 +176,7 @@ fn corner_and_rotate_handles(bounds: Rect, rotation: f64) -> Vec<Handle> {
         )
     };
 
-    vec![
+    let mut handles = vec![
         Handle::new(
             rotate_point(-half_w, -half_h),
             HandleKind::Corner(Corner::TopLeft),
@@ -196,20 +198,9 @@ fn corner_and_rotate_handles(bounds: Rect, rotation: f64) -> Vec<Handle> {
             rotate_point(0.0, -half_h - ROTATE_HANDLE_OFFSET),
             HandleKind::Rotate,
         ),
-    ]
-}
-
-/// Generate only a rotation handle (no corner resize handles).
-fn rotate_only_handle(bounds: Rect, rotation: f64) -> Vec<Handle> {
-    let center = bounds.center();
-    let half_h = bounds.height() / 2.0;
-    let cos_r = rotation.cos();
-    let sin_r = rotation.sin();
-    let dy = -half_h - ROTATE_HANDLE_OFFSET;
-    vec![Handle::new(
-        Point::new(center.x - dy * sin_r, center.y + dy * cos_r),
-        HandleKind::Rotate,
-    )]
+    ];
+    handles.extend(edge_handles(bounds, rotation));
+    handles
 }
 
 /// Find which handle (if any) is hit at the given point.
@@ -405,15 +396,11 @@ pub fn get_manipulation_target_position(shape: &Shape, handle: Option<HandleKind
             .find(|h| h.kind == kind)
             .map(|h| h.position)
             .unwrap_or(shape.bounds().center()),
-        Some(HandleKind::Edge(edge)) => {
-            let bounds = shape.bounds();
-            match edge {
-                Edge::Top => Point::new(bounds.center().x, bounds.y0),
-                Edge::Right => Point::new(bounds.x1, bounds.center().y),
-                Edge::Bottom => Point::new(bounds.center().x, bounds.y1),
-                Edge::Left => Point::new(bounds.x0, bounds.center().y),
-            }
-        }
+        Some(kind @ HandleKind::Edge(_)) => get_handles(shape)
+            .iter()
+            .find(|h| h.kind == kind)
+            .map(|h| h.position)
+            .unwrap_or(shape.bounds().center()),
         Some(HandleKind::Rotate) => {
             // Rotation handle position
             let bounds = shape.bounds();
@@ -517,29 +504,8 @@ pub fn apply_manipulation(
                 _ => {}
             }
         }
-        Some(HandleKind::Corner(corner)) => {
-            // Resize from a corner
-            match &mut shape {
-                Shape::Rectangle(rect) => {
-                    apply_corner_resize_rect(rect, corner, delta, keep_aspect_ratio);
-                }
-                Shape::Ellipse(ellipse) => {
-                    apply_corner_resize_ellipse(ellipse, corner, delta, keep_aspect_ratio);
-                }
-                Shape::Freehand(freehand) => {
-                    apply_corner_resize_freehand(freehand, corner, delta, keep_aspect_ratio);
-                }
-                Shape::Image(image) => {
-                    apply_corner_resize_image(image, corner, delta, keep_aspect_ratio);
-                }
-                Shape::Group(group) => {
-                    apply_corner_resize_group(group, corner, delta, keep_aspect_ratio);
-                }
-                _ => {}
-            }
-        }
-        Some(HandleKind::Edge(_)) => {
-            // Edge resize not implemented yet
+        Some(kind @ (HandleKind::Corner(_) | HandleKind::Edge(_))) => {
+            apply_box_resize(&mut shape, kind, delta, keep_aspect_ratio);
         }
         Some(HandleKind::Rotate) => {
             // Rotation is handled separately via apply_rotation
@@ -578,258 +544,175 @@ pub fn reset_rotation(shape: &mut Shape, angle_degrees: f64) {
     shape.set_rotation(angle_radians);
 }
 
-/// Apply corner resize to a rectangle.
-fn apply_corner_resize_rect(
-    rect: &mut crate::shapes::Rectangle,
-    corner: Corner,
-    delta: kurbo::Vec2,
-    keep_aspect_ratio: bool,
-) {
-    let bounds = rect.bounds();
-    let (new_x0, new_y0, new_x1, new_y1) = match corner {
-        Corner::TopLeft => (
-            bounds.x0 + delta.x,
-            bounds.y0 + delta.y,
-            bounds.x1,
-            bounds.y1,
+fn edge_handles(bounds: Rect, rotation: f64) -> Vec<Handle> {
+    let rotate = Affine::rotate_about(rotation, bounds.center());
+    vec![
+        Handle::new(
+            rotate * Point::new(bounds.center().x, bounds.y0),
+            HandleKind::Edge(Edge::Top),
         ),
-        Corner::TopRight => (
-            bounds.x0,
-            bounds.y0 + delta.y,
-            bounds.x1 + delta.x,
-            bounds.y1,
+        Handle::new(
+            rotate * Point::new(bounds.x1, bounds.center().y),
+            HandleKind::Edge(Edge::Right),
         ),
-        Corner::BottomLeft => (
-            bounds.x0 + delta.x,
-            bounds.y0,
-            bounds.x1,
-            bounds.y1 + delta.y,
+        Handle::new(
+            rotate * Point::new(bounds.center().x, bounds.y1),
+            HandleKind::Edge(Edge::Bottom),
         ),
-        Corner::BottomRight => (
-            bounds.x0,
-            bounds.y0,
-            bounds.x1 + delta.x,
-            bounds.y1 + delta.y,
+        Handle::new(
+            rotate * Point::new(bounds.x0, bounds.center().y),
+            HandleKind::Edge(Edge::Left),
         ),
-    };
-
-    let (x0, x1) = if new_x0 < new_x1 {
-        (new_x0, new_x1)
-    } else {
-        (new_x1, new_x0)
-    };
-    let (y0, y1) = if new_y0 < new_y1 {
-        (new_y0, new_y1)
-    } else {
-        (new_y1, new_y0)
-    };
-
-    let (width, height) = if keep_aspect_ratio {
-        let aspect = bounds.width() / bounds.height().max(0.1);
-        let new_width = (x1 - x0).max(1.0);
-        let new_height = (y1 - y0).max(1.0);
-        let size = new_width.max(new_height);
-        (size, size / aspect)
-    } else {
-        ((x1 - x0).max(1.0), (y1 - y0).max(1.0))
-    };
-
-    rect.position = Point::new(x0, y0);
-    rect.width = width;
-    rect.height = height;
+    ]
 }
-
-/// Apply corner resize to an ellipse.
-fn apply_corner_resize_ellipse(
-    ellipse: &mut crate::shapes::Ellipse,
-    corner: Corner,
-    delta: kurbo::Vec2,
-    keep_aspect_ratio: bool,
-) {
-    let bounds = ellipse.bounds();
-    let (new_x0, new_y0, new_x1, new_y1) = match corner {
-        Corner::TopLeft => (
-            bounds.x0 + delta.x,
-            bounds.y0 + delta.y,
-            bounds.x1,
-            bounds.y1,
-        ),
-        Corner::TopRight => (
-            bounds.x0,
-            bounds.y0 + delta.y,
-            bounds.x1 + delta.x,
-            bounds.y1,
-        ),
-        Corner::BottomLeft => (
-            bounds.x0 + delta.x,
-            bounds.y0,
-            bounds.x1,
-            bounds.y1 + delta.y,
-        ),
-        Corner::BottomRight => (
-            bounds.x0,
-            bounds.y0,
-            bounds.x1 + delta.x,
-            bounds.y1 + delta.y,
-        ),
-    };
-
-    let (x0, x1) = if new_x0 < new_x1 {
-        (new_x0, new_x1)
-    } else {
-        (new_x1, new_x0)
-    };
-    let (y0, y1) = if new_y0 < new_y1 {
-        (new_y0, new_y1)
-    } else {
-        (new_y1, new_y0)
-    };
-
-    let (width, height) = if keep_aspect_ratio {
-        let aspect = bounds.width() / bounds.height().max(0.1);
-        let new_width = (x1 - x0).max(1.0);
-        let new_height = (y1 - y0).max(1.0);
-        let size = new_width.max(new_height);
-        (size, size / aspect)
-    } else {
-        ((x1 - x0).max(1.0), (y1 - y0).max(1.0))
-    };
-
-    ellipse.center = Point::new(x0 + width / 2.0, y0 + height / 2.0);
-    ellipse.radius_x = width / 2.0;
-    ellipse.radius_y = height / 2.0;
-}
-
-/// Apply corner resize to a freehand drawing.
-fn apply_corner_resize_freehand(
-    freehand: &mut crate::shapes::Freehand,
-    corner: Corner,
-    delta: kurbo::Vec2,
-    keep_aspect_ratio: bool,
-) {
-    if freehand.points.is_empty() {
-        return;
-    }
-
-    let bounds = freehand.bounds();
-    let (new_x0, new_y0, new_x1, new_y1) = match corner {
-        Corner::TopLeft => (
-            bounds.x0 + delta.x,
-            bounds.y0 + delta.y,
-            bounds.x1,
-            bounds.y1,
-        ),
-        Corner::TopRight => (
-            bounds.x0,
-            bounds.y0 + delta.y,
-            bounds.x1 + delta.x,
-            bounds.y1,
-        ),
-        Corner::BottomLeft => (
-            bounds.x0 + delta.x,
-            bounds.y0,
-            bounds.x1,
-            bounds.y1 + delta.y,
-        ),
-        Corner::BottomRight => (
-            bounds.x0,
-            bounds.y0,
-            bounds.x1 + delta.x,
-            bounds.y1 + delta.y,
-        ),
-    };
-
-    let (x0, x1) = if new_x0 < new_x1 {
-        (new_x0, new_x1)
-    } else {
-        (new_x1, new_x0)
-    };
-    let (y0, y1) = if new_y0 < new_y1 {
-        (new_y0, new_y1)
-    } else {
-        (new_y1, new_y0)
-    };
-
-    let old_width = bounds.width().max(1.0);
-    let old_height = bounds.height().max(1.0);
-
-    let (scale_x, scale_y) = if keep_aspect_ratio {
-        let new_width = (x1 - x0).max(1.0);
-        let new_height = (y1 - y0).max(1.0);
-        let scale = (new_width / old_width).max(new_height / old_height);
-        (scale, scale)
-    } else {
-        (
-            (x1 - x0).max(1.0) / old_width,
-            (y1 - y0).max(1.0) / old_height,
-        )
-    };
-
-    for point in &mut freehand.points {
-        let rel_x = point.x - bounds.x0;
-        let rel_y = point.y - bounds.y0;
-        point.x = x0 + rel_x * scale_x;
-        point.y = y0 + rel_y * scale_y;
-    }
-}
-
 fn rotate_delta(delta: kurbo::Vec2, angle: f64) -> kurbo::Vec2 {
     let (sin, cos) = angle.sin_cos();
     kurbo::Vec2::new(cos * delta.x - sin * delta.y, sin * delta.x + cos * delta.y)
 }
-
-/// Apply corner resize to an image.
-fn apply_corner_resize_image(
-    image: &mut crate::shapes::Image,
-    corner: Corner,
-    delta: kurbo::Vec2,
-    keep_aspect_ratio: bool,
-) {
-    let local = rotate_delta(delta, -image.rotation);
-    let left = matches!(corner, Corner::TopLeft | Corner::BottomLeft);
-    let top = matches!(corner, Corner::TopLeft | Corner::TopRight);
-    let mut width = (image.width + if left { -local.x } else { local.x }).max(1.0);
-    let mut height = (image.height + if top { -local.y } else { local.y }).max(1.0);
-    if keep_aspect_ratio {
-        let scale = (width / image.width).max(height / image.height);
-        width = image.width * scale;
-        height = image.height * scale;
-    }
-    // The opposite corner stays fixed in world space. A changed center must
-    // move by the rotated half-size delta, not the unrotated mouse delta.
-    let shift = kurbo::Vec2::new(
-        (width - image.width) * if left { -0.5 } else { 0.5 },
-        (height - image.height) * if top { -0.5 } else { 0.5 },
+fn apply_box_resize(shape: &mut Shape, kind: HandleKind, delta: kurbo::Vec2, aspect: bool) {
+    let old = shape.bounds();
+    let w = old.width().max(1.0);
+    let h = old.height().max(1.0);
+    let rotation = shape.rotation();
+    let d = rotate_delta(delta, -rotation);
+    let left = matches!(
+        kind,
+        HandleKind::Corner(Corner::TopLeft | Corner::BottomLeft) | HandleKind::Edge(Edge::Left)
     );
-    let center = image.as_rect().center() + rotate_delta(shift, image.rotation);
-    image.width = width;
-    image.height = height;
-    image.position = Point::new(center.x - width / 2.0, center.y - height / 2.0);
+    let right = matches!(
+        kind,
+        HandleKind::Corner(Corner::TopRight | Corner::BottomRight) | HandleKind::Edge(Edge::Right)
+    );
+    let top = matches!(
+        kind,
+        HandleKind::Corner(Corner::TopLeft | Corner::TopRight) | HandleKind::Edge(Edge::Top)
+    );
+    let bottom = matches!(
+        kind,
+        HandleKind::Corner(Corner::BottomLeft | Corner::BottomRight)
+            | HandleKind::Edge(Edge::Bottom)
+    );
+    let mut nw = (w + if left {
+        -d.x
+    } else if right {
+        d.x
+    } else {
+        0.0
+    })
+    .max(1.0);
+    let mut nh = (h + if top {
+        -d.y
+    } else if bottom {
+        d.y
+    } else {
+        0.0
+    })
+    .max(1.0);
+    if aspect && matches!(kind, HandleKind::Corner(_)) {
+        let scale = (nw / w).max(nh / h);
+        nw = w * scale;
+        nh = h * scale;
+    }
+    let shift = rotate_delta(
+        kurbo::Vec2::new(
+            (nw - w)
+                * if left {
+                    -0.5
+                } else if right {
+                    0.5
+                } else {
+                    0.0
+                },
+            (nh - h)
+                * if top {
+                    -0.5
+                } else if bottom {
+                    0.5
+                } else {
+                    0.0
+                },
+        ),
+        rotation,
+    );
+    let center = old.center() + shift;
+    let next = Rect::from_center_size(center, kurbo::Size::new(nw, nh));
+    let scale = Affine::translate((next.x0, next.y0))
+        * Affine::scale_non_uniform(nw / w, nh / h)
+        * Affine::translate((-old.x0, -old.y0));
+    match shape {
+        Shape::Rectangle(rect) => {
+            rect.position = Point::new(next.x0, next.y0);
+            rect.width = nw;
+            rect.height = nh;
+        }
+        Shape::Ellipse(ellipse) => {
+            ellipse.center = center;
+            ellipse.radius_x = nw / 2.0;
+            ellipse.radius_y = nh / 2.0;
+        }
+        Shape::Image(image) => {
+            image.position = Point::new(next.x0, next.y0);
+            image.width = nw;
+            image.height = nh;
+        }
+        Shape::Freehand(freehand) => {
+            for p in &mut freehand.points {
+                *p = scale * *p;
+            }
+        }
+        Shape::Group(group) => {
+            for child in group.children_mut() {
+                child.transform(scale);
+            }
+        }
+        Shape::Text(text) => {
+            text.display_scale[0] *= nw / w;
+            text.display_scale[1] *= nh / h;
+            text.position = Point::new(next.x0, next.y0);
+        }
+        Shape::Math(math) => {
+            let baseline = (math.position.y - old.y0) * nh / h;
+            math.display_scale[0] *= nw / w;
+            math.display_scale[1] *= nh / h;
+            math.position = Point::new(next.x0, next.y0 + baseline);
+        }
+        _ => {}
+    }
 }
 
 /// Manipulate image source boundaries without resampling or stretching pixels.
 /// All deltas are measured from the original drag snapshot, as for resizing.
 pub fn apply_image_crop(shape: &Shape, handle: Option<HandleKind>, delta: kurbo::Vec2) -> Shape {
-    let (Shape::Image(original), Some(HandleKind::Corner(corner))) = (shape, handle) else {
+    let (Shape::Image(original), Some(kind @ (HandleKind::Corner(_) | HandleKind::Edge(_)))) =
+        (shape, handle)
+    else {
         return shape.clone();
     };
     let mut image = original.clone();
     let local = rotate_delta(delta, -image.rotation);
-    let left = matches!(corner, Corner::TopLeft | Corner::BottomLeft);
-    let top = matches!(corner, Corner::TopLeft | Corner::TopRight);
+    let left = matches!(
+        kind,
+        HandleKind::Corner(Corner::TopLeft | Corner::BottomLeft) | HandleKind::Edge(Edge::Left)
+    );
+    let horizontal = !matches!(kind, HandleKind::Edge(Edge::Top | Edge::Bottom));
+    let vertical = !matches!(kind, HandleKind::Edge(Edge::Left | Edge::Right));
+    let top = matches!(
+        kind,
+        HandleKind::Corner(Corner::TopLeft | Corner::TopRight) | HandleKind::Edge(Edge::Top)
+    );
     let sx = image.width / image.crop.width();
     let sy = image.height / image.crop.height();
     let min_x = (1.0 / image.source_width.max(1) as f64).min(image.crop.width());
     let min_y = (1.0 / image.source_height.max(1) as f64).min(image.crop.height());
     let mut crop = image.crop;
-    if left {
+    if horizontal && left {
         crop.x0 = (crop.x0 + local.x / sx).clamp(0.0, crop.x1 - min_x);
-    } else {
+    } else if horizontal {
         crop.x1 = (crop.x1 + local.x / sx).clamp(crop.x0 + min_x, 1.0);
     }
-    if top {
+    if vertical && top {
         crop.y0 = (crop.y0 + local.y / sy).clamp(0.0, crop.y1 - min_y);
-    } else {
+    } else if vertical {
         crop.y1 = (crop.y1 + local.y / sy).clamp(crop.y0 + min_y, 1.0);
     }
     let shift = kurbo::Vec2::new(
@@ -842,76 +725,6 @@ pub fn apply_image_crop(shape: &Shape, handle: Option<HandleKind>, delta: kurbo:
     image.height = crop.height() * sy;
     image.position = Point::new(center.x - image.width / 2.0, center.y - image.height / 2.0);
     Shape::Image(image)
-}
-
-/// Apply corner resize to a group by scaling all children relative to group bounds.
-fn apply_corner_resize_group(
-    group: &mut crate::shapes::Group,
-    corner: Corner,
-    delta: kurbo::Vec2,
-    keep_aspect_ratio: bool,
-) {
-    let bounds = group.bounds();
-    if bounds.width() < 1.0 && bounds.height() < 1.0 {
-        return;
-    }
-
-    let (new_x0, new_y0, new_x1, new_y1) = match corner {
-        Corner::TopLeft => (
-            bounds.x0 + delta.x,
-            bounds.y0 + delta.y,
-            bounds.x1,
-            bounds.y1,
-        ),
-        Corner::TopRight => (
-            bounds.x0,
-            bounds.y0 + delta.y,
-            bounds.x1 + delta.x,
-            bounds.y1,
-        ),
-        Corner::BottomLeft => (
-            bounds.x0 + delta.x,
-            bounds.y0,
-            bounds.x1,
-            bounds.y1 + delta.y,
-        ),
-        Corner::BottomRight => (
-            bounds.x0,
-            bounds.y0,
-            bounds.x1 + delta.x,
-            bounds.y1 + delta.y,
-        ),
-    };
-
-    let (x0, x1) = if new_x0 < new_x1 {
-        (new_x0, new_x1)
-    } else {
-        (new_x1, new_x0)
-    };
-    let (y0, y1) = if new_y0 < new_y1 {
-        (new_y0, new_y1)
-    } else {
-        (new_y1, new_y0)
-    };
-
-    let old_w = bounds.width().max(1.0);
-    let old_h = bounds.height().max(1.0);
-
-    let (sx, sy) = if keep_aspect_ratio {
-        let s = ((x1 - x0).max(1.0) / old_w).max((y1 - y0).max(1.0) / old_h);
-        (s, s)
-    } else {
-        ((x1 - x0).max(1.0) / old_w, (y1 - y0).max(1.0) / old_h)
-    };
-
-    // Transform: translate to origin, scale, translate to new position
-    let affine = Affine::translate(kurbo::Vec2::new(x0, y0))
-        * Affine::scale_non_uniform(sx, sy)
-        * Affine::translate(kurbo::Vec2::new(-bounds.x0, -bounds.y0));
-
-    for child in group.children_mut() {
-        child.transform(affine);
-    }
 }
 
 #[cfg(test)]
@@ -936,8 +749,8 @@ mod tests {
         let rect = Rectangle::new(Point::new(0.0, 0.0), 100.0, 50.0);
         let handles = get_handles(&Shape::Rectangle(rect));
 
-        // 4 corner handles + 1 rotation handle
-        assert_eq!(handles.len(), 5);
+        // 4 corners + rotation + 4 edge centers
+        assert_eq!(handles.len(), 9);
         assert!(matches!(
             handles[0].kind,
             HandleKind::Corner(Corner::TopLeft)
@@ -1034,7 +847,7 @@ mod tests {
             source_width: 200,
             source_height: 200,
             format: ImageFormat::Png,
-            data_base64: String::new(),
+            data_base64: String::new().into(),
             rotation: 0.0,
             crop: Rect::new(0.0, 0.0, 1.0, 1.0),
             style: ShapeStyle::default(),
@@ -1226,5 +1039,150 @@ mod image_geometry_regressions {
         };
         assert_eq!(i.crop, Rect::new(0.0, 0.0, 1.0, 1.0));
         assert_eq!(i.style.stroke_style, StrokeStyle::Solid);
+    }
+}
+
+#[cfg(test)]
+mod edge_handle_regressions {
+    use super::*;
+    use crate::shapes::{Ellipse, Image, ImageFormat, Math, Rectangle, Text};
+    fn shapes(angle: f64) -> Vec<Shape> {
+        let text = Text::new(Point::new(20.0, 30.0), "Example".into());
+        text.set_cached_size(100.0, 40.0);
+        let math = Math::new(Point::new(20.0, 60.0), "x^{3}".into());
+        math.set_cached_size(100.0, 30.0, -10.0);
+        let mut shapes = vec![
+            Shape::Rectangle(Rectangle::new(Point::new(20.0, 30.0), 100.0, 40.0)),
+            Shape::Ellipse(Ellipse::new(Point::new(70.0, 50.0), 50.0, 20.0)),
+            Shape::Image(
+                Image::new(
+                    Point::new(20.0, 30.0),
+                    &[1, 2, 3],
+                    400,
+                    200,
+                    ImageFormat::Png,
+                )
+                .with_size(100.0, 40.0),
+            ),
+            Shape::Text(text),
+            Shape::Math(math),
+        ];
+        for shape in &mut shapes {
+            shape.set_rotation(angle);
+        }
+        shapes
+    }
+    fn edge(shape: &Shape, kind: Edge) -> Point {
+        get_handles(shape)
+            .iter()
+            .find(|h| h.kind == HandleKind::Edge(kind))
+            .unwrap()
+            .position
+    }
+    fn opposite(kind: Edge) -> Edge {
+        match kind {
+            Edge::Left => Edge::Right,
+            Edge::Right => Edge::Left,
+            Edge::Top => Edge::Bottom,
+            Edge::Bottom => Edge::Top,
+        }
+    }
+    #[test]
+    fn edge_resize_is_one_axis_with_fixed_opposite_edge_after_rotation() {
+        for angle in [0.0, 0.73, std::f64::consts::FRAC_PI_2] {
+            for shape in shapes(angle) {
+                assert_eq!(
+                    get_handles(&shape)
+                        .iter()
+                        .filter(|h| matches!(h.kind, HandleKind::Edge(_)))
+                        .count(),
+                    4
+                );
+                for kind in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
+                    let delta = rotate_delta(kurbo::Vec2::new(12.0, 8.0), angle);
+                    let next =
+                        apply_manipulation(&shape, Some(HandleKind::Edge(kind)), delta, false);
+                    let expected = if matches!(kind, Edge::Left | Edge::Right) {
+                        kurbo::Vec2::new(12.0, 0.0)
+                    } else {
+                        kurbo::Vec2::new(0.0, 8.0)
+                    };
+                    assert!(
+                        edge(&next, kind)
+                            .distance(edge(&shape, kind) + rotate_delta(expected, angle))
+                            < 1e-8
+                    );
+                    assert!(
+                        edge(&next, opposite(kind)).distance(edge(&shape, opposite(kind))) < 1e-8
+                    );
+                    if matches!(kind, Edge::Left | Edge::Right) {
+                        assert!((next.bounds().height() - shape.bounds().height()).abs() < 1e-8);
+                    } else {
+                        assert!((next.bounds().width() - shape.bounds().width()).abs() < 1e-8);
+                    }
+                }
+            }
+        }
+    }
+    #[test]
+    fn edge_crop_preserves_other_axis_pixels_and_source() {
+        for angle in [0.0, 0.73] {
+            for kind in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
+                let mut original = Image::new(Point::ZERO, &[1, 2, 3], 400, 200, ImageFormat::Png)
+                    .with_size(200.0, 100.0);
+                original.rotation = angle;
+                let shape = Shape::Image(original.clone());
+                let local = match kind {
+                    Edge::Left => kurbo::Vec2::new(20.0, 15.0),
+                    Edge::Right => kurbo::Vec2::new(-20.0, 15.0),
+                    Edge::Top => kurbo::Vec2::new(20.0, 10.0),
+                    Edge::Bottom => kurbo::Vec2::new(20.0, -10.0),
+                };
+                let next = apply_image_crop(
+                    &shape,
+                    Some(HandleKind::Edge(kind)),
+                    rotate_delta(local, angle),
+                );
+                assert!(edge(&next, opposite(kind)).distance(edge(&shape, opposite(kind))) < 1e-8);
+                let Shape::Image(image) = next else { panic!() };
+                assert!(image.data_base64.shares_storage(&original.data_base64));
+                assert!((image.width / image.crop.width() - 200.0).abs() < 1e-8);
+                assert!((image.height / image.crop.height() - 100.0).abs() < 1e-8);
+                if matches!(kind, Edge::Left | Edge::Right) {
+                    assert_eq!(image.height, original.height);
+                } else {
+                    assert_eq!(image.width, original.width);
+                }
+            }
+        }
+    }
+    #[test]
+    fn text_math_display_scale_round_trips_and_keeps_content() {
+        for shape in shapes(0.0)
+            .into_iter()
+            .filter(|s| matches!(s, Shape::Text(_) | Shape::Math(_)))
+        {
+            let next = apply_manipulation(
+                &shape,
+                Some(HandleKind::Edge(Edge::Right)),
+                kurbo::Vec2::new(50.0, 0.0),
+                false,
+            );
+            let value = serde_json::to_value(&next).unwrap();
+            let restored: Shape = serde_json::from_value(value).unwrap();
+            match (&next, &restored) {
+                (Shape::Text(a), Shape::Text(b)) => {
+                    assert_eq!(a.display_scale, b.display_scale);
+                    assert_eq!(a.content, b.content);
+                    assert_eq!(a.font_size, b.font_size);
+                }
+                (Shape::Math(a), Shape::Math(b)) => {
+                    assert_eq!(a.display_scale, b.display_scale);
+                    assert_eq!(a.latex, b.latex);
+                    assert_eq!(a.font_size, b.font_size);
+                }
+                _ => panic!(),
+            }
+        }
     }
 }

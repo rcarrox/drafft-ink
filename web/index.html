@@ -96,53 +96,105 @@
             }
         }, { passive: false });
 
-        // Local Font Access API (Chrome/Edge on localhost/secure contexts).
-        // This is permission-gated by the browser; no font bytes leave the local machine.
+        // Sparse repaint scheduling: caret, fading laser, autosave and async work
+        // wake the Rust window only when needed. Pointer/pinch events still draw immediately.
+        let repaintTimer = null, repaintDeadline = Infinity;
+        window.drafftinkRequestRepaint = function(delay) {
+            delay = Math.max(0, Math.min(2147483647, Number(delay) || 0));
+            const deadline = performance.now() + delay;
+            if (deadline >= repaintDeadline) return;
+            if (repaintTimer !== null) clearTimeout(repaintTimer);
+            repaintDeadline = deadline;
+            repaintTimer = setTimeout(() => {
+                repaintTimer = null; repaintDeadline = Infinity;
+                window.dispatchEvent(new Event('drafftink-redraw'));
+            }, delay);
+        };
+
+        // Immutable font bytes are cached in this browser on this computer only.
+        function fontCache(operation, value) {
+            return new Promise((resolve, reject) => {
+                const open = indexedDB.open('drafftink.local_fonts.v1', 1);
+                open.onupgradeneeded = () => open.result.createObjectStore('fonts', {keyPath:'postscriptName'});
+                open.onerror = () => reject(open.error);
+                open.onsuccess = () => {
+                    const db=open.result;
+                    const tx=db.transaction('fonts',operation==='get'?'readonly':'readwrite');
+                    const request=tx.objectStore('fonts')[operation](value);
+                    request.onsuccess=()=>resolve(request.result);
+                    request.onerror=()=>reject(request.error);
+                    tx.oncomplete=()=>db.close(); tx.onabort=()=>db.close();
+                };
+            });
+        }
         window.drafftinkQueryLocalFonts = async function() {
-            if (!window.queryLocalFonts) {
-                console.warn('Local Font Access API is unavailable in this browser.');
-                return [];
-            }
             try {
-                const fonts = await window.queryLocalFonts();
-                return fonts.map(font => ({
-                    family: font.family || '',
-                    fullName: font.fullName || '',
-                    postscriptName: font.postscriptName || '',
-                    style: font.style || ''
-                }));
-            } catch (error) {
-                console.warn('Unable to enumerate local fonts:', error);
-                return [];
-            }
+                const response=await fetch('/local-fonts.json');
+                if(response.ok) { const fonts=await response.json(); if(Array.isArray(fonts)) return fonts; }
+            } catch(_) {}
+            if (!window.queryLocalFonts) return [];
+            try {
+                const fonts=await window.queryLocalFonts();
+                return fonts.map(font=>({family:font.family||'',fullName:font.fullName||'',postscriptName:font.postscriptName||'',style:font.style||''}));
+            } catch(error) { console.warn('Unable to enumerate local fonts:',error); return []; }
         };
+        window.drafftinkReadLocalFont = async function(postscriptName, allowPrompt=true) {
+            const cached=await fontCache('get',postscriptName).catch(()=>undefined);
+            if(cached) return cached;
+            try {
+                const response=await fetch('/local-font/'+encodeURIComponent(postscriptName));
+                if(response.ok) {
+                    const result={family:'',postscriptName,bytes:new Uint8Array(await response.arrayBuffer())};
+                    await fontCache('put',result).catch(()=>{}); return result;
+                }
+            } catch(_) {}
 
-        window.drafftinkReadLocalFont = async function(postscriptName) {
-            if (!window.queryLocalFonts) {
-                throw new Error('Local Font Access API unavailable');
+            if(!window.queryLocalFonts) throw new Error('Local Font Access API unavailable');
+            if(!allowPrompt) {
+                const access=await navigator.permissions.query({name:'local-fonts'}).catch(()=>null);
+                if(!access || access.state!=='granted') throw new Error('Activate local fonts in Settings first');
             }
-
             let fonts;
-            try {
-                fonts = await window.queryLocalFonts({ postscriptNames: [postscriptName] });
-            } catch (_) {
-                // Some Chromium versions ignore/filter the options object.
-                fonts = await window.queryLocalFonts();
-            }
-
-            const font = fonts.find(item => item.postscriptName === postscriptName) || fonts[0];
-            if (!font) {
-                throw new Error('Font not found: ' + postscriptName);
-            }
-
-            const blob = await font.blob();
-            const bytes = new Uint8Array(await blob.arrayBuffer());
-            return {
-                family: font.family || '',
-                postscriptName: font.postscriptName || postscriptName,
-                bytes
-            };
+            try { fonts=await window.queryLocalFonts({postscriptNames:[postscriptName]}); }
+            catch(_) { if(!allowPrompt) throw _; fonts=await window.queryLocalFonts(); }
+            const font=fonts.find(font=>font.postscriptName===postscriptName);
+            if(!font) throw new Error('Font not found: '+postscriptName);
+            const bytes=new Uint8Array(await (await font.blob()).arrayBuffer());
+            const result={family:font.family||'',postscriptName:font.postscriptName,bytes};
+            await fontCache('put',result).catch(error=>console.warn('Font cache unavailable:',error));
+            return result;
         };
+
+        const cursorTemplates=Promise.all(['cursormouse.svg','cursortext.svg'].map(name=>fetch(name).then(r=>{
+            if(!r.ok) throw new Error('Cursor unavailable'); return r.text();
+        })));
+        let cursorSVG=null, cursorCanvas=null, cursorObserver=null;
+        let textCursor=false, cursorOutline='#000000', cursorValue='';
+        function applyCursor() {
+            if(!cursorSVG || !cursorCanvas) return;
+            const native=cursorCanvas.style.cursor;
+            if(/resize|grab|move|pointer|none/.test(native) && !native.startsWith('url(')) return;
+            if(cursorCanvas.style.cursor!==cursorValue) cursorCanvas.style.cursor=cursorValue;
+        }
+        window.drafftinkSetCursor=function(text,color) {
+            const canvas=document.querySelector('canvas');
+            if(canvas!==cursorCanvas) {
+                cursorObserver?.disconnect(); cursorCanvas=canvas;
+                if(canvas) {
+                    cursorObserver=new MutationObserver(applyCursor);
+                    cursorObserver.observe(canvas,{attributes:true,attributeFilter:['style']});
+                }
+            }
+            const changed=textCursor!==text || cursorOutline!==color || !cursorValue;
+            textCursor=text; cursorOutline=/^#[0-9a-f]{6}$/i.test(color)?color:'#000000';
+            if(cursorSVG && changed) {
+                const svg=textCursor?cursorSVG[1]:cursorSVG[0].replaceAll('currentColor',cursorOutline);
+                cursorValue=`url("data:image/svg+xml,${encodeURIComponent(svg)}") ${textCursor?'14 14, text':'6 5, default'}`;
+            }
+            applyCursor();
+        };
+        cursorTemplates.then(svg=>{cursorSVG=svg;cursorValue='';window.drafftinkSetCursor(textCursor,cursorOutline);})
+            .catch(error=>console.warn('Custom cursors unavailable:',error));
 
         // Persistent export folder using the File System Access API (Chrome/Edge).
         // Directory handles are structured-cloneable and are kept in IndexedDB.

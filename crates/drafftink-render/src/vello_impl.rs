@@ -68,12 +68,27 @@ pub struct VelloRenderer {
     zoom: f64,
     /// Image cache to avoid re-decoding images every frame.
     /// Key is the shape ID (as string), value is the decoded peniko ImageData.
-    image_cache: std::collections::HashMap<String, peniko::ImageData>,
+    image_cache: std::collections::HashMap<u64, peniko::ImageData>,
     /// Shape path cache for hand-drawn effects.
     /// Key: (shape_id, seed, stroke_index, roughness_bits, zoom_bucket, path_hash)
     shape_cache: std::collections::HashMap<(String, u32, u32, u64, i32, u64), BezPath>,
     /// Text layout cache. Key: (shape_id, content_hash)
-    text_cache: std::collections::HashMap<(String, u64), CachedTextLayout>,
+    text_cache: std::collections::HashMap<(drafftink_core::shapes::ShapeId, u64), CachedTextLayout>,
+    cache_scope_prepared: bool,
+    math_cache: std::collections::HashMap<drafftink_core::shapes::ShapeId, CachedMath>,
+    math_primary_font: Option<std::sync::Arc<Vec<u8>>>,
+    font_aliases: std::collections::HashMap<String, String>,
+    registered_fonts: std::collections::HashMap<String, String>,
+    #[cfg(test)]
+    math_layout_builds: usize,
+}
+
+struct CachedMath {
+    source: String,
+    font_size: u64,
+    color: [u8; 4],
+    scene: Scene,
+    size: (f64, f64, f64),
 }
 
 impl Default for VelloRenderer {
@@ -364,7 +379,51 @@ impl VelloRenderer {
             image_cache: std::collections::HashMap::new(),
             shape_cache: std::collections::HashMap::new(),
             text_cache: std::collections::HashMap::new(),
+            cache_scope_prepared: false,
+            math_cache: std::collections::HashMap::new(),
+            math_primary_font: None,
+            registered_fonts: Default::default(),
+            font_aliases: Default::default(),
+            #[cfg(test)]
+            math_layout_builds: 0,
         }
+    }
+
+    pub fn retain_open_document_caches<'a>(
+        &mut self,
+        documents: impl IntoIterator<Item = &'a drafftink_core::canvas::CanvasDocument>,
+    ) {
+        // Keep decoded pixels only for sources still referenced by this canvas.
+        // Duplicated images and Undo snapshots share encoded bytes and cache keys.
+        fn image_keys(
+            shape: &Shape,
+            keys: &mut std::collections::HashSet<u64>,
+            ids: &mut std::collections::HashSet<drafftink_core::shapes::ShapeId>,
+        ) {
+            ids.insert(shape.id());
+            match shape {
+                Shape::Image(image) => {
+                    keys.insert(image.data_base64.key());
+                }
+                Shape::Group(group) => {
+                    for child in group.children() {
+                        image_keys(child, keys, ids);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut live_images = std::collections::HashSet::new();
+        let mut live_ids = std::collections::HashSet::new();
+        for document in documents {
+            for shape in document.shapes_ordered() {
+                image_keys(shape, &mut live_images, &mut live_ids);
+            }
+        }
+        self.image_cache.retain(|key, _| live_images.contains(key));
+        self.math_cache.retain(|id, _| live_ids.contains(id));
+        self.text_cache.retain(|(id, _), _| live_ids.contains(id));
+        self.cache_scope_prepared = true;
     }
 
     /// Get the built scene for rendering.
@@ -385,14 +444,54 @@ impl VelloRenderer {
     /// Register a font selected from the user's computer (Chrome/Edge Local Font Access).
     /// Parley reads the family name from the font tables, so the text shape only needs
     /// to remember that family name.
-    pub fn register_custom_font(&mut self, bytes: Vec<u8>) {
+    pub fn register_custom_font(
+        &mut self,
+        family: &str,
+        postscript: &str,
+        bytes: Vec<u8>,
+    ) -> String {
+        if let Some(canonical) = self.registered_fonts.get(postscript) {
+            return canonical.clone();
+        }
         if bytes.is_empty() {
-            return;
+            return family.to_string();
+        }
+        let canonical = ttf_parser::Face::parse(&bytes, 0)
+            .ok()
+            .and_then(|face| {
+                [16, 1].into_iter().find_map(|id| {
+                    face.names()
+                        .into_iter()
+                        .filter(|name| name.name_id == id)
+                        .find_map(|name| name.to_string())
+                })
+            })
+            .unwrap_or_else(|| family.to_string());
+        self.font_aliases
+            .insert(family.to_string(), canonical.clone());
+        if let Ok(face) = ttf_parser::Face::parse(&bytes, 0) {
+            for name in face
+                .names()
+                .into_iter()
+                .filter(|name| name.name_id == 1 || name.name_id == 16)
+            {
+                if let Some(name) = name.to_string() {
+                    self.font_aliases.insert(name, canonical.clone());
+                }
+            }
+        }
+        let bytes = std::sync::Arc::new(bytes);
+        if postscript.to_lowercase().replace('-', "") == "googlesansmedium" {
+            self.math_primary_font = Some(bytes.clone());
         }
         self.font_cx
             .collection
-            .register_fonts(vello::peniko::Blob::new(std::sync::Arc::new(bytes)), None);
+            .register_fonts(vello::peniko::Blob::new(bytes), None);
+        self.registered_fonts
+            .insert(postscript.to_string(), canonical.clone());
         self.text_cache.clear();
+        self.math_cache.clear();
+        canonical
     }
 
     /// Build a scene for export (shapes only, no grid/selection/guides).
@@ -846,12 +945,16 @@ impl VelloRenderer {
         text.style.stroke_color.r.hash(&mut hasher);
         text.style.stroke_color.g.hash(&mut hasher);
         text.style.stroke_color.b.hash(&mut hasher);
-        let cache_key = (text.id().to_string(), hasher.finish());
+        text.style.stroke_color.a.hash(&mut hasher);
+        text.style.opacity.to_bits().hash(&mut hasher);
+        let cache_key = (text.id(), hasher.finish());
 
         // Check cache
         if let Some(cached) = self.text_cache.get(&cache_key) {
             text.set_cached_size(cached.width, cached.height);
-            let text_transform = transform * Affine::translate((text.position.x, text.position.y));
+            let text_transform = transform
+                * Affine::translate((text.position.x, text.position.y))
+                * Affine::scale_non_uniform(text.display_scale[0], text.display_scale[1]);
 
             for (font_data, font_size, brush, glyphs, skew) in &cached.glyph_runs {
                 let glyph_xform = skew.map(|angle| Affine::skew(angle, 0.0));
@@ -873,13 +976,20 @@ impl VelloRenderer {
 
         let (font_name, parley_weight, is_italic) =
             if let Some(custom) = text.custom_font.as_deref() {
-                (custom, parley::FontWeight::NORMAL, false)
+                (
+                    self.font_aliases
+                        .get(custom)
+                        .map(String::as_str)
+                        .unwrap_or(custom),
+                    parley::FontWeight::new(text.font_weight.value()),
+                    false,
+                )
             } else {
                 match (&text.font_family, &text.font_weight) {
                     (FontFamily::GelPen, FontWeight::Light) => {
                         ("GelPenLight", parley::FontWeight::NORMAL, false)
                     }
-                    (FontFamily::GelPen, FontWeight::Regular) => {
+                    (FontFamily::GelPen, FontWeight::Regular | FontWeight::Medium) => {
                         ("GelPen", parley::FontWeight::NORMAL, false)
                     }
                     (FontFamily::GelPen, FontWeight::Heavy) => {
@@ -887,6 +997,9 @@ impl VelloRenderer {
                     }
                     (FontFamily::NotoSans, FontWeight::Light) => {
                         ("Noto Sans", parley::FontWeight::NORMAL, true)
+                    }
+                    (FontFamily::NotoSans, FontWeight::Medium) => {
+                        ("Noto Sans", parley::FontWeight::new(500.0), false)
                     }
                     (FontFamily::NotoSans, FontWeight::Regular) => {
                         ("Noto Sans", parley::FontWeight::NORMAL, false)
@@ -897,7 +1010,7 @@ impl VelloRenderer {
                     (FontFamily::GelPenSerif, FontWeight::Light) => {
                         ("GelPenSerifLight", parley::FontWeight::NORMAL, false)
                     }
-                    (FontFamily::GelPenSerif, FontWeight::Regular) => {
+                    (FontFamily::GelPenSerif, FontWeight::Regular | FontWeight::Medium) => {
                         ("GelPenSerif", parley::FontWeight::NORMAL, false)
                     }
                     (FontFamily::GelPenSerif, FontWeight::Heavy) => {
@@ -949,7 +1062,9 @@ impl VelloRenderer {
         let layout_height = layout.height() as f64;
         text.set_cached_size(layout_width, layout_height);
 
-        let text_transform = transform * Affine::translate((text.position.x, text.position.y));
+        let text_transform = transform
+            * Affine::translate((text.position.x, text.position.y))
+            * Affine::scale_non_uniform(text.display_scale[0], text.display_scale[1]);
 
         let mut cached_runs = Vec::new();
         let mut glyph_count = 0;
@@ -1002,7 +1117,8 @@ impl VelloRenderer {
             }
         }
 
-        // Cache the layout
+        // One layout per text object; old edit versions must not accumulate.
+        self.text_cache.retain(|(id, _), _| *id != text.id());
         self.text_cache.insert(
             cache_key,
             CachedTextLayout {
@@ -1035,10 +1151,10 @@ impl VelloRenderer {
     fn render_image(&mut self, image: &drafftink_core::shapes::Image, transform: Affine) {
         use std::sync::Arc;
 
-        let id_str = image.id().to_string();
+        let source_key = image.data_base64.key();
 
         // Check if we have a cached decoded image
-        let image_data = if let Some(cached) = self.image_cache.get(&id_str) {
+        let image_data = if let Some(cached) = self.image_cache.get(&source_key) {
             cached.clone()
         } else {
             // Decode the image data
@@ -1055,7 +1171,7 @@ impl VelloRenderer {
                         height,
                         alpha_type: peniko::ImageAlphaType::Alpha,
                     };
-                    self.image_cache.insert(id_str.clone(), img_data.clone());
+                    self.image_cache.insert(source_key, img_data.clone());
                     img_data
                 } else {
                     // Failed to decode - draw placeholder
@@ -1129,70 +1245,94 @@ impl VelloRenderer {
         );
     }
 
-    /// Render a math (LaTeX) shape using ReX.
-    fn render_math(&mut self, math: &drafftink_core::shapes::Math, transform: Affine) {
-        // A newly inserted formula is intentionally invisible until the user types.
-        // The inline editor is shown at the insertion point.
-        if math.latex.trim().is_empty() {
-            return;
-        }
-
+    fn prepare_math(&mut self, math: &drafftink_core::shapes::Math) -> bool {
         use crate::rex_backend::VelloBackend;
         use rex::font::backend::ttf_parser::TtfMathFont;
         use rex::layout::engine::LayoutBuilder;
         use rex::render::Renderer as RexRenderer;
-
-        // Parse fonts
+        if math.latex.trim().is_empty() {
+            return false;
+        }
+        let rgba = math.style.stroke_with_opacity().to_rgba8();
+        let color = [rgba.r, rgba.g, rgba.b, rgba.a];
+        if let Some(cached) = self.math_cache.get(&math.id()) {
+            if cached.source == math.latex
+                && cached.font_size == math.font_size.to_bits()
+                && cached.color == color
+            {
+                math.set_cached_size(cached.size.0, cached.size.1, cached.size.2);
+                return true;
+            }
+        }
         let Ok(math_face) = ttf_parser::Face::parse(XITS_MATH, 0) else {
-            self.render_math_error(math, transform, "Font parse error");
-            return;
+            return false;
         };
         let Ok(math_font) = TtfMathFont::new(math_face) else {
-            self.render_math_error(math, transform, "No MATH table");
-            return;
+            return false;
         };
-        // Primary font (GelPen) for text glyphs - fallback to math font if unavailable
-        let primary_face = ttf_parser::Face::parse(GELPEN_REGULAR, 0).ok();
-
-        // Parse LaTeX
-        let Ok(parse_nodes) = rex::parser::parse(&math.latex) else {
-            self.render_math_error(math, transform, "Parse error");
-            return;
+        // Google Sans Medium supplies ordinary glyphs. XITS retains MATH metrics
+        // and symbols not available in Google Sans, including extensible operators.
+        let primary_bytes: &[u8] = self
+            .math_primary_font
+            .as_deref()
+            .map(|v| v.as_slice())
+            .unwrap_or(NOTO_SANS);
+        let primary_face = ttf_parser::Face::parse(primary_bytes, 0).ok();
+        let Ok(nodes) = rex::parser::parse(&math.latex) else {
+            return false;
         };
-
-        // Layout
-        let layout_engine = LayoutBuilder::new(&math_font)
+        let engine = LayoutBuilder::new(&math_font)
             .font_size(math.font_size)
             .build();
-        let Ok(layout) = layout_engine.layout(&parse_nodes) else {
-            self.render_math_error(math, transform, "Layout error");
-            return;
+        let Ok(layout) = engine.layout(&nodes) else {
+            return false;
         };
-
-        // Cache size for bounds calculation
         let size = layout.size();
-        math.set_cached_size(size.width, size.height, size.depth);
-
-        // Position: math.position is baseline origin, apply rotation around center
-        let center_x = math.position.x + size.width / 2.0;
-        let center_y = math.position.y - size.height / 2.0 - size.depth / 2.0;
-        let math_transform = transform
-            * Affine::translate((center_x, center_y))
-            * Affine::rotate(math.rotation)
-            * Affine::translate((-center_x, -center_y))
-            * Affine::translate((math.position.x, math.position.y));
-
-        // Render using our Vello backend with font fallback
-        let color: Color = math.style.stroke_color.into();
+        let mut scene = Scene::new();
         let mut backend = VelloBackend::new(
-            &mut self.scene,
+            &mut scene,
             &math_font,
             primary_face.as_ref(),
-            math_transform,
-            color,
+            Affine::IDENTITY,
+            math.style.stroke_with_opacity(),
         );
-        let renderer = RexRenderer::new();
-        renderer.render(&layout, &mut backend);
+        RexRenderer::new().render(&layout, &mut backend);
+        math.set_cached_size(size.width, size.height, size.depth);
+        self.math_cache.insert(
+            math.id(),
+            CachedMath {
+                source: math.latex.clone(),
+                font_size: math.font_size.to_bits(),
+                color,
+                scene,
+                size: (size.width, size.height, size.depth),
+            },
+        );
+        #[cfg(test)]
+        {
+            self.math_layout_builds += 1;
+        }
+        true
+    }
+
+    fn render_math(&mut self, math: &drafftink_core::shapes::Math, transform: Affine) {
+        if math.latex.trim().is_empty() {
+            return;
+        }
+        if !self.prepare_math(math) {
+            self.render_math_error(math, transform, "Invalid formula");
+            return;
+        }
+        if let Some(cached) = self.math_cache.get(&math.id()) {
+            self.scene.append(
+                &cached.scene,
+                Some(
+                    transform
+                        * Affine::translate((math.position.x, math.position.y))
+                        * Affine::scale_non_uniform(math.display_scale[0], math.display_scale[1]),
+                ),
+            );
+        }
     }
 
     /// Render error placeholder for math that couldn't be rendered.
@@ -1240,13 +1380,20 @@ impl VelloRenderer {
         let (font_name, parley_weight, is_italic) = if let Some(custom) =
             text.custom_font.as_deref()
         {
-            (custom, parley::FontWeight::NORMAL, false)
+            (
+                self.font_aliases
+                    .get(custom)
+                    .map(String::as_str)
+                    .unwrap_or(custom),
+                parley::FontWeight::new(text.font_weight.value()),
+                false,
+            )
         } else {
             match (&text.font_family, &text.font_weight) {
                 (ShapeFontFamily::GelPen, FontWeight::Light) => {
                     ("GelPenLight", parley::FontWeight::NORMAL, false)
                 }
-                (ShapeFontFamily::GelPen, FontWeight::Regular) => {
+                (ShapeFontFamily::GelPen, FontWeight::Regular | FontWeight::Medium) => {
                     ("GelPen", parley::FontWeight::NORMAL, false)
                 }
                 (ShapeFontFamily::GelPen, FontWeight::Heavy) => {
@@ -1254,6 +1401,9 @@ impl VelloRenderer {
                 }
                 (ShapeFontFamily::NotoSans, FontWeight::Light) => {
                     ("Noto Sans", parley::FontWeight::NORMAL, true)
+                }
+                (ShapeFontFamily::NotoSans, FontWeight::Medium) => {
+                    ("Noto Sans", parley::FontWeight::new(500.0), false)
                 }
                 (ShapeFontFamily::NotoSans, FontWeight::Regular) => {
                     ("Noto Sans", parley::FontWeight::NORMAL, false)
@@ -1264,7 +1414,7 @@ impl VelloRenderer {
                 (ShapeFontFamily::GelPenSerif, FontWeight::Light) => {
                     ("GelPenSerifLight", parley::FontWeight::NORMAL, false)
                 }
-                (ShapeFontFamily::GelPenSerif, FontWeight::Regular) => {
+                (ShapeFontFamily::GelPenSerif, FontWeight::Regular | FontWeight::Medium) => {
                     ("GelPenSerif", parley::FontWeight::NORMAL, false)
                 }
                 (ShapeFontFamily::GelPenSerif, FontWeight::Heavy) => {
@@ -1345,8 +1495,8 @@ impl VelloRenderer {
         // anchor = position + (half_w, half_h) + rotate(-half_w, -half_h)
         // position = anchor - (half_w, half_h) - rotate(-half_w, -half_h)
         let rotation = text.rotation;
-        let half_w = layout_width / 2.0;
-        let half_h = layout_height / 2.0;
+        let half_w = layout_width * text.display_scale[0] / 2.0;
+        let half_h = layout_height * text.display_scale[1] / 2.0;
 
         let render_position = if let Some(anchor) = anchor {
             if rotation.abs() > 0.001 {
@@ -1374,6 +1524,9 @@ impl VelloRenderer {
         } else {
             transform * Affine::translate((render_position.x, render_position.y))
         };
+
+        let text_transform = text_transform
+            * Affine::scale_non_uniform(text.display_scale[0], text.display_scale[1]);
 
         // Render glyphs first (text content) - use styled_layout which has color spans
         for line in styled_layout.lines() {
@@ -1661,6 +1814,10 @@ impl VelloRenderer {
 
 impl Renderer for VelloRenderer {
     fn build_scene(&mut self, ctx: &RenderContext) {
+        if !self.cache_scope_prepared {
+            self.retain_open_document_caches(std::iter::once(&ctx.canvas.document));
+        }
+        self.cache_scope_prepared = false;
         // Clear the scene
         self.scene.reset();
         self.selection_color = ctx.selection_color;
@@ -1739,7 +1896,7 @@ impl Renderer for VelloRenderer {
 
         // Draw laser pointer
         if let Some((pos, ref trail)) = ctx.laser_pointer {
-            self.render_laser_pointer(pos, trail, camera_transform);
+            self.render_laser_pointer(pos, trail, camera_transform, ctx.laser_color);
         }
     }
 }
@@ -2205,11 +2362,18 @@ impl VelloRenderer {
     }
 
     /// Render laser pointer with trail.
-    fn render_laser_pointer(&mut self, pos: Point, trail: &[(Point, f64)], transform: Affine) {
+    fn render_laser_pointer(
+        &mut self,
+        pos: Point,
+        trail: &[(Point, f64)],
+        transform: Affine,
+        laser_color: Color,
+    ) {
+        let rgb = laser_color.to_rgba8();
         // Draw trail with fading effect
         for (point, alpha) in trail {
             let a = (*alpha * 255.0) as u8;
-            let color = Color::from_rgba8(255, 0, 0, a);
+            let color = Color::from_rgba8(rgb.r, rgb.g, rgb.b, a);
             let radius = 4.0 / self.zoom * *alpha;
             let circle = kurbo::Circle::new(*point, radius);
             self.scene
@@ -2218,13 +2382,13 @@ impl VelloRenderer {
 
         // Draw main pointer (bright red dot with glow)
         let glow_radius = 12.0 / self.zoom;
-        let glow_color = Color::from_rgba8(255, 0, 0, 100);
+        let glow_color = Color::from_rgba8(rgb.r, rgb.g, rgb.b, 100);
         let glow = kurbo::Circle::new(pos, glow_radius);
         self.scene
             .fill(Fill::NonZero, transform, glow_color, None, &glow);
 
         let main_radius = 6.0 / self.zoom;
-        let main_color = Color::from_rgba8(255, 50, 50, 255);
+        let main_color = Color::from_rgba8(rgb.r, rgb.g, rgb.b, 255);
         let main = kurbo::Circle::new(pos, main_radius);
         self.scene
             .fill(Fill::NonZero, transform, main_color, None, &main);
@@ -2436,6 +2600,9 @@ fn outline_stroke(width: f64, pattern: StrokeStyle) -> Stroke {
 
 impl ShapeRenderer for VelloRenderer {
     fn render_shape(&mut self, shape: &Shape, transform: Affine, selected: bool) {
+        if let Shape::Math(math) = shape {
+            self.prepare_math(math);
+        }
         // Get rotation and apply rotation transform around shape center
         let rotation = shape.rotation();
         let shape_transform = if rotation.abs() > 0.001 {
@@ -2599,5 +2766,49 @@ mod tests {
 
         let ctx = RenderContext::new(&canvas, kurbo::Size::new(800.0, 600.0));
         renderer.build_scene(&ctx);
+    }
+}
+
+#[cfg(test)]
+mod cache_regressions {
+    use super::*;
+    use drafftink_core::shapes::{Image, ImageFormat, Math};
+    #[test]
+    fn stable_formula_reuses_layout_until_content_changes() {
+        let mut renderer = VelloRenderer::new();
+        let mut math = Math::new(Point::ZERO, "x^{3}".into());
+        for _ in 0..10 {
+            renderer.render_shape(&Shape::Math(math.clone()), Affine::IDENTITY, false);
+        }
+        assert_eq!(renderer.math_layout_builds, 1);
+        assert_eq!(renderer.math_cache.len(), 1);
+        math.position = Point::new(50.0, 70.0);
+        math.rotation = 0.7;
+        math.display_scale = [1.5, 1.0];
+        renderer.render_shape(&Shape::Math(math.clone()), Affine::IDENTITY, false);
+        assert_eq!(renderer.math_layout_builds, 1);
+        math.set_latex("x^{4}".into());
+        renderer.render_shape(&Shape::Math(math), Affine::IDENTITY, false);
+        assert_eq!(renderer.math_layout_builds, 2);
+        assert_eq!(renderer.math_cache.len(), 1);
+    }
+    #[test]
+    fn duplicates_decode_once_and_deleted_sources_leave_cache() {
+        let image = ::image::DynamicImage::ImageRgba8(::image::RgbaImage::from_pixel(
+            8,
+            8,
+            ::image::Rgba([255, 0, 0, 255]),
+        ));
+        let mut png = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut png, ::image::ImageFormat::Png).unwrap();
+        let mut renderer = VelloRenderer::new();
+        for x in [0.0, 100.0] {
+            let image = Image::new(Point::new(x, 0.0), png.get_ref(), 8, 8, ImageFormat::Png);
+            renderer.render_shape(&Shape::Image(image), Affine::IDENTITY, false);
+        }
+        assert_eq!(renderer.image_cache.len(), 1);
+        let canvas = drafftink_core::Canvas::new();
+        renderer.build_scene(&RenderContext::new(&canvas, kurbo::Size::new(800.0, 600.0)));
+        assert!(renderer.image_cache.is_empty());
     }
 }

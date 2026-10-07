@@ -236,7 +236,7 @@ pub fn shape_to_loro(shape: &Shape, map: &LoroMap) -> LoroResult<()> {
             map.insert(KEY_SOURCE_WIDTH, image.source_width as i64)?;
             map.insert(KEY_SOURCE_HEIGHT, image.source_height as i64)?;
             map.insert(KEY_FORMAT, image_format_to_i64(image.format))?;
-            map.insert(KEY_DATA_BASE64, image.data_base64.clone())?;
+            map.insert(KEY_DATA_BASE64, image.data_base64.to_string())?;
             map.insert(KEY_ROTATION, image.rotation)?;
             style_to_loro(&image.style, map)?;
         }
@@ -624,6 +624,7 @@ fn font_weight_to_i64(w: FontWeight) -> i64 {
         FontWeight::Light => 0,
         FontWeight::Regular => 1,
         FontWeight::Heavy => 2,
+        FontWeight::Medium => 3,
     }
 }
 
@@ -631,6 +632,7 @@ fn i64_to_font_weight(v: i64) -> FontWeight {
     match v {
         0 => FontWeight::Light,
         1 => FontWeight::Regular,
+        3 => FontWeight::Medium,
         _ => FontWeight::Heavy,
     }
 }

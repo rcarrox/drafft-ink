@@ -47,6 +47,45 @@ function Write-Response($Stream, [int]$Status, [string]$StatusText, [byte[]]$Bod
     $Stream.Flush()
 }
 
+# Font bytes are served only by this existing loopback listener. Registry paths
+# are restricted to the two Windows font directories, never arbitrary files.
+$script:LocalFontFiles = @{}
+function Get-LocalFontCatalog {
+    $script:LocalFontFiles.Clear()
+    $records = New-Object 'System.Collections.Generic.List[object]'
+    $roots = @()
+    if ($env:WINDIR) { $roots += [System.IO.Path]::GetFullPath((Join-Path $env:WINDIR 'Fonts')) }
+    if ($env:LOCALAPPDATA) { $roots += [System.IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\Fonts')) }
+    foreach ($registryPath in @('HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts', 'HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts')) {
+        $key = Get-Item -LiteralPath $registryPath -ErrorAction SilentlyContinue
+        if (-not $key) { continue }
+        foreach ($displayName in $key.GetValueNames()) {
+            $registered = $key.GetValue($displayName)
+            if ($registered -isnot [string] -or [string]::IsNullOrWhiteSpace($registered)) { continue }
+            $candidates = @()
+            if ([System.IO.Path]::IsPathRooted($registered)) { $candidates += $registered }
+            else { foreach ($fontRoot in $roots) { $candidates += Join-Path $fontRoot $registered } }
+            foreach ($candidate in $candidates) {
+                try { $fontPath = [System.IO.Path]::GetFullPath($candidate) } catch { continue }
+                $allowed = $false
+                foreach ($fontRoot in $roots) {
+                    $prefix = $fontRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+                    if ($fontPath.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { $allowed = $true; break }
+                }
+                if (-not $allowed -or -not (Test-Path -LiteralPath $fontPath -PathType Leaf)) { continue }
+                if ([System.IO.Path]::GetExtension($fontPath).ToLowerInvariant() -notin @('.ttf','.otf','.ttc')) { continue }
+                $identifier = [System.IO.Path]::GetFileNameWithoutExtension($fontPath)
+                $family = $displayName -replace '\s*\((TrueType|OpenType)\)\s*$', ''
+                $script:LocalFontFiles[$identifier] = $fontPath
+                $records.Add([pscustomobject][ordered]@{ family = $family; fullName = $family; postscriptName = $identifier; style = ''; source = 'local-server' })
+                break
+            }
+        }
+        $key.Close()
+    }
+    return @($records.ToArray() | Sort-Object family,postscriptName -Unique)
+}
+
 $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $Port)
 try {
     $listener.Start()
@@ -71,6 +110,26 @@ try {
             }
 
             $target = $parts[1].Split('?')[0]
+            if ($target -eq '/local-fonts.json') {
+                $catalog = @(Get-LocalFontCatalog)
+                $json = ConvertTo-Json -InputObject $catalog -Depth 4 -Compress
+                $body = [System.Text.Encoding]::UTF8.GetBytes($json)
+                Write-Response $stream 200 'OK' $body 'application/json; charset=utf-8'
+                continue
+            }
+            if ($target.StartsWith('/local-font/', [System.StringComparison]::Ordinal)) {
+                $identifier = [System.Uri]::UnescapeDataString($target.Substring('/local-font/'.Length))
+                if ($script:LocalFontFiles.Count -eq 0) { $null = Get-LocalFontCatalog }
+                if (-not $script:LocalFontFiles.ContainsKey($identifier)) {
+                    Write-Response $stream 404 'Not Found' ([System.Text.Encoding]::UTF8.GetBytes('Font not found')) 'text/plain; charset=utf-8'
+                    continue
+                }
+                $fontPath = $script:LocalFontFiles[$identifier]
+                $body = if ($parts[0] -eq 'HEAD') { [byte[]]::new(0) } else { [System.IO.File]::ReadAllBytes($fontPath) }
+                Write-Response $stream 200 'OK' $body 'application/octet-stream'
+                continue
+            }
+
             $relative = [System.Uri]::UnescapeDataString($target).TrimStart('/').Replace('/', [System.IO.Path]::DirectorySeparatorChar)
             if ([string]::IsNullOrWhiteSpace($relative)) { $relative = 'index.html' }
 
@@ -110,3 +169,4 @@ try {
     $listener.Stop()
     Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
 }
+
