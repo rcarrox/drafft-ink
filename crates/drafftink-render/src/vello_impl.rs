@@ -1631,9 +1631,7 @@ impl VelloRenderer {
     }
 
     fn prepare_math(&mut self, math: &drafftink_core::shapes::Math) -> bool {
-        let local = self.math_primary_font.clone();
-        let bytes = local.as_deref().map(|v| v.as_slice()).unwrap_or(NOTO_SANS);
-        self.prepare_math_with_primary(math, bytes)
+        self.prepare_math_with_primary(math, GELPEN_REGULAR)
     }
     fn prepare_math_with_primary(
         &mut self,
@@ -2100,7 +2098,7 @@ impl VelloRenderer {
     fn render_shape_handles(&mut self, shape: &Shape, transform: Affine) {
         let handles = get_handles(shape);
         // Scale handle size inversely with zoom to maintain constant screen size
-        let handle_size = 16.0 / self.zoom;
+        let handle_size = 6.0 / self.zoom;
         let stroke_width = 1.0 / self.zoom;
         let dash_len = 4.0 / self.zoom;
 
@@ -2112,7 +2110,7 @@ impl VelloRenderer {
             }
             _ => {
                 // Draw selection rectangle for non-line shapes
-                let bounds = shape.bounds();
+                let bounds = drafftink_core::selection::selection_bounds(shape);
                 let rotation = shape.rotation();
                 let stroke = Stroke::new(stroke_width).with_dashes(0.0, [dash_len, dash_len]);
 
@@ -2199,10 +2197,8 @@ impl VelloRenderer {
                 );
             }
             HandleKind::Corner(_) | HandleKind::Edge(_) => {
-                // Square handle for corners/edges
-                let half = size / 2.0;
-                let rect = Rect::new(pos.x - half, pos.y - half, pos.x + half, pos.y + half);
-                let path = rect.to_path(0.1);
+                // Small circular controls; the hit area remains generous.
+                let path = kurbo::Ellipse::new(pos, (size / 2.0, size / 2.0), 0.0).to_path(0.1);
 
                 // White fill
                 self.scene
@@ -3576,5 +3572,28 @@ mod parent_font_and_script_tests {
         renderer.render_text(&text, Affine::IDENTITY);
         assert_eq!(text.content, "AbXYα≤@");
         assert!(text.bounds().height() > 0.0);
+    }
+}
+
+#[cfg(test)]
+mod math_symbols_tests {
+    use super::*;
+    #[test]
+    fn binomial_and_infinite_bounds_render_with_gelpen() {
+        let mut renderer = VelloRenderer::new();
+        for latex in [
+            r"\binom{n}{k}",
+            r"\int_{0}^{\infty} x",
+            r"\lim_{n\to\infty} x",
+            r"[0,\infty]",
+        ] {
+            let math = drafftink_core::shapes::Math::new(Point::ZERO, latex.into());
+            assert!(renderer.prepare_math(&math), "{latex}");
+            assert_eq!(
+                renderer.math_cache[&math.id()].primary_font_id,
+                GELPEN_REGULAR.as_ptr() as usize
+            );
+            assert!(math.bounds().height() > 0.0);
+        }
     }
 }

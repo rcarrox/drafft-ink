@@ -1275,7 +1275,11 @@ impl EventHandler {
                     &manip.original_shape,
                     manip.handle,
                     adjusted_delta,
-                    input.shift(),
+                    if matches!(manip.original_shape, Shape::Text(_) | Shape::Math(_)) {
+                        !input.shift()
+                    } else {
+                        input.shift()
+                    },
                 )
             };
             if let Some(shape) = canvas.document.get_shape_mut(manip.shape_id) {

@@ -40,9 +40,9 @@ function inspectCapture(file) {
 
 (async () => {
   const browser = await chromium.launch({ channel: 'chromium', headless: true, args: ['--enable-unsafe-webgpu', '--use-angle=swiftshader'] });
-  const context = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+  const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, permissions: ['clipboard-read','clipboard-write'] });
   await context.addInitScript(() => localStorage.setItem('drafftink.user_settings.v1', JSON.stringify({ restore_last_document: false, intro_json: '', autosave_enabled: false, default_font: 'Noto Sans', default_font_postscript: '' })));
-  const page = await context.newPage();
+  let page = await context.newPage();
   const logs = [];
   page.on('console', message => logs.push(message.type() + ': ' + message.text()));
   page.on('pageerror', error => logs.push('PAGEERROR: ' + error));
@@ -71,7 +71,7 @@ function inspectCapture(file) {
     assert(inspected.valid,`GPU PNG export is empty: ${JSON.stringify(inspected)}`);
     return inspected;
   };
-  const input = await context.newCDPSession(page);
+  let input = await context.newCDPSession(page);
   const keys = async value => {
     for (const char of value) {
       if (char.codePointAt(0) < 128) await page.keyboard.press(char);
@@ -88,7 +88,19 @@ function inspectCapture(file) {
   const control = async name => {
     const s = await wait(s => !!s.controls[name]);
     const [x0, y0, x1, y1] = s.controls[name];
-    await page.mouse.click((x0 + x1) / 2, (y0 + y1) / 2);
+    await page.mouse.move((x0+x1)/2,(y0+y1)/2);
+    await page.waitForTimeout(100);
+    await page.mouse.click((x0 + x1) / 2, (y0 + y1) / 2, {delay:60});
+    await page.waitForTimeout(100);
+  };
+  const focusCanvasTool = async tool => {
+    // MouseInput consumption uses egui's previous hover frame. Give the canvas
+    // hover and each focus dismissal a frame before the placement click.
+    await page.mouse.move(400,300);await page.waitForTimeout(100);
+    await page.keyboard.press('Escape');await page.waitForTimeout(100);
+    await page.keyboard.press('Escape');await page.waitForTimeout(100);
+    await page.keyboard.press(tool);await wait(s=>s.tool===(tool==='m'?'Math':'Text'));
+    await page.mouse.click(400,300);
   };
   const fill = async (name, value) => { await control(name); await page.keyboard.press('Control+a'); await keys(value); };
   try {
@@ -179,9 +191,48 @@ function inspectCapture(file) {
     await page.keyboard.press('ArrowRight');await wait(s=>Math.abs(s.shapes.find(item=>item.id===commandId).bounds[0]-nudgeBefore.bounds[0]-1)<0.01);
     const nudgeFine=(await state()).shapes.find(item=>item.id===commandId);
     await page.keyboard.press('Shift+ArrowRight');await wait(s=>Math.abs(s.shapes.find(item=>item.id===commandId).bounds[0]-nudgeFine.bounds[0]-20*s.zoom)<0.01);
+    // Run input/clipboard checks before requesting a GPU PNG export.
+    // New code command uses the same inline axis and supports live completion.
+    await control('New canvas');await wait(s=>s.shapes.length===0);
+    await focusCanvasTool('t');await wait(s=>!!s.editing_text);
+    await keys('bin(');await wait(s=>s.command_editor==='bin(');
+    await keys('n,k)');await wait(s=>commandText(s)?.formulas[0].math.latex==='\\binom{n}{k}');
+    await page.keyboard.press('Enter');await page.keyboard.press('Escape');await wait(s=>s.editing_text===null);
+    const binShape=(await state()).shapes.find(item=>item.shape.Text);
+    await page.keyboard.press('s');
+    const resizeBin=async free=> {
+      await page.mouse.click((binShape.bounds[0]+binShape.bounds[2])/2,(binShape.bounds[1]+binShape.bounds[3])/2);
+      const handle=(await state()).shapes.find(item=>item.id===binShape.id).handles.find(h=>h.kind==='Edge(Right)');
+      if(free)await page.keyboard.down('Shift');
+      await page.mouse.move(handle.x,handle.y);await page.mouse.down();await page.mouse.move(handle.x+45,handle.y,{steps:6});await page.mouse.up();
+      if(free)await page.keyboard.up('Shift');
+      const resized=await wait(s=>s.shapes.find(item=>item.id===binShape.id).shape.Text.display_scale[0]>1.05);
+      const scale=resized.shapes.find(item=>item.id===binShape.id).shape.Text.display_scale;
+      if(free)assert.equal(scale[1],1);else assert(Math.abs(scale[0]-scale[1])<1e-7);
+      await page.keyboard.press('Control+z');await wait(s=>s.shapes.find(item=>item.id===binShape.id).shape.Text.display_scale[0]===1);
+    };
+    await resizeBin(false);await resizeBin(true);
+    // Math's browser clipboard replaces just the selection, then inserts at the caret.
+    await control('New canvas');await wait(s=>s.shapes.length===0);
+    await focusCanvasTool('m');await wait(s=>!!s.editing_math&&s.math_input_focused);
+    const mathText=s=>s.shapes.find(item=>item.shape.Math)?.shape.Math;
+    await keys('123456');await wait(s=>mathText(s)?.source==='123456');
+    await page.keyboard.press('Control+a');await page.keyboard.press('Control+c');
+    await page.waitForFunction(async()=>await navigator.clipboard.readText()==='123456');
+    await page.evaluate(()=>navigator.clipboard.writeText('x+∞'));
+    await page.keyboard.press('Control+v');await wait(s=>mathText(s)?.source==='x+∞');
+    await page.keyboard.press('ArrowLeft');await page.evaluate(()=>navigator.clipboard.writeText('2'));
+    await page.keyboard.press('Control+v');await wait(s=>mathText(s)?.source==='x+2∞');
+    // French AltGr+Equal emits a literal brace, never the Ctrl+= subscript command.
+    await input.send('Input.dispatchKeyEvent',{type:'keyDown',key:'}',code:'Equal',text:'}',unmodifiedText:'}',modifiers:3});
+    await input.send('Input.dispatchKeyEvent',{type:'keyUp',key:'}',code:'Equal',modifiers:0});
+    await wait(s=>mathText(s)?.source.includes('}')&&!mathText(s)?.source.includes('_'));
+    await page.keyboard.press('Escape');await wait(s=>s.editing_math===null);
+    await page.waitForTimeout(150);
+
     // Original characters and font-dependent scripts, including symbols without Unicode script glyphs.
-    await control('New canvas');await wait(s=>s.active_tab===1&&s.shapes.length===0);
-    await page.mouse.click(400,300);await page.keyboard.press('t');await wait(s=>s.tool==='Text');await page.mouse.click(400,300);await wait(s=>!!s.editing_text);
+    const nextScriptTab=(await state()).active_tab+1;await control('New canvas');await wait(s=>s.active_tab===nextScriptTab&&s.shapes.length===0);
+    await focusCanvasTool('t');await wait(s=>!!s.editing_text);
     await keys('Base ');await page.keyboard.press('Control+ArrowUp');await keys('AZ09α≤@');await page.keyboard.press('Control+ArrowUp');await keys(' fin');
     const scriptText=s=>s.shapes.find(item=>item.id===s.editing_text)?.shape.Text;
     await wait(s=>scriptText(s)?.content==='Base AZ09α≤@ fin');

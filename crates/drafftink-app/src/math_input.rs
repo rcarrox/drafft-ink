@@ -82,6 +82,11 @@ fn render_call(name: &str, body: &str) -> Option<String> {
         "sqrt" if args.len() == 1 => Some(format!(r"\sqrt{{{}}}", convert_expr(&args[0]))),
         "vec" | "vector" if args.len() == 1 => Some(format!(r"\vec{{{}}}", convert_expr(&args[0]))),
         "abs" if args.len() == 1 => Some(format!(r"\left|{}\right|", convert_expr(&args[0]))),
+        "bin" if args.len() == 2 => Some(format!(
+            r"\binom{{{}}}{{{}}}",
+            convert_expr(&args[0]),
+            convert_expr(&args[1])
+        )),
         "frac" if args.len() == 2 => Some(format!(
             r"\frac{{{}}}{{{}}}",
             convert_expr(&args[0]),
@@ -458,7 +463,10 @@ pub fn open_structured_depth(input: &str) -> usize {
 pub fn friendly_math_to_latex(input: &str) -> String {
     let trimmed = input.trim();
     if trimmed.starts_with('\\') || trimmed.contains(r"\frac") || trimmed.contains(r"\sum") {
-        return trimmed.to_string();
+        return trimmed
+            .replace('∞', r"\infty ")
+            .replace('≤', r"\le ")
+            .replace('≥', r"\ge ");
     }
     let normalized = normalize_friendly_math_input(input);
     convert_expr(normalized.trim())
@@ -527,7 +535,7 @@ pub fn dead_caret_text(text: &str) -> String {
 /// Match a complete command prefix immediately before the text caret.
 pub fn text_command_prefix(text: &str, caret: usize) -> Option<(usize, &'static str)> {
     let prefix = text.get(..caret)?;
-    for name in ["sum", "prod", "int", "lim", "sqrt", "frac"] {
+    for name in ["sum", "prod", "int", "lim", "sqrt", "frac", "bin"] {
         let marker = format!("{name}(");
         if prefix.ends_with(&marker) {
             let start = prefix.len() - marker.len();
@@ -554,7 +562,7 @@ pub fn live_command_latex(source: &str) -> Option<String> {
         "sum" | "prod" | "int" => 4,
         "lim" => 3,
         "sqrt" => 1,
-        "frac" | "root" => 2,
+        "frac" | "root" | "bin" => 2,
         _ => return None,
     };
     let mut completed = source.to_string();
@@ -619,5 +627,31 @@ mod live_text_command_tests {
         let preview = live_command_latex("frac(a,frac(b,").unwrap();
         assert!(preview.contains(r"\frac{a}{\frac{b}{\cdot}}"));
         assert!(live_command_latex("frac(a,b,c)").is_none());
+    }
+}
+
+#[cfg(test)]
+mod binomial_and_infinity_tests {
+    use super::*;
+    #[test]
+    fn binomial_live_and_nested_arguments() {
+        assert_eq!(text_command_prefix("= bin(", 6), Some((2, "bin")));
+        assert_eq!(friendly_math_to_latex("bin(n,k)"), r"\binom{n}{k}");
+        assert_eq!(
+            live_command_latex("bin("),
+            Some(r"\binom{\cdot}{\cdot}".into())
+        );
+        assert_eq!(
+            friendly_math_to_latex("bin(frac(n,2),k)"),
+            r"\binom{\frac{n}{2}}{k}"
+        );
+    }
+    #[test]
+    fn unicode_bounds_are_normalized_even_in_latex() {
+        assert!(friendly_math_to_latex("int(x,x,0,∞)").contains(r"\infty"));
+        assert_eq!(
+            friendly_math_to_latex(r"\int_{0}^{∞} x"),
+            r"\int_{0}^{\infty } x"
+        );
     }
 }
