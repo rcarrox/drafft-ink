@@ -1865,7 +1865,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            title: "draphtInQ".to_string(),
+            title: "Qraphtinc".to_string(),
             width: 1280,
             height: 800,
             grid_style: GridStyle::Lines,
@@ -2372,6 +2372,13 @@ impl App {
         #[cfg(target_arch = "wasm32")]
         if let Some(state) = self.state.as_ref() {
             setup_browser_repaint(&state.window, &state.egui_ctx);
+            if let (Some(family), Some(ps)) = (
+                &state.ui_state.settings.default_math_font.custom,
+                &state.ui_state.settings.default_math_font.postscript,
+            ) {
+                file_ops::restore_local_font_async(family.clone(), ps.clone());
+            }
+            #[cfg(target_arch = "wasm32")]
             file_ops::query_local_fonts_async();
             let ps = state.ui_state.current_text_postscript.clone();
             if !ps.is_empty() {
@@ -2965,6 +2972,13 @@ impl ApplicationHandler for App {
                     state.canvas.document = doc;
                     state.canvas.clear_selection();
                     #[cfg(target_arch = "wasm32")]
+                    if let (Some(family), Some(ps)) = (
+                        &state.ui_state.settings.default_math_font.custom,
+                        &state.ui_state.settings.default_math_font.postscript,
+                    ) {
+                        file_ops::restore_local_font_async(family.clone(), ps.clone());
+                    }
+                    #[cfg(target_arch = "wasm32")]
                     file_ops::query_local_fonts_async();
                     state.needs_redraw = true;
                 }
@@ -3024,6 +3038,17 @@ impl ApplicationHandler for App {
                             Shape::Text(text) => {
                                 if let Some(family) = text.custom_font.as_ref() {
                                     if let Some(ps) = text.custom_font_postscript.as_ref() {
+                                        result.insert((family.clone(), ps.clone()));
+                                    } else if let Some((_, ps)) =
+                                        fonts.iter().find(|(name, _)| name == family)
+                                    {
+                                        result.insert((family.clone(), ps.clone()));
+                                    }
+                                }
+                            }
+                            Shape::Math(math) => {
+                                if let Some(family) = &math.font.custom {
+                                    if let Some(ps) = &math.font.postscript {
                                         result.insert((family.clone(), ps.clone()));
                                     } else if let Some((_, ps)) =
                                         fonts.iter().find(|(name, _)| name == family)
@@ -3451,6 +3476,14 @@ impl ApplicationHandler for App {
                     }
                 }
 
+                if let Some(Shape::Math(math)) = state
+                    .canvas
+                    .selection
+                    .first()
+                    .and_then(|id| state.canvas.document.get_shape(*id))
+                {
+                    state.ui_state.math_font = math.font.clone();
+                }
                 // Capture text selection state BEFORE egui processing
                 // (mouse events may clear it during egui run)
                 let text_selection_state: Option<(
@@ -3494,6 +3527,7 @@ impl ApplicationHandler for App {
                         ui_action_taken = true;
                         match action.clone() {
                             UiAction::SetGeometry(kind) => {
+                                finish_math_editor(state);
                                 state.ui_state.geometry = kind;
                                 state.canvas.tool_manager.geometry = kind;
                                 state.canvas.set_tool(ToolKind::Ellipse);
@@ -3502,6 +3536,7 @@ impl ApplicationHandler for App {
                                     drafftink_core::shapes::Sloppiness::Architect;
                             }
                             UiAction::SetTool(tool) => {
+                                finish_math_editor(state);
                                 state.ui_state.text_command_editor = None;
                                 if tool != ToolKind::Text {
                                     if state.event_handler.editing_text.is_some() {
@@ -3888,6 +3923,24 @@ impl ApplicationHandler for App {
                                     }
                                 }
                             }
+                            UiAction::SetDefaultMathFont(font) => {
+                                state.ui_state.settings.default_math_font = font.clone();
+                                crate::settings::save_settings(&state.ui_state.settings);
+                                request_math_font(&font);
+                            }
+                            UiAction::SetMathFont(font) => {
+                                state.canvas.document.push_undo();
+                                for id in &state.canvas.selection {
+                                    if let Some(Shape::Math(math)) =
+                                        state.canvas.document.get_shape_mut(*id)
+                                    {
+                                        math.font = font.clone();
+                                        math.invalidate_cache();
+                                    }
+                                }
+                                state.ui_state.math_font = font.clone();
+                                request_math_font(&font);
+                            }
                             UiAction::SetMathFontSize(size) => {
                                 use drafftink_core::shapes::Shape;
                                 for &shape_id in &state.canvas.selection.clone() {
@@ -4076,6 +4129,13 @@ impl ApplicationHandler for App {
                                 }
                             }
                             UiAction::ScanLocalFonts => {
+                                #[cfg(target_arch = "wasm32")]
+                                if let (Some(family), Some(ps)) = (
+                                    &state.ui_state.settings.default_math_font.custom,
+                                    &state.ui_state.settings.default_math_font.postscript,
+                                ) {
+                                    file_ops::restore_local_font_async(family.clone(), ps.clone());
+                                }
                                 #[cfg(target_arch = "wasm32")]
                                 file_ops::query_local_fonts_async();
                                 #[cfg(not(target_arch = "wasm32"))]
@@ -5228,7 +5288,7 @@ impl ApplicationHandler for App {
                             serde_json::json!({"id":shape.id(),"shape":shape,"bounds":[top_left.x,top_left.y,bottom_right.x,bottom_right.y],"handles":handles})
                         }).collect();
 
-                        let status = serde_json::json!({"shapes":shapes,"presentation":state.ui_state.presentation_mode,"tool":format!("{:?}",state.ui_state.current_tool),"editing_text":state.event_handler.editing_text,"inline_dialog":state.ui_state.inline_formula_draft.is_some(),"inline_error":state.ui_state.inline_formula_error,"zoom":state.canvas.camera.zoom,"png_save_requests":state.png_save_requests,"active_tab":state.active_tab,"tabs":state.tabs.len(),"memory":{"parked_shapes_total":state.tabs.iter().map(|tab|tab.document.len()).sum::<usize>(),"image_cache_bytes":state.shape_renderer.image_cache_bytes(),"image_cache_budget_bytes":32*1024*1024,"path_cache_payload_bytes":state.shape_renderer.path_cache_bytes(),"history_payload_bytes":state.canvas.document.history_memory_bytes(),"render_target_allocations":state.render_target_allocations,"render_target_bytes":state.surface.config.width as u64*state.surface.config.height as u64*4},"geometry":format!("{:?}",state.ui_state.geometry),"context_properties":state.ui_state.context_properties,"properties_visible":!state.ui_state.context_rects.is_empty(),"insertion_script":state.text_edit_state.as_ref().map(|e|e.script_value()),"text_caret":state.text_edit_state.as_ref().and_then(|e|e.cursor_geometry(1.5)).map(|r|[r.x0,r.y0,r.x1,r.y1]),"editing_math":state.ui_state.math_editor.as_ref().map(|e| e.shape_id),"math_input_focused":state.ui_state.math_editor.as_ref().is_some_and(|e|state.egui_ctx.memory(|m|m.focused()==Some(egui::Id::new(("math_source",e.shape_id))))),"command_editor":state.ui_state.text_command_editor.as_ref().map(|e| &e.source),"controls":state.ui_state.test_controls});
+                        let status = serde_json::json!({"shapes":shapes,"presentation":state.ui_state.presentation_mode,"tool":format!("{:?}",state.ui_state.current_tool),"editing_text":state.event_handler.editing_text,"inline_dialog":state.ui_state.inline_formula_draft.is_some(),"inline_error":state.ui_state.inline_formula_error,"zoom":state.canvas.camera.zoom,"png_save_requests":state.png_save_requests,"active_tab":state.active_tab,"tabs":state.tabs.len(),"memory":{"parked_shapes_total":state.tabs.iter().map(|tab|tab.document.len()).sum::<usize>(),"image_cache_bytes":state.shape_renderer.image_cache_bytes(),"image_cache_budget_bytes":32*1024*1024,"path_cache_payload_bytes":state.shape_renderer.path_cache_bytes(),"history_payload_bytes":state.canvas.document.history_memory_bytes(),"render_target_allocations":state.render_target_allocations,"render_target_bytes":state.surface.config.width as u64*state.surface.config.height as u64*4},"geometry":format!("{:?}",state.ui_state.geometry),"context_properties":state.ui_state.context_properties,"properties_visible":!state.ui_state.context_rects.is_empty(),"selected_text":state.text_edit_state.as_ref().and_then(|e|e.editor().selected_text()).map(|s|s.to_string()),"insertion_script":state.text_edit_state.as_ref().map(|e|e.script_value()),"text_caret":state.text_edit_state.as_ref().and_then(|e|e.cursor_geometry(1.5)).map(|r|[r.x0,r.y0,r.x1,r.y1]),"editing_math":state.ui_state.math_editor.as_ref().map(|e| e.shape_id),"math_form_rect":state.ui_state.math_editor_rect.map(|r|[r.min.x,r.min.y,r.max.x,r.max.y]),"math_input_focused":state.ui_state.math_editor.as_ref().is_some_and(|e|state.egui_ctx.memory(|m|m.focused()==Some(egui::Id::new(("math_source",e.shape_id))))),"command_editor":state.ui_state.text_command_editor.as_ref().map(|e| &e.source),"controls":state.ui_state.test_controls});
                         let _ = js_sys::Reflect::set(
                             window.as_ref(),
                             &JsValue::from_str("__drafftinkTestState"),
@@ -5651,6 +5711,45 @@ impl ApplicationHandler for App {
                 button,
                 ..
             } => {
+                if btn_state == ElementState::Pressed
+                    && button == MouseButton::Left
+                    && state.ui_state.math_editor.is_some()
+                {
+                    let p = state.input.mouse_position();
+                    let scale = state.egui_ctx.pixels_per_point() as f64;
+                    let p = egui::Pos2::new((p.x / scale) as f32, (p.y / scale) as f32);
+                    let p = state
+                        .egui_state
+                        .egui_input_mut()
+                        .events
+                        .iter()
+                        .rev()
+                        .find_map(|event| {
+                            if let egui::Event::PointerButton {
+                                pos, pressed: true, ..
+                            } = event
+                            {
+                                Some(*pos)
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or(p);
+                    let outside = state
+                        .ui_state
+                        .math_editor_rect
+                        .is_none_or(|r| !r.contains(p));
+                    if outside {
+                        finish_math_editor(state);
+                    }
+                    state.needs_redraw = true;
+                    state.window.request_redraw();
+                    // Egui already received this event; never forward a field
+                    // click to the canvas, even if hover arrived this same frame.
+                    if !egui_wants_input || !outside {
+                        return;
+                    }
+                }
                 // Skip canvas processing if egui wants the pointer
                 if egui_wants_input {
                     state.needs_redraw = true;
@@ -5728,16 +5827,23 @@ impl ApplicationHandler for App {
                                         if let Some(edit_state) = &mut state.text_edit_state {
                                             let (font_cx, layout_cx) =
                                                 state.shape_renderer.contexts_mut();
-                                            edit_state.handle_mouse_down(
-                                                local_x,
-                                                local_y,
-                                                state.input.shift(),
-                                                font_cx,
-                                                layout_cx,
-                                            );
+                                            if state.input.is_double_click() {
+                                                edit_state.handle_double_click(
+                                                    local_x, local_y, font_cx, layout_cx,
+                                                );
+                                            } else {
+                                                edit_state.handle_mouse_down(
+                                                    local_x,
+                                                    local_y,
+                                                    state.input.shift(),
+                                                    font_cx,
+                                                    layout_cx,
+                                                );
+                                            }
                                         }
                                     }
                                     if state.input.is_double_click() {
+                                        select_text_word_at(state, world_point);
                                         select_formula_at(state, world_point);
                                         open_selected_text_command(state);
                                     }
@@ -5787,6 +5893,7 @@ impl ApplicationHandler for App {
                                 }
 
                                 if state.input.is_double_click() {
+                                    select_text_word_at(state, world_point);
                                     select_formula_at(state, world_point);
                                     open_selected_text_command(state);
                                 }
@@ -5834,8 +5941,10 @@ impl ApplicationHandler for App {
                             // A newly placed math object opens its formula editor immediately.
                             if let Some(math_id) = state.event_handler.pending_math_edit.take() {
                                 if let Some(Shape::Math(math)) =
-                                    state.canvas.document.get_shape(math_id)
+                                    state.canvas.document.get_shape_mut(math_id)
                                 {
+                                    math.font = state.ui_state.settings.default_math_font.clone();
+                                    state.ui_state.math_font = math.font.clone();
                                     state.ui_state.math_editor = Some(MathEditorState {
                                         shape_id: math_id,
                                         input: math.edit_source().to_string(),
@@ -6380,6 +6489,17 @@ impl ApplicationHandler for App {
                         // Check for Ctrl/Cmd modifiers first for file operations
                         let has_modifier = state.input.ctrl();
 
+                        if has_modifier
+                            && matches!(
+                                key_str,
+                                "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight"
+                            )
+                        {
+                            move_selection_by_key(state, key_str, event.repeat, true);
+                            state.needs_redraw = true;
+                            state.window.request_redraw();
+                            return;
+                        }
                         if has_modifier {
                             let has_shift = state.input.shift();
                             match key_str {
@@ -6908,6 +7028,7 @@ impl ApplicationHandler for App {
                                 }
                                 key if state.ui_state.settings.tool_for_key(key).is_some() => {
                                     if let Some(tool) = state.ui_state.settings.tool_for_key(key) {
+                                        finish_math_editor(state);
                                         if tool == ToolKind::Ellipse
                                             && state.canvas.tool_manager.current_tool
                                                 == ToolKind::Ellipse
@@ -7009,7 +7130,7 @@ impl ApplicationHandler for App {
                                 "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight" => {
                                     if !state.canvas.selection.is_empty() {
                                         use drafftink_core::GRID_SIZE;
-                                        let step = if state.input.shift() {
+                                        let step = if state.input.ctrl() {
                                             GRID_SIZE
                                         } else {
                                             1.0 / state.canvas.camera.zoom
@@ -7517,4 +7638,83 @@ fn save_canvas_png(state: &mut AppState, render_cx: &vello::util::RenderContext,
         }
     }
     state.last_png_signature = signature;
+}
+
+fn finish_math_editor(state: &mut AppState) {
+    if let Some(editor) = state.ui_state.math_editor.take() {
+        if let Some(Shape::Math(math)) = state.canvas.document.get_shape_mut(editor.shape_id) {
+            math.set_formula(
+                editor.input.clone(),
+                crate::math_input::friendly_math_to_latex(&editor.input),
+            );
+        }
+        if editor.input.trim().is_empty() {
+            state.canvas.remove_shape(editor.shape_id);
+        } else if !editor.is_new && editor.input != editor.original_source {
+            if let Some(Shape::Math(math)) = state.canvas.document.get_shape_mut(editor.shape_id) {
+                math.set_formula(
+                    editor.original_source.clone(),
+                    editor.original_latex.clone(),
+                );
+            }
+            state.canvas.document.push_undo();
+            if let Some(Shape::Math(math)) = state.canvas.document.get_shape_mut(editor.shape_id) {
+                math.set_formula(
+                    editor.input.clone(),
+                    crate::math_input::friendly_math_to_latex(&editor.input),
+                );
+            }
+        }
+    }
+    state.ui_state.math_editor_screen_pos = None;
+    state.ui_state.math_editor_rect = None;
+    state.egui_ctx.memory_mut(|m| {
+        if let Some(id) = m.focused() {
+            m.surrender_focus(id);
+        }
+    });
+}
+fn move_selection_by_key(state: &mut AppState, key: &str, repeat: bool, fast: bool) {
+    if state.canvas.selection.is_empty() {
+        return;
+    }
+    let step = if fast {
+        drafftink_core::GRID_SIZE
+    } else {
+        1.0 / state.canvas.camera.zoom
+    };
+    let delta = match key {
+        "ArrowLeft" => (-step, 0.0),
+        "ArrowRight" => (step, 0.0),
+        "ArrowUp" => (0.0, -step),
+        _ => (0.0, step),
+    };
+    if !repeat {
+        state.canvas.document.push_undo();
+    }
+    for id in &state.canvas.selection {
+        if let Some(shape) = state.canvas.document.get_shape_mut(*id) {
+            shape.transform(kurbo::Affine::translate(delta));
+        }
+    }
+}
+
+fn request_math_font(font: &drafftink_core::shapes::TextFont) {
+    #[cfg(target_arch = "wasm32")]
+    if let (Some(family), Some(ps)) = (&font.custom, &font.postscript) {
+        file_ops::load_local_font_async(family.clone(), ps.clone());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = font;
+}
+fn select_text_word_at(state: &mut AppState, point: kurbo::Point) {
+    if let Some(id) = state.event_handler.editing_text {
+        if let Some(Shape::Text(text)) = state.canvas.document.get_shape(id) {
+            let p = text.editing_local_point(point);
+            if let Some(editor) = state.text_edit_state.as_mut() {
+                let (fonts, layouts) = state.shape_renderer.contexts_mut();
+                editor.handle_double_click(p.x as f32, p.y as f32, fonts, layouts);
+            }
+        }
+    }
 }

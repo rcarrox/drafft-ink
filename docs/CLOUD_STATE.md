@@ -53,3 +53,12 @@ fixe explicitement hide_properties=false pour tester l'ancien affichage permanen
 Limite connue GPU logiciel : lire les résultats de capture séparément ; ne pas affirmer
 une validation de pixels quand WebGPU perd son instance. Aucune mesure Edge RAM nouvelle.
 Préserver le canvas ouvert port8897 et l'onglet8887 ; utiliser un aperçu isolé pour tester.
+
+
+## Reprise 0.15.0 — Qraphtinc / Text / Math
+Base main6c078b46c76b8e4820797bc04772f8583372f4e9, version0.14 livrée et CI/PortableOK. Branche codex/0.15.0-text-math-ux, PR16. Nom exact Qraphtinc. Stroke toujours visible sauf Ctrl+P ; seul Properties est contextuel. Plus de raccourcis symboles/formules dans Properties Text, commandes directes conservées. Mini panneau Text sans titre.
+Text : Espace reste dans le script ; caret suit mode explicite et styles lors de navigation, dernière ligne vide corrigée, double clic mot câblé sur la sélection Parley. Ctrl+flèche = grand pas20, flèche et Shift =1pixel rendu, maintien/Undo conservés.
+Math : fermeture/validation sur changement d'outil ou clic hors formulaire ; clic consommé et relâchement Idle ne crée pas de nouvel objet. Undo de la modification conservé. Police Math par défaut dans Settings, police par objet dans Properties, JSON rétrocompatible GelPen, restauration de polices locales et cache primaire. Aucun fichier Google privé copié.
+Hitbox géométries sans remplissage : marge intérieure3 fois la tolérance historique ; marge extérieure inchangée. Rotation/miroirs/JSON/Undo conservés.
+Rust/WASM via Actions uniquement. Tests modèles/métriques/caret passent sur ba1f403; interactions Chromium en validation. Ne pas annoncer fusion/livraison avant CI+Portable+ZIP. PR16 et outputs final permettront de retrouver provenance exacte.
+Aperçus existants8897/tab7 et8898/tab8 à préserver. Un aperçu isolé8899 peut être en préparation (lire checkpoint15 local). Éviter absolument Cua.waitForEvent(download) ; utiliser connecteur GitHub. Poller le téléchargement shell jusqu'à exit_code0 avant d'utiliser le ZIP, un session_id n'est pas un téléchargement terminé.

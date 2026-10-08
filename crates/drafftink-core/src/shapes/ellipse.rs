@@ -136,7 +136,11 @@ impl ShapeTrait for Ellipse {
             if self.style.fill_color.is_some() && path.winding(point) != 0 {
                 return true;
             }
-            let limit = tolerance + self.style.stroke_width / 2.0;
+            let limit = if path.winding(point) != 0 {
+                tolerance * 3.0
+            } else {
+                tolerance
+            } + self.style.stroke_width / 2.0;
             return path
                 .segments()
                 .any(|s| s.nearest(point, 0.01).distance_sq <= limit * limit);
@@ -152,8 +156,8 @@ impl ShapeTrait for Ellipse {
             return true;
         }
         // Outline only: reject if inside inner ellipse
-        let inner_rx = (self.radius_x - tolerance - half_sw).max(0.0);
-        let inner_ry = (self.radius_y - tolerance - half_sw).max(0.0);
+        let inner_rx = (self.radius_x - tolerance * 3.0 - half_sw).max(0.0);
+        let inner_ry = (self.radius_y - tolerance * 3.0 - half_sw).max(0.0);
         if inner_rx < f64::EPSILON || inner_ry < f64::EPSILON {
             return true;
         }
@@ -298,5 +302,20 @@ mod geometry_tests {
             k = k.next();
         }
         assert_eq!(k, GeometryKind::Ellipse);
+    }
+}
+
+#[cfg(test)]
+mod inside_margin_tests {
+    use super::*;
+    #[test]
+    fn outline_inner_margin_does_not_expand_outside() {
+        let mut e = Ellipse::new(Point::new(50.0, 50.0), 50.0, 50.0);
+        assert!(e.hit_test(Point::new(12.0, 50.0), 5.0));
+        assert!(!e.hit_test(Point::new(-12.0, 50.0), 5.0));
+        assert!(!e.hit_test(Point::new(50.0, 50.0), 5.0));
+        e.geometry = GeometryKind::Trapezoid;
+        assert!(e.hit_test(Point::new(50.0, 12.0), 5.0));
+        assert!(!e.hit_test(Point::new(50.0, -12.0), 5.0));
     }
 }

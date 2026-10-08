@@ -16,7 +16,7 @@ pub use freehand::Freehand;
 pub use group::Group;
 pub use image::{Image, ImageFormat};
 pub use line::{Line, PathStyle};
-pub use math::Math;
+pub use math::{Math, default_math_font};
 pub use rectangle::Rectangle;
 pub use text::{CharacterStyle, FontFamily, FontWeight, InlineFormula, Text, TextFont};
 

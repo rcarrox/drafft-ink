@@ -1635,7 +1635,34 @@ impl VelloRenderer {
     }
 
     fn prepare_math(&mut self, math: &drafftink_core::shapes::Math) -> bool {
-        self.prepare_math_with_primary(math, GELPEN_REGULAR)
+        use drafftink_core::shapes::{FontFamily, FontWeight};
+        let f = &math.font;
+        let local = f
+            .postscript
+            .as_ref()
+            .and_then(|k| self.registered_font_data.get(k))
+            .or_else(|| {
+                f.custom
+                    .as_ref()
+                    .and_then(|k| self.registered_font_data.get(k))
+            })
+            .cloned();
+        let embedded = match (f.family, f.weight) {
+            (FontFamily::GelPen, FontWeight::Light) => GELPEN_LIGHT,
+            (FontFamily::GelPen, FontWeight::Heavy) => GELPEN_HEAVY,
+            (FontFamily::GelPen, _) => GELPEN_REGULAR,
+            (FontFamily::GelPenSerif, FontWeight::Light) => GELPEN_SERIF_LIGHT,
+            (FontFamily::GelPenSerif, FontWeight::Heavy) => GELPEN_SERIF_HEAVY,
+            (FontFamily::GelPenSerif, _) => GELPEN_SERIF_MEDIUM,
+            (FontFamily::VanillaExtract, _) => VANILLA_EXTRACT,
+            (FontFamily::XitsMath, _) => XITS_MATH,
+            (FontFamily::NotoSans, FontWeight::Heavy) => NOTO_SANS_BOLD,
+            _ => NOTO_SANS,
+        };
+        self.prepare_math_with_primary(
+            math,
+            local.as_deref().map(|v| v.as_slice()).unwrap_or(embedded),
+        )
     }
     fn prepare_math_with_primary(
         &mut self,
@@ -1926,6 +1953,7 @@ impl VelloRenderer {
         let layout_width = styled_layout.width() as f64;
         let layout_height = styled_layout.height() as f64;
         edit_state.set_rich_layout(styled_layout.clone());
+        edit_state.sync_cursor_script(text);
 
         // Update cached size so bounds() returns correct values
         text.set_cached_size(layout_width, layout_height);
@@ -3606,5 +3634,65 @@ mod math_symbols_tests {
             );
             assert!(math.bounds().height() > 0.0);
         }
+    }
+}
+
+#[cfg(test)]
+mod cursor_and_math_font_tests {
+    use super::*;
+    use crate::{TextEditState, TextKey, TextModifiers};
+    use drafftink_core::shapes::{FontFamily, Math, Text, TextFont};
+    #[test]
+    fn empty_next_line_and_navigation_follow_script_style() {
+        let mut r = VelloRenderer::new();
+        let mut t = Text::new(Point::ZERO, "x45".into());
+        t.font_family = FontFamily::NotoSans;
+        t.toggle_script(1..3, 1);
+        let mut e = TextEditState::new(&t.content, t.font_size as f32);
+        {
+            let (f, l) = r.contexts_mut();
+            e.driver(f, l).select_byte_range(1, 1);
+        }
+        r.render_text_editing(&t, &mut e, Affine::IDENTITY, None);
+        assert_eq!(e.script_value(), 1);
+        {
+            let (f, l) = r.contexts_mut();
+            e.driver(f, l).select_byte_range(0, 0);
+        }
+        r.render_text_editing(&t, &mut e, Affine::IDENTITY, None);
+        assert_eq!(e.script_value(), 0);
+        {
+            let (f, l) = r.contexts_mut();
+            e.driver(f, l).move_to_text_end();
+            e.handle_key(TextKey::ToggleSuperscript, TextModifiers::default(), f, l);
+            e.handle_key(
+                TextKey::Character(" ".into()),
+                TextModifiers::default(),
+                f,
+                l,
+            );
+        }
+        assert_eq!(e.script_value(), 1);
+        {
+            let (f, l) = r.contexts_mut();
+            e.handle_key(TextKey::Right, TextModifiers::default(), f, l);
+            assert_eq!(e.script_value(), 0);
+            e.handle_key(TextKey::Enter, TextModifiers::default(), f, l);
+        }
+        t.content = e.text();
+        r.render_text_editing(&t, &mut e, Affine::IDENTITY, None);
+        let c = e.cursor_geometry(1.5).unwrap();
+        assert!(c.x0 < 1.0);
+        assert!(c.y0 > t.font_size);
+    }
+    #[test]
+    fn math_font_change_invalidates_layout() {
+        let mut r = VelloRenderer::new();
+        let mut m = Math::new(Point::ZERO, "123x".into());
+        assert!(r.prepare_math(&m));
+        let id = r.math_cache[&m.id()].primary_font_id;
+        m.font = TextFont::from_name("Noto Sans", "");
+        assert!(r.prepare_math(&m));
+        assert_ne!(r.math_cache[&m.id()].primary_font_id, id);
     }
 }

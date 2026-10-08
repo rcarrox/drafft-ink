@@ -112,7 +112,7 @@ function inspectCapture(file) {
     page = await geometryContext.newPage();
     await page.goto(process.env.DRAFFTINK_TEST_URL || 'http://127.0.0.1:8888/?drafftink-test=1');
     await wait(s=>s.shapes.length===0&&!s.properties_visible);
-    assert.equal(await page.title(),'draphtInQ');
+    assert.equal(await page.title(),'Qraphtinc');
     await page.mouse.move(400,300);await page.waitForTimeout(100);
     await page.keyboard.press('o');await wait(s=>s.tool==='Ellipse'&&s.geometry==='Ellipse');
     await page.keyboard.press('o');await wait(s=>s.geometry==='Triangle');
@@ -133,7 +133,17 @@ function inspectCapture(file) {
     await page.mouse.move(700,270);await page.waitForTimeout(100);await page.mouse.down();await page.mouse.move(850,410,{steps:8});await page.mouse.up();
     await wait(s=>s.shapes.some(i=>i.shape.Ellipse?.geometry==='Trapezoid'));
     await snapshot(page,'geometry-context.png');
-    await geometryContext.close();page=mainPage;
+    await geometryContext.close();
+    // Math form pointer bounds use egui points, even on a scaled display.
+    const dpiContext=await browser.newContext({viewport:{width:1280,height:720},deviceScaleFactor:2});
+    await dpiContext.addInitScript(()=>localStorage.setItem('drafftink.user_settings.v1',JSON.stringify({restore_last_document:false,autosave_enabled:false,default_font:'Noto Sans',default_font_postscript:''})));
+    page=await dpiContext.newPage();await page.goto(process.env.DRAFFTINK_TEST_URL || 'http://127.0.0.1:8888/?drafftink-test=1');await wait(s=>s.shapes.length===0);
+    await page.mouse.move(400,200);await page.waitForTimeout(100);await page.keyboard.press('m');await wait(s=>s.tool==='Math');await page.waitForTimeout(100);await page.mouse.click(400,200,{delay:60});await wait(s=>!!s.editing_math&&s.math_input_focused&&!!s.math_form_rect);
+    await keys('x+1');await wait(s=>s.shapes[0].shape.Math?.source==='x+1');
+    const field=(await state()).math_form_rect;
+    await page.mouse.click(field[0]+25,field[1]+22,{delay:60});await wait(s=>!!s.editing_math&&s.shapes.length===1);
+    await page.mouse.move(150,220);await page.waitForTimeout(100);await page.mouse.click(150,220,{delay:60});await wait(s=>s.editing_math===null&&s.shapes.length===1);
+    await dpiContext.close();page=mainPage;
     await page.goto(process.env.DRAFFTINK_TEST_URL || 'http://127.0.0.1:8888/?drafftink-test=1');
     await wait(s => s.shapes.length === 0);
     await snapshot(page,'initial.png');
@@ -160,12 +170,12 @@ function inspectCapture(file) {
     await page.keyboard.press('Control+b');await page.keyboard.press('Control+i');await page.keyboard.press('Control+u');
     await wait(s=>text(s)?.char_styles.slice(-2).every(style=>!style.bold&&!style.italic&&!style.underline) && text(s)?.char_styles.slice(0,-2).every(style=>style.bold&&style.italic&&style.underline));
     await page.keyboard.press('ArrowRight');
-    await control('Fraction'); await snapshot(page,'inline-dialog.png'); await fill('Numérateur', '1/2'); await fill('Dénominateur', '3/4'); await control('Insérer');
-    await wait(s => text(s)?.formulas.length === 1 && !s.inline_dialog);
+    await keys(' frac(frac(1,2),frac(3,4))');await wait(s=>!!s.command_editor);
+    await page.keyboard.press('Enter');await wait(s=>!s.command_editor&&text(s)?.formulas.length===1);
     await snapshot(page,'text-fraction.png');
     await keys(' fin');
     await wait(s => text(s)?.content.endsWith(' fin'));
-    await control('Racine n-ième'); await fill('Expression', 'x+1'); await fill('Indice de la racine', '3'); await control('Insérer');
+    await keys(' root(x+1,3)');await wait(s=>!!s.command_editor);await page.keyboard.press('Enter');await wait(s=>!s.command_editor);
     await wait(s => text(s)?.formulas.length === 2 && !s.inline_dialog);
     await snapshot(page,'text-root.png');
     const before = await state();
@@ -198,7 +208,7 @@ function inspectCapture(file) {
     await page.keyboard.press('Escape');await wait(s=>s.editing_text===null);
     // A validated formula reopens with a direct double-click.
     const validCommand=await state();
-    const commandId=validCommand.shapes.find(item=>item.shape.Text?.formulas.some(f=>f.kind==='Code')).id;
+    const commandId=validCommand.shapes.find(item=>item.shape.Text?.formulas.some(f=>f.math.source==='sum(kx,k,1,n)')).id;
     const commandBounds=validCommand.shapes.find(item=>item.id===commandId).bounds;
     await page.keyboard.press('s');
     await page.mouse.dblclick(commandBounds[0]+15,(commandBounds[1]+commandBounds[3])/2);
@@ -215,12 +225,12 @@ function inspectCapture(file) {
     await wait(s=>s.shapes.find(item=>item.id===commandId)?.shape.Text.display_scale[0]<0);
     await page.keyboard.press('Control+z');await wait(s=>s.shapes.find(item=>item.id===commandId)?.shape.Text.display_scale[0]>0);
 
-    // One physical render pixel for a normal arrow, historical GRID_SIZE for Shift.
+    // One physical render pixel for a normal arrow, historical GRID_SIZE for Ctrl.
     const nudgeBefore=(await state()).shapes.find(item=>item.id===commandId);
     await page.mouse.click(nudgeBefore.bounds[0]+10,(nudgeBefore.bounds[1]+nudgeBefore.bounds[3])/2);
     await page.keyboard.press('ArrowRight');await wait(s=>Math.abs(s.shapes.find(item=>item.id===commandId).bounds[0]-nudgeBefore.bounds[0]-1)<0.01);
     const nudgeFine=(await state()).shapes.find(item=>item.id===commandId);
-    await page.keyboard.press('Shift+ArrowRight');await wait(s=>Math.abs(s.shapes.find(item=>item.id===commandId).bounds[0]-nudgeFine.bounds[0]-20*s.zoom)<0.01);
+    await page.keyboard.press('Control+ArrowRight');await wait(s=>Math.abs(s.shapes.find(item=>item.id===commandId).bounds[0]-nudgeFine.bounds[0]-20*s.zoom)<0.01);
     // Run input/clipboard checks before requesting a GPU PNG export.
     // New code command uses the same inline axis and supports live completion.
     await control('New canvas');await wait(s=>s.shapes.length===0);
@@ -272,6 +282,33 @@ function inspectCapture(file) {
     await wait(s=>scriptText(s)?.content==='Base AZ09α≤@ fin');
     await wait(s=>scriptText(s).char_styles.slice(5,12).every(style=>style.script===1));
     await page.keyboard.press('Control+a');await page.keyboard.press('Control+ArrowDown');await wait(s=>scriptText(s).char_styles.every(style=>style.script===-1));
+    // Space remains in the script, and an empty next line has its caret below.
+    await page.keyboard.press('Escape');await control('New canvas');await wait(s=>s.shapes.length===0);
+    await focusCanvasTool('t');await wait(s=>!!s.editing_text);await keys('x');await page.keyboard.press('Control+ArrowUp');await keys('45 6');
+    await wait(s=>scriptText(s)?.content==='x45 6'&&scriptText(s).char_styles.slice(1).every(c=>c.script===1));
+    await page.keyboard.press('ArrowRight');await wait(s=>s.insertion_script===0);await page.keyboard.press('Enter');
+    const emptyLine=await wait(s=>scriptText(s)?.content==='x45 6\n'&&s.text_caret?.[0]<1);
+    assert(emptyLine.text_caret[1]>0);
+    await keys('hello world');await wait(s=>scriptText(s)?.content.endsWith('hello world'));
+    await page.keyboard.press('Escape');await control('New canvas');await wait(s=>s.shapes.length===0);
+    await focusCanvasTool('t');await wait(s=>!!s.editing_text);await keys('hello world');await wait(s=>scriptText(s)?.content==='hello world');
+    const word=(await state()).shapes.find(i=>i.shape.Text);
+    await page.mouse.move(word.bounds[0]+25,(word.bounds[1]+word.bounds[3])/2);await page.waitForTimeout(100);
+    await page.mouse.dblclick(word.bounds[0]+25,(word.bounds[1]+word.bounds[3])/2,{delay:80});await wait(s=>s.selected_text==='hello');
+    await keys('X');await wait(s=>scriptText(s)?.content==='X world');
+    await page.keyboard.press('Escape');await control('New canvas');await wait(s=>s.shapes.length===0);
+    await focusCanvasTool('m');await wait(s=>!!s.editing_math&&s.math_input_focused);await keys('x+1');await wait(s=>mathText(s)?.source==='x+1');
+    await page.mouse.move(650,470);await page.waitForTimeout(100);await page.mouse.click(650,470,{delay:60});await wait(s=>s.editing_math===null&&s.shapes.length===1);
+    const equation=(await state()).shapes.find(i=>i.shape.Math);
+    await page.mouse.move((equation.bounds[0]+equation.bounds[2])/2,(equation.bounds[1]+equation.bounds[3])/2);await page.waitForTimeout(100);
+    await page.mouse.click((equation.bounds[0]+equation.bounds[2])/2,(equation.bounds[1]+equation.bounds[3])/2,{button:'right',delay:60});
+    await control('math_object_font');await control('math_object_font:Noto Sans');await wait(s=>mathText(s)?.font.family==='NotoSans');await snapshot(page,'math-font.png');
+    await page.keyboard.press('Control+z');await wait(s=>mathText(s)?.font.family==='GelPen');
+    await page.mouse.move(650,470);await page.waitForTimeout(100);
+    // A subsequent click can place a new Math; a toolbar switch closes it.
+    await page.mouse.click(650,470,{delay:60});await wait(s=>!!s.editing_math&&s.math_input_focused&&s.shapes.length===2);await keys('y');
+    await control('tool_Rectangle');await wait(s=>s.tool==='Rectangle'&&s.editing_math===null&&s.shapes.length===2);
+    await control('New canvas');await wait(s=>s.shapes.length===0);await focusCanvasTool('t');await wait(s=>!!s.editing_text);await keys('save');
     const saveCount=(await state()).png_save_requests;
     await page.keyboard.press('Control+s');await wait(s=>s.png_save_requests===saveCount+1);
     await page.keyboard.press('Escape');await wait(s=>s.editing_text===null);
@@ -341,7 +378,7 @@ function inspectCapture(file) {
     await page.keyboard.press('F11'); await page.waitForFunction(() => !document.fullscreenElement);
 
 
-    const captures=['inline-dialog.png','text-fraction.png','text-root.png','presentation.png','image-flipped.png','image-rotated.png'].map(file=>inspectCapture(path.join(evidence,file)));
+    const captures=['math-font.png','text-fraction.png','text-root.png','presentation.png','image-flipped.png','image-rotated.png'].map(file=>inspectCapture(path.join(evidence,file)));
     fs.writeFileSync(path.join(evidence,'capture-validation.json'),JSON.stringify({screen_captures:captures,gpu_exports:[textPixels,imagePixels]},null,2));
     if(captures.some(c=>!c.valid)||!textPixels.valid||!imagePixels.valid)console.warn('CI WebGPU pixel evidence unavailable; interaction state tests passed. Local UI and native PNG metadata checks are separate evidence.');
     fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, gpu_pixels_validated: textPixels.valid&&imagePixels.valid, scenarios: ['French dead caret and accents', 'Unicode expander ^4/^>/^< replacement', 'partial selected B/I/U', 'nested inline fraction', 'indexed root', 'presentation', 'fullscreen', 'Escape preserves text', 'image mirrors, corner rotation, Undo/Redo'] }, null, 2));
