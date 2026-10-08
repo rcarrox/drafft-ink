@@ -42,7 +42,7 @@ function inspectCapture(file) {
   const browser = await chromium.launch({ channel: 'chromium', headless: true, args: ['--enable-unsafe-webgpu', '--use-angle=swiftshader'] });
   const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, permissions: ['clipboard-read','clipboard-write'] });
   await context.addInitScript(() => localStorage.setItem('drafftink.user_settings.v1', JSON.stringify({ restore_last_document: false, intro_json: '', autosave_enabled: false, default_font: 'Noto Sans', default_font_postscript: '' })));
-  const page = await context.newPage();
+  let page = await context.newPage();
   const logs = [];
   page.on('console', message => logs.push(message.type() + ': ' + message.text()));
   page.on('pageerror', error => logs.push('PAGEERROR: ' + error));
@@ -71,7 +71,7 @@ function inspectCapture(file) {
     assert(inspected.valid,`GPU PNG export is empty: ${JSON.stringify(inspected)}`);
     return inspected;
   };
-  const input = await context.newCDPSession(page);
+  let input = await context.newCDPSession(page);
   const keys = async value => {
     for (const char of value) {
       if (char.codePointAt(0) < 128) await page.keyboard.press(char);
@@ -191,6 +191,15 @@ function inspectCapture(file) {
     await page.keyboard.press('Control+s');await wait(s=>s.png_save_requests===saveCount+1);
     await page.keyboard.press('Escape');await wait(s=>s.editing_text===null);
 
+    // Failed software-GPU PNG readback can keep that page busy. These independent
+    // input checks use a fresh context, rather than depending on export completion.
+    const earlierPage=page, earlierInput=input;
+    const featureContext=await browser.newContext({viewport:{width:1280,height:720},permissions:['clipboard-read','clipboard-write']});
+    await featureContext.addInitScript(()=>localStorage.setItem('drafftink.user_settings.v1',JSON.stringify({restore_last_document:false,intro_json:'',autosave_enabled:false,default_font:'Noto Sans',default_font_postscript:''})));
+    page=await featureContext.newPage();input=await featureContext.newCDPSession(page);
+    page.on('console',message=>logs.push(message.type()+': '+message.text()));
+    page.on('pageerror',error=>logs.push('PAGEERROR: '+error));
+    await page.goto(process.env.DRAFFTINK_TEST_URL || 'http://127.0.0.1:8888/?drafftink-test=1');await wait(s=>s.shapes.length===0);
     // New code command uses the same inline axis and supports live completion.
     await control('New canvas');await wait(s=>s.shapes.length===0);
     await page.mouse.click(400,300);await page.keyboard.press('t');await page.mouse.click(400,300);await wait(s=>!!s.editing_text);
@@ -227,6 +236,8 @@ function inspectCapture(file) {
     await input.send('Input.dispatchKeyEvent',{type:'keyUp',key:'}',code:'Equal',modifiers:0});
     await wait(s=>mathText(s)?.source.includes('}')&&!mathText(s)?.source.includes('_'));
     await page.keyboard.press('Escape');
+
+    await featureContext.close();page=earlierPage;input=earlierInput;
 
     // Separate browser context with a public, deterministic 1200x2000 PNG fixture.
     const imageContext = await browser.newContext({viewport:{width:1280,height:720}});

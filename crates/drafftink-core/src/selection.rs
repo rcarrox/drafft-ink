@@ -708,7 +708,18 @@ fn apply_box_resize(shape: &mut Shape, kind: HandleKind, delta: kurbo::Vec2, asp
         let sx = (nw.abs() - 12.0).max(0.001) / content.width().max(0.001);
         let sy = (nh.abs() - 8.0).max(0.001) / content.height().max(0.001);
         let factor = if left || right {
-            if top || bottom { sx.max(sy) } else { sx }
+            if top || bottom {
+                // Follow the axis moved furthest, including a horizontal-only shrink.
+                if (nw - w).abs() / content.width().max(0.001)
+                    >= (nh - h).abs() / content.height().max(0.001)
+                {
+                    sx
+                } else {
+                    sy
+                }
+            } else {
+                sx
+            }
         } else {
             sy
         };
@@ -1435,6 +1446,18 @@ mod text_proportions_tests {
             shape.set_rotation(0.7);
             let old = shape.bounds();
             assert_eq!(selection_bounds(&shape).width(), old.width() + 12.0);
+            let smaller = apply_manipulation(
+                &shape,
+                Some(HandleKind::Corner(Corner::BottomRight)),
+                rotate_delta(kurbo::Vec2::new(-50.0, 0.0), 0.7),
+                true,
+            );
+            assert!(smaller.bounds().width() < old.width());
+            assert!(
+                (smaller.bounds().width() / smaller.bounds().height() - old.width() / old.height())
+                    .abs()
+                    < 1e-8
+            );
             for kind in [
                 HandleKind::Corner(Corner::BottomRight),
                 HandleKind::Edge(Edge::Right),
