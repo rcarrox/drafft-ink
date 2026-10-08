@@ -167,6 +167,10 @@ impl SelectedShapeProps {
                 selection_count: count,
                 is_math: true,
                 font_size: math.font_size as f32,
+                font_family: math.font.family,
+                font_weight: math.font.weight,
+                custom_font: math.font.custom.clone(),
+                custom_font_postscript: math.font.postscript.clone(),
                 sloppiness,
                 fill_pattern,
                 has_fill,
@@ -367,6 +371,8 @@ pub struct UiState {
     pub math_dead_caret: bool,
     /// Screen position of the math object currently being edited.
     pub math_editor_screen_pos: Option<Pos2>,
+    pub math_editor_rect: Option<Rect>,
+    pub math_font: TextFont,
     /// Local fonts exposed by Chrome/Edge: (family, PostScript name).
     pub local_fonts: Vec<(String, String)>,
     /// Whether a system-font scan is currently in progress.
@@ -454,6 +460,8 @@ impl Default for UiState {
             math_editor: None,
             math_dead_caret: false,
             math_editor_screen_pos: None,
+            math_editor_rect: None,
+            math_font: drafftink_core::shapes::default_math_font(),
             local_fonts: Vec::new(),
             local_fonts_loading: false,
             current_text_font,
@@ -589,6 +597,8 @@ pub enum UiAction {
     SetFontSize(f32),
     /// Set font size for math shapes.
     SetMathFontSize(f32),
+    SetMathFont(TextFont),
+    SetDefaultMathFont(TextFont),
     /// Set built-in font family for text shapes.
     SetFontFamily(u8), // 0=GelPen, 1=NotoSans, 2=GelPenSerif, 3=VanillaExtract, 4=XITS
     /// Ask Chrome/Edge for the list of installed local fonts.
@@ -1481,9 +1491,6 @@ const QUICK_COLORS: &[usize] = &[10, 0, 6, 2, 13, 17]; // Blue, Red, Emerald, Am
 
 /// Render the properties panel at the top.
 fn render_properties_panel(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
-    if ui_state.settings.hide_properties && !ui_state.context_properties {
-        return None;
-    }
     let mut action = None;
     let mut stroke_rect = Rect::NOTHING;
     let mut fill_rect = Rect::NOTHING;
@@ -1616,7 +1623,6 @@ fn render_properties_panel(ctx: &Context, ui_state: &mut UiState) -> Option<UiAc
             });
         });
     });
-    ui_state.context_rects.push(output.response.rect);
     remember_panel(ui_state, "properties", &output.response);
     let (color, rect, title) = match ui_state.color_popover {
         ColorPopover::StrokeFull => (ui_state.stroke_color, stroke_rect, "Stroke Color"),
@@ -1627,10 +1633,7 @@ fn render_properties_panel(ctx: &Context, ui_state: &mut UiState) -> Option<UiAc
         ),
         _ => return action,
     };
-    ui_state.context_rects.push(Rect::from_min_size(
-        Pos2::new(rect.left() - 100.0, rect.bottom() + 8.0),
-        Vec2::new(420.0, 300.0),
-    ));
+
     if let Some(color) = ColorGrid::new(color, title).below().show(ctx, rect) {
         if ui_state.color_popover == ColorPopover::StrokeFull {
             ui_state.last_picked_stroke = Some(color);
@@ -1855,50 +1858,6 @@ fn render_right_panel(
                             Stroke::new(1.0, Color32::from_gray(65));
                         visuals.widgets.hovered = visuals.widgets.inactive;
                         visuals.widgets.active = visuals.widgets.inactive;
-                        ui.horizontal_wrapped(|ui| {
-                            for (label, value) in [
-                                ("Σ", "Σ"),
-                                ("∏", "∏"),
-                                ("∫", "∫"),
-                                ("lim", "lim"),
-                                ("≥", "≥"),
-                                ("≤", "≤"),
-                                ("∞", "∞"),
-                            ] {
-                                if ui.button(label).clicked() {
-                                    action = Some(UiAction::InsertTextSymbol(value.into()));
-                                }
-                            }
-                        });
-                        ui.horizontal_wrapped(|ui| {
-                            for label in [
-                                "Fraction",
-                                "Racine",
-                                "Racine n-ième",
-                                "Somme",
-                                "Produit",
-                                "Intégrale",
-                                "Limite",
-                            ] {
-                                let response = ui.small_button(label);
-                                ui_state.test_controls.insert(
-                                    label.into(),
-                                    [
-                                        response.rect.min.x,
-                                        response.rect.min.y,
-                                        response.rect.max.x,
-                                        response.rect.max.y,
-                                    ],
-                                );
-                                if response.clicked() {
-                                    action = Some(UiAction::OpenInlineFormula(label.into()));
-                                }
-                            }
-                        });
-                        ui.label(
-                            egui::RichText::new("Sélection : Ctrl+B / I / U · Exposant : Ctrl+↑")
-                                .size(10.0),
-                        );
                         // Font Family
                         ui.label(
                             egui::RichText::new("Font Family")
@@ -2064,8 +2023,19 @@ fn render_right_panel(
                         });
                     }
 
-                    // Math-specific properties (font size only)
+                    // Math font applies to the selected object, independently of Text.
                     if props.is_math {
+                        let font = TextFont {
+                            family: props.font_family,
+                            weight: props.font_weight,
+                            custom: props.custom_font.clone(),
+                            postscript: props.custom_font_postscript.clone(),
+                        };
+                        if let Some(font) =
+                            math_font_picker(ui, "math_object_font", &font, &ui_state.local_fonts)
+                        {
+                            action = Some(UiAction::SetMathFont(font));
+                        }
                         ui.label(
                             egui::RichText::new("Font Size")
                                 .size(11.0)
@@ -3567,7 +3537,10 @@ fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAct
                     ui.add_space(10.0);
 
                     egui::ScrollArea::vertical().max_height(560.0).show(ui, |ui| {
-                        widgets_section_label(ui, "Police par défaut");
+                        widgets_section_label(ui, "Police Math par défaut");
+                        if let Some(font)=math_font_picker(ui,"default_math_font",&ui_state.settings.default_math_font,&ui_state.local_fonts) { action=Some(UiAction::SetDefaultMathFont(font)); }
+                        ui.add_space(12.0);
+                        widgets_section_label(ui, "Police Text par défaut");
                         let label = if ui_state.settings.default_font_postscript == "GoogleSans-Medium" {
                             "Google Sans Medium".to_string()
                         } else { ui_state.settings.default_font.clone() };
@@ -3777,7 +3750,13 @@ fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAct
 /// Render a compact inline formula editor next to the formula on the canvas.
 /// The formula itself is updated live, so there is no blocking modal/panel.
 fn render_math_editor(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
-    let input_family = egui::FontFamily::Name("math_gelpen".into());
+    let input_family = if ui_state.math_font.custom.is_some() && ui_state.math_input_font_ready {
+        egui::FontFamily::Name("math_medium".into())
+    } else if ui_state.math_font.family == FontFamily::GelPen {
+        egui::FontFamily::Name("math_gelpen".into())
+    } else {
+        egui::FontFamily::Proportional
+    };
     let screen_rect = ctx.input(|i| i.content_rect());
     let pos = ui_state
         .math_editor_screen_pos
@@ -3795,7 +3774,7 @@ fn render_math_editor(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction>
         let editor = ui_state.math_editor.as_mut()?;
         let shape_id = editor.shape_id;
 
-        egui::Area::new(egui::Id::new("math_inline_editor"))
+        let output = egui::Area::new(egui::Id::new("math_inline_editor"))
             .fixed_pos(Pos2::new(x, y))
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
@@ -3893,9 +3872,11 @@ fn render_math_editor(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction>
                         }
                     });
             });
+        ui_state.math_editor_rect = Some(output.response.rect);
     }
 
     if close {
+        ui_state.math_editor_rect = None;
         ui_state.math_editor = None;
         ui_state.math_dead_caret = false;
         ui_state.math_editor_screen_pos = None;
@@ -4221,6 +4202,7 @@ fn render_text_command_editor(ctx: &Context, state: &mut UiState) -> Option<UiAc
     let editor = state.text_command_editor.as_mut()?;
     let mut action = None;
     egui::Window::new("Formule dans Text")
+        .title_bar(false)
         .id(egui::Id::new(("text_command_window", editor.formula_id)))
         .collapsible(false)
         .resizable(false)
@@ -4283,4 +4265,47 @@ fn render_text_command_editor(ctx: &Context, state: &mut UiState) -> Option<UiAc
             }
         });
     action
+}
+
+fn math_font_picker(
+    ui: &mut egui::Ui,
+    id: &str,
+    current: &TextFont,
+    local: &[(String, String)],
+) -> Option<TextFont> {
+    let mut picked = None;
+    ui.label("Font Family");
+    let label = current
+        .custom
+        .clone()
+        .unwrap_or_else(|| current.family.display_name().into());
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(label)
+        .width(200.0)
+        .show_ui(ui, |ui| {
+            for family in FontFamily::all() {
+                if ui
+                    .selectable_label(
+                        current.custom.is_none() && current.family == *family,
+                        family.display_name(),
+                    )
+                    .clicked()
+                {
+                    picked = Some(TextFont::from_name(family.name(), ""));
+                }
+            }
+            ui.separator();
+            for (family, ps) in local {
+                if ui
+                    .selectable_label(
+                        current.postscript.as_ref() == Some(ps),
+                        format!("{} — {}", family, ps),
+                    )
+                    .clicked()
+                {
+                    picked = Some(TextFont::from_name(family, ps));
+                }
+            }
+        });
+    picked
 }

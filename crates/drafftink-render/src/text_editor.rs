@@ -115,6 +115,7 @@ pub struct TextEditState {
     /// Cached layout height for bounds calculation.
     cached_height: f32,
     script_mode: ScriptMode,
+    explicit_script: bool,
     rich_layout: Option<parley::Layout<Brush>>,
     pending_dead_caret: bool,
     font_size: f32,
@@ -148,6 +149,7 @@ impl TextEditState {
             cached_width: 0.0,
             cached_height: 0.0,
             script_mode: ScriptMode::Normal,
+            explicit_script: false,
             rich_layout: None,
             pending_dead_caret: false,
             font_size,
@@ -161,10 +163,44 @@ impl TextEditState {
             ScriptMode::Subscript => -1,
         }
     }
+    pub fn sync_cursor_script(&mut self, text: &drafftink_core::shapes::Text) {
+        if self.explicit_script {
+            return;
+        }
+        let byte = self
+            .editor
+            .raw_selection()
+            .focus()
+            .index()
+            .min(text.content.len());
+        let i = text.content[..byte].chars().count();
+        let value = text
+            .char_styles
+            .get(i)
+            .or_else(|| i.checked_sub(1).and_then(|i| text.char_styles.get(i)))
+            .map(|s| s.script)
+            .unwrap_or(0);
+        self.script_mode = match value {
+            1 => ScriptMode::Superscript,
+            -1 => ScriptMode::Subscript,
+            _ => ScriptMode::Normal,
+        };
+    }
     pub fn set_rich_layout(&mut self, layout: parley::Layout<Brush>) {
         self.rich_layout = Some(layout);
     }
     pub fn selection_geometry_with(&self, mut f: impl FnMut(parley::BoundingBox, usize)) {
+        if matches!(
+            key,
+            TextKey::Left
+                | TextKey::Right
+                | TextKey::Up
+                | TextKey::Down
+                | TextKey::Home
+                | TextKey::End
+        ) {
+            self.explicit_script = false;
+        }
         if let Some(layout) = &self.rich_layout {
             let selection = self.editor.raw_selection().refresh(layout);
             selection.geometry_with(layout, |mut rect, line_index| {
@@ -224,9 +260,20 @@ impl TextEditState {
             if rect.height() < 1.0 {
                 rect.y0 = rect.y1 - self.font_size as f64 * 1.2;
             }
-            if let Some(line) = layout.lines().find(|l| {
-                l.text_range().contains(&cursor.index()) || l.text_range().end == cursor.index()
-            }) {
+            if let Some(line) = layout
+                .lines()
+                .find(|l| l.text_range().contains(&cursor.index()))
+                .or_else(|| {
+                    layout
+                        .lines()
+                        .filter(|l| l.text_range().end == cursor.index())
+                        .last()
+                })
+            {
+                if line.text_range().is_empty() {
+                    rect.x0 = 0.0;
+                    rect.x1 = size as f64;
+                }
                 let shift = inline_baseline_shift(&line, self.font_size) as f64;
                 let baseline = line.metrics().baseline as f64 - shift;
                 rect.y0 = baseline - self.font_size as f64;
@@ -451,13 +498,22 @@ impl TextEditState {
         let action_mod = modifiers.action_mod();
         let shift = modifiers.shift;
 
+        if matches!(
+            key,
+            TextKey::Left
+                | TextKey::Right
+                | TextKey::Up
+                | TextKey::Down
+                | TextKey::Home
+                | TextKey::End
+        ) {
+            self.explicit_script = false;
+        }
         if let Some(layout) = &self.rich_layout {
             let selection = self.editor.raw_selection().refresh(layout);
             let next = match key {
                 TextKey::Left if !action_mod => Some(selection.previous_visual(layout, shift)),
-                TextKey::Right if !action_mod && self.script_mode == ScriptMode::Normal => {
-                    Some(selection.next_visual(layout, shift))
-                }
+                TextKey::Right if !action_mod => Some(selection.next_visual(layout, shift)),
                 TextKey::Up => Some(selection.previous_line(layout, shift)),
                 TextKey::Down => Some(selection.next_line(layout, shift)),
                 TextKey::Home if !action_mod => Some(selection.line_start(layout, shift)),
@@ -513,12 +569,6 @@ impl TextEditState {
                 }
             }
             TextKey::Right => {
-                if self.script_mode != ScriptMode::Normal && !action_mod && !shift {
-                    self.script_mode = ScriptMode::Normal;
-                    drop(drv);
-                    self.update_layout_cache(font_cx, layout_cx);
-                    return TextEditResult::Handled;
-                }
                 if action_mod {
                     if shift {
                         drv.select_word_right();
@@ -602,6 +652,7 @@ impl TextEditState {
                 } else {
                     ScriptMode::Subscript
                 };
+                self.explicit_script = true;
                 self.script_mode = if self.script_mode == wanted {
                     ScriptMode::Normal
                 } else {
@@ -619,16 +670,7 @@ impl TextEditState {
                         drv.select_all();
                     }
                 } else if !action_mod {
-                    if self.script_mode != ScriptMode::Normal {
-                        if c == " " {
-                            self.script_mode = ScriptMode::Normal;
-                            drv.insert_or_replace_selection(" ");
-                        } else {
-                            drv.insert_or_replace_selection(c);
-                        }
-                    } else {
-                        drv.insert_or_replace_selection(c);
-                    }
+                    drv.insert_or_replace_selection(c);
                 }
             }
         }
@@ -741,6 +783,7 @@ impl TextEditState {
     ) {
         self.cursor_reset();
         self.pending_dead_caret = false;
+        self.explicit_script = false;
         if let Some((start, _)) = self.inline_at(local_x, local_y) {
             self.editor
                 .driver(font_cx, layout_cx)

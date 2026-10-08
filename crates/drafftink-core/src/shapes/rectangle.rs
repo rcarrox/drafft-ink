@@ -109,8 +109,8 @@ impl ShapeTrait for Rectangle {
                 tolerance + self.style.stroke_width / 2.0,
             );
             let inner = rect.inflate(
-                -(tolerance + self.style.stroke_width / 2.0),
-                -(tolerance + self.style.stroke_width / 2.0),
+                -(tolerance * 3.0 + self.style.stroke_width / 2.0),
+                -(tolerance * 3.0 + self.style.stroke_width / 2.0),
             );
             outer.contains(point) && !inner.contains(point)
         }
@@ -189,5 +189,17 @@ mod tests {
         assert!((bounds.y0 - 20.0).abs() < f64::EPSILON);
         assert!((bounds.x1 - 110.0).abs() < f64::EPSILON);
         assert!((bounds.y1 - 70.0).abs() < f64::EPSILON);
+    }
+}
+
+#[cfg(test)]
+mod inside_hit_margin_tests {
+    use super::*;
+    #[test]
+    fn increase_inner_only_margin() {
+        let r = Rectangle::new(Point::ZERO, 100.0, 100.0);
+        assert!(r.hit_test(Point::new(12.0, 50.0), 5.0));
+        assert!(!r.hit_test(Point::new(-12.0, 50.0), 5.0));
+        assert!(!r.hit_test(Point::new(50.0, 50.0), 5.0));
     }
 }

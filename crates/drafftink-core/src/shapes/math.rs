@@ -6,6 +6,10 @@ use serde::{Deserialize, Serialize};
 use std::sync::RwLock;
 use uuid::Uuid;
 
+pub fn default_math_font() -> super::TextFont {
+    super::TextFont::from_name("GelPen", "")
+}
+
 /// A math equation shape (LaTeX).
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Math {
@@ -19,6 +23,8 @@ pub struct Math {
     pub source: String,
     /// Font size in pixels.
     pub font_size: f64,
+    #[serde(default = "default_math_font")]
+    pub font: super::TextFont,
     /// Rotation angle in radians (around center).
     #[serde(default)]
     pub rotation: f64,
@@ -39,6 +45,7 @@ impl Clone for Math {
             latex: self.latex.clone(),
             source: self.source.clone(),
             font_size: self.font_size,
+            font: self.font.clone(),
             rotation: self.rotation,
             display_scale: self.display_scale,
             style: self.style.clone(),
@@ -57,6 +64,7 @@ impl Math {
             source: latex.clone(),
             latex,
             font_size: Self::DEFAULT_FONT_SIZE,
+            font: default_math_font(),
             rotation: 0.0,
             display_scale: [1.0, 1.0],
             style: ShapeStyle::default(),
@@ -78,6 +86,7 @@ impl Math {
             source: latex.clone(),
             latex,
             font_size,
+            font: default_math_font(),
             rotation,
             display_scale: [1.0, 1.0],
             style,
@@ -192,5 +201,28 @@ impl ShapeTrait for Math {
 
     fn clone_box(&self) -> Box<dyn ShapeTrait + Send + Sync> {
         Box::new(self.clone())
+    }
+}
+
+#[cfg(test)]
+mod font_json_tests {
+    use super::*;
+    #[test]
+    fn font_roundtrip_and_legacy_default() {
+        let mut m = Math::new(Point::ZERO, "x+1".into());
+        m.font = super::super::TextFont::from_name("Noto Sans", "");
+        let mut json = serde_json::to_value(m).unwrap();
+        assert_eq!(
+            serde_json::from_value::<Math>(json.clone())
+                .unwrap()
+                .font
+                .family,
+            super::super::FontFamily::NotoSans
+        );
+        json.as_object_mut().unwrap().remove("font");
+        assert_eq!(
+            serde_json::from_value::<Math>(json).unwrap().font.family,
+            super::super::FontFamily::GelPen
+        );
     }
 }
