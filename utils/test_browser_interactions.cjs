@@ -112,7 +112,7 @@ function inspectCapture(file) {
     page = await geometryContext.newPage();
     await page.goto(process.env.DRAFFTINK_TEST_URL || 'http://127.0.0.1:8888/?drafftink-test=1');
     await wait(s=>s.shapes.length===0&&!s.properties_visible);
-    assert.equal(await page.title(),'Qraphtinc');
+    assert.equal(await page.title(),'Qursor🌿');
     await page.mouse.move(400,300);await page.waitForTimeout(100);
     await page.keyboard.press('o');await wait(s=>s.tool==='Ellipse'&&s.geometry==='Ellipse');
     await page.keyboard.press('o');await wait(s=>s.geometry==='Triangle');
