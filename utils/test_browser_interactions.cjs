@@ -168,8 +168,10 @@ function inspectCapture(file) {
     await page.mouse.down();await page.mouse.move(900,540,{steps:5});await page.mouse.up();await wait(s=>s.shapes.length===2&&s.selected_count===1);
     await page.keyboard.press('s');await wait(s=>s.tool==='Select');
     const firstBounds=(await state()).shapes[0].bounds;
-    await page.mouse.move((firstBounds[0]+firstBounds[2])/2,(firstBounds[1]+firstBounds[3])/2);
-    await page.keyboard.down('Control');await page.mouse.click((firstBounds[0]+firstBounds[2])/2,(firstBounds[1]+firstBounds[3])/2);await page.keyboard.up('Control');
+    // Empty rectangles are hit-tested on their outline; Ctrl-click the visible edge.
+    const multiSelectPoint=[firstBounds[0]+1,firstBounds[1]+1];
+    await page.mouse.move(...multiSelectPoint);
+    await page.keyboard.down('Control');await page.mouse.click(...multiSelectPoint);await page.keyboard.up('Control');
     await wait(s=>s.selected_count===2);
     await page.keyboard.press('Control+l');await wait(s=>s.shapes.every(shape=>shape.pinned));
     await page.keyboard.press('Control+z');await wait(s=>s.shapes.every(shape=>!shape.pinned));

@@ -1994,7 +1994,10 @@ mod pinned_pointer_tests {
         shape.transform(canvas.camera.transform());
         canvas.document.add_shape(shape);
         canvas.document.pinned_shapes.insert(id, PinnedShape { background: SerializableColor::white() });
-        let screen_point = canvas.document.get_shape(id).unwrap().bounds().center();
+        let bounds = canvas.document.get_shape(id).unwrap().bounds();
+        // Rectangle hit testing follows its outline when it has no fill, so
+        // probe just inside a corner rather than in the empty center.
+        let screen_point = Point::new(bounds.x0 + 1.0, bounds.y0 + 1.0);
         canvas.camera.zoom = 0.4;
         canvas.camera.offset = kurbo::Vec2::new(-400.0, 170.0);
         let pointer_world = canvas.camera.screen_to_world(screen_point);
