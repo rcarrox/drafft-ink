@@ -780,6 +780,7 @@ pub fn render_ui(
 ) -> Option<UiAction> {
     ui_state.test_controls.clear();
     if ctx.input(|i| i.pointer.primary_pressed())
+        && !egui::Popup::is_any_open(ctx)
         && ctx
             .input(|i| i.pointer.interact_pos())
             .is_some_and(|p| !ui_state.context_rects.iter().any(|r| r.contains(p)))

@@ -160,12 +160,12 @@ function inspectCapture(file) {
     await page.keyboard.press('Control+b');await page.keyboard.press('Control+i');await page.keyboard.press('Control+u');
     await wait(s=>text(s)?.char_styles.slice(-2).every(style=>!style.bold&&!style.italic&&!style.underline) && text(s)?.char_styles.slice(0,-2).every(style=>style.bold&&style.italic&&style.underline));
     await page.keyboard.press('ArrowRight');
-    await keys('frac(frac(1,2),frac(3,4))');await wait(s=>!!s.command_editor);
+    await keys(' frac(frac(1,2),frac(3,4))');await wait(s=>!!s.command_editor);
     await page.keyboard.press('Enter');await wait(s=>!s.command_editor&&text(s)?.formulas.length===1);
     await snapshot(page,'text-fraction.png');
     await keys(' fin');
     await wait(s => text(s)?.content.endsWith(' fin'));
-    await keys('root(x+1,3)');await wait(s=>!!s.command_editor);await page.keyboard.press('Enter');await wait(s=>!s.command_editor);
+    await keys(' root(x+1,3)');await wait(s=>!!s.command_editor);await page.keyboard.press('Enter');await wait(s=>!s.command_editor);
     await wait(s => text(s)?.formulas.length === 2 && !s.inline_dialog);
     await snapshot(page,'text-root.png');
     const before = await state();
@@ -215,7 +215,7 @@ function inspectCapture(file) {
     await wait(s=>s.shapes.find(item=>item.id===commandId)?.shape.Text.display_scale[0]<0);
     await page.keyboard.press('Control+z');await wait(s=>s.shapes.find(item=>item.id===commandId)?.shape.Text.display_scale[0]>0);
 
-    // One physical render pixel for a normal arrow, historical GRID_SIZE for Shift.
+    // One physical render pixel for a normal arrow, historical GRID_SIZE for Ctrl.
     const nudgeBefore=(await state()).shapes.find(item=>item.id===commandId);
     await page.mouse.click(nudgeBefore.bounds[0]+10,(nudgeBefore.bounds[1]+nudgeBefore.bounds[3])/2);
     await page.keyboard.press('ArrowRight');await wait(s=>Math.abs(s.shapes.find(item=>item.id===commandId).bounds[0]-nudgeBefore.bounds[0]-1)<0.01);
