@@ -1,8 +1,8 @@
-# Qursor🌿 0.19.0 — un ZIP pour Windows et votre FTP
+# Qurso🌿 0.20.0 — un ZIP pour Windows et votre FTP
 
 ## En local sur Windows
 
-Décompresser **tout le ZIP**, puis double-cliquer sur **Lancer Qursor.cmd** et choisir Chrome ou Edge. Conserver le dossier `web` et les autres fichiers à côté du lanceur. Aucun compilateur ni installation nécessaire. Utiliser le lanceur plutôt que double-cliquer sur `index.html`.
+Décompresser **tout le ZIP**, puis double-cliquer sur **Lancer Qurso.cmd** et choisir Chrome ou Edge. Conserver le dossier `web` et les autres fichiers à côté du lanceur. Aucun compilateur ni installation nécessaire. Utiliser le lanceur plutôt que double-cliquer sur `index.html`.
 
 ## Sur votre FTP
 

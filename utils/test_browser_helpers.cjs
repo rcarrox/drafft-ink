@@ -14,7 +14,7 @@ const sandbox={console,Uint8Array,ArrayBuffer,Promise,Map,Math,Number,Infinity,e
   clearTimeout:id=>timers.delete(id), navigator:{permissions:{query:async()=>({state:'prompt'})}},
   window:{dispatchEvent:()=>wakeups++,queryLocalFonts:async()=>{throw Error('Permission API should not be needed')}},
   fetch:async url=>{requests.push(url);
-    if(url==='cursormouse.svg'||url==='cursortext.svg'||url==='cursormath.svg')return{ok:true,text:async()=>fs.readFileSync(path.join(root,'web',url),'utf8')};
+    if(url==='cursormouse.svg'||url==='cursortext.svg'||url==='cursormath.svg'||url==='cursoreraser.svg')return{ok:true,text:async()=>fs.readFileSync(path.join(root,'web',url),'utf8')};
     if(url==='/local-fonts.json')return{ok:true,json:async()=>catalog};
     if(url==='/local-font/GoogleSans-Medium')return{ok:true,arrayBuffer:async()=>new Uint8Array([0,1,0,0]).buffer};
     return{ok:false};},
@@ -36,7 +36,10 @@ vm.createContext(sandbox);vm.runInContext(helper,sandbox);
   const mouse=decodeURIComponent(match[1]);assert(mouse.includes('fill="#ffffff"'));assert(mouse.includes('stroke="#0080ff"'));assert(mouse.includes('feDropShadow'));
   sandbox.window.drafftinkSetCursor(true,'#0080ff');assert(canvas.style.cursor.endsWith('14 14, text'));
   sandbox.window.drafftinkSetCursor(2,'#0080ff');
-  assert(decodeURIComponent(canvas.style.cursor).includes('>X</text>'));
+  assert(decodeURIComponent(canvas.style.cursor).includes('M60 26l12 12'));
+  sandbox.window.drafftinkSetCursor(3,'#0080ff');
+  assert(canvas.style.cursor.endsWith('4 18, default'));
+  assert(decodeURIComponent(canvas.style.cursor).includes('M12.48 3'));
   canvas.style.cursor='pointer';sandbox.window.drafftinkSetCursor(0,'#000000',true);assert(canvas.style.cursor.endsWith('6 5, default'));
   const date=new Date(2026,9,8,11,26,45);
   assert.equal(sandbox.window.drafftinkSnapshotFilename('Canvas-x01','png',date),'2026-10-08_112645 Canvas-x01.png');

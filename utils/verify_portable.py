@@ -3,7 +3,7 @@ import argparse, hashlib, json, zipfile
 from pathlib import Path
 
 def verify(path, version):
-    required=['Lancer Qursor.cmd','LIRE_MOI_LOCAL_ET_FTP.md','README_WEB_FR.md','Lancer DrafftInk.cmd','Arreter DrafftInk.cmd','Ouvrir avec Edge.cmd','Ouvrir avec Chrome.cmd',
+    required=['Lancer Qurso.cmd','LIRE_MOI_LOCAL_ET_FTP.md','README_WEB_FR.md','Lancer DrafftInk.cmd','Arreter DrafftInk.cmd','Ouvrir avec Edge.cmd','Ouvrir avec Chrome.cmd',
               'windows/serve-local.ps1','VERSION_LOCAL.txt','README_LOCAL_FR.md','web/index.html',
               'web/pkg/drafftink_app.js','web/pkg/drafftink_app_bg.wasm','web/cursormouse.svg','web/cursortext.svg','web/cursormath.svg','web/offline.js','web/sw.js']
     with zipfile.ZipFile(path) as z:

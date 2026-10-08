@@ -1,10 +1,10 @@
-# Qursor🌿 0.19.0
+# Qurso🌿 0.20.0
 
 Version personnelle du tableau DrafftInk, sans collaboration reseau.
 
 ## Utilisation sous Windows
 
-Le ZIP **DrafftInk_Windows_Portable_0.19.0.zip** produit par GitHub Actions est deja compile.
+Le ZIP **DrafftInk_Windows_Portable_0.20.0.zip** produit par GitHub Actions est deja compile.
 Il ne faut installer ni Rust, ni wasm-pack, ni Visual Studio.
 
 1. Decompresser le ZIP.
@@ -26,8 +26,8 @@ Workflow : `.github/workflows/build-portable.yml`.
 
 A chaque push sur `main`, deux artefacts sont produits :
 
-- `DrafftInk-Windows-Portable-0.19.0` : version locale Windows precompilee ;
-- `DrafftInk-Web-0.19.0` : fichiers statiques a deposer sur un serveur web.
+- `DrafftInk-Windows-Portable-0.20.0` : version locale Windows precompilee ;
+- `DrafftInk-Web-0.20.0` : fichiers statiques a deposer sur un serveur web.
 
 ## Modifications de cette branche
 
@@ -121,7 +121,7 @@ Chrome et Edge recents sont les cibles prioritaires car DrafftInk utilise WebGPU
 
 - Export PNG : les donnees du document sont embarquees en UTF-8 (iTXt) pour conserver les symboles, blocs de formule et noms Unicode ; les anciens PNG zTXt restent importables.
 
-## Nouveautes 0.19.0
+## Nouveautes 0.20.0
 
 Dans Text, taper sum(, prod(, int(, lim(, sqrt( ou frac( cree immediatement un bloc math et ouvre un mini editeur de code. Le symbole et ses arguments sont actualises sur la feuille pendant la frappe. Entree valide et continue le texte ; Escape valide et termine l'edition Text. Selectionner un bloc de code puis Ctrl+Entree (ou double clic sur le bloc deja en edition) permet de le modifier. Les champs 0.8 restent disponibles.
 
@@ -160,6 +160,6 @@ Zoom au pavé tactile : vitesse 2× par défaut, réglable de 0,25× à 8× dans
 - Settings : couleur des boutons actifs, styles de trait sélectionnés et poignées/cadre de sélection, enregistrée avec les préférences.
 - Le rectangle de sélection continue sur les panneaux et menus jusqu’au relâchement, sans activer leurs boutons.
 
-## Nouveautés 0.19.0
+## Nouveautés 0.20.0
 
 Cache hors connexion des fichiers de l’application et mises à jour explicites, limitées au dossier hébergé. Pour le déploiement FTP, lire README_WEB_FR.md. Documents, préférences, polices et rendu existants conservés.

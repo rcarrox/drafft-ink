@@ -112,7 +112,7 @@ function inspectCapture(file) {
     page = await geometryContext.newPage();
     await page.goto(process.env.DRAFFTINK_TEST_URL || 'http://127.0.0.1:8888/?drafftink-test=1');
     await wait(s=>s.shapes.length===0&&!s.properties_visible);
-    assert.equal(await page.title(),'Qursor🌿');
+    assert.equal(await page.title(),'Qurso🌿');
     await page.mouse.move(400,300);await page.waitForTimeout(100);
     await page.keyboard.press('o');await wait(s=>s.tool==='Ellipse'&&s.geometry==='Ellipse');
     await page.keyboard.press('o');await wait(s=>s.geometry==='Triangle');
@@ -181,6 +181,14 @@ function inspectCapture(file) {
     await wait(s=>s.camera_offset[0]< -30);const edge=(await state()).shapes[0];assert(Math.abs(edge.bounds[0]-1275)<5);
     await page.mouse.move(900,350,{steps:6});await page.waitForTimeout(100);const stopped=(await state()).camera_offset[0];await page.waitForTimeout(250);assert(Math.abs((await state()).camera_offset[0]-stopped)<1);
     await page.mouse.up();await page.keyboard.press('Control+z');await wait(s=>Math.abs(s.shapes[0].shape.Rectangle.position.x-originalRect)<1e-7);
+    await control('New canvas');await wait(s=>s.shapes.length===0);
+
+    // A completed shape remains selected and can resize with its drawing tool still active.
+    await page.keyboard.press('r');await wait(s=>s.tool==='Rectangle');
+    await page.mouse.move(320,260);await page.mouse.down();await page.mouse.move(440,350,{steps:6});await page.mouse.up();
+    await wait(s=>s.shapes.length===1&&s.selected_count===1);
+    await page.mouse.move(440,350);await page.waitForTimeout(100);await page.mouse.down();await page.mouse.move(510,390,{steps:6});await page.mouse.up();
+    await wait(s=>s.shapes.length===1&&s.shapes[0].shape.Rectangle.width>170&&s.tool==='Rectangle');
     await control('New canvas');await wait(s=>s.shapes.length===0);
 
     await page.mouse.click(370,270);

@@ -1,5 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <!-- Eraser icon -->
-  <path d="M448 256L320 384H160L96 320L288 128L448 256Z" fill="none" stroke="white" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
-  <line x1="160" y1="384" x2="320" y2="384" stroke="white" stroke-width="32" stroke-linecap="round"/>
-</svg>
+<svg color="white" fill="white" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M12.48 3L7.73 7.75L3 12.59a2 2 0 0 0 0 2.82l4.3 4.3A1 1 0 0 0 8 20h12v-2h-7l7.22-7.22a2 2 0 0 0 0-2.83L15.31 3a2 2 0 0 0-2.83 0zM8.41 18l-4-4l4.75-4.84l.74-.75l4.95 4.95l-4.56 4.56l-.07.08z" fill="white"/></svg>

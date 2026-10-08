@@ -12,14 +12,21 @@ self.addEventListener('install', event => {
         try {
             // Integrity rejects a partially uploaded release or a host serving
             // its home page instead of the requested JS/WASM. Never cache data APIs.
-            await Promise.all(ASSETS.map(async asset => {
+            for (const asset of ASSETS) {
                 const url = new URL(asset.path, BASE).href;
-                const response = await fetch(url, {cache: 'reload', integrity: asset.integrity});
-                if (!response.ok) throw new Error(`Offline cache: ${asset.path} (${response.status})`);
-                await cache.put(url, response);
-            }));
+                try {
+                    const response = await fetch(url, {cache: 'reload', integrity: asset.integrity});
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    await cache.put(url, response);
+                } catch (error) {
+                    throw new Error(`${asset.path} : ${error.message}`);
+                }
+            }
         } catch (error) {
             await caches.delete(CACHE);
+            for (const client of await self.clients.matchAll({includeUncontrolled: true})) {
+                client.postMessage({type: 'Q_CACHE_ERROR', detail: error.message});
+            }
             throw error;
         }
         // Updates wait for explicit user activation; the first install activates normally.
