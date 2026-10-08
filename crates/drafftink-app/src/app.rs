@@ -2378,6 +2378,7 @@ impl App {
             ) {
                 file_ops::restore_local_font_async(family.clone(), ps.clone());
             }
+            #[cfg(target_arch = "wasm32")]
             file_ops::query_local_fonts_async();
             let ps = state.ui_state.current_text_postscript.clone();
             if !ps.is_empty() {
@@ -2977,6 +2978,7 @@ impl ApplicationHandler for App {
                     ) {
                         file_ops::restore_local_font_async(family.clone(), ps.clone());
                     }
+                    #[cfg(target_arch = "wasm32")]
                     file_ops::query_local_fonts_async();
                     state.needs_redraw = true;
                 }
@@ -3036,6 +3038,17 @@ impl ApplicationHandler for App {
                             Shape::Text(text) => {
                                 if let Some(family) = text.custom_font.as_ref() {
                                     if let Some(ps) = text.custom_font_postscript.as_ref() {
+                                        result.insert((family.clone(), ps.clone()));
+                                    } else if let Some((_, ps)) =
+                                        fonts.iter().find(|(name, _)| name == family)
+                                    {
+                                        result.insert((family.clone(), ps.clone()));
+                                    }
+                                }
+                            }
+                            Shape::Math(math) => {
+                                if let Some(family) = &math.font.custom {
+                                    if let Some(ps) = &math.font.postscript {
                                         result.insert((family.clone(), ps.clone()));
                                     } else if let Some((_, ps)) =
                                         fonts.iter().find(|(name, _)| name == family)
@@ -4123,6 +4136,7 @@ impl ApplicationHandler for App {
                                 ) {
                                     file_ops::restore_local_font_async(family.clone(), ps.clone());
                                 }
+                                #[cfg(target_arch = "wasm32")]
                                 file_ops::query_local_fonts_async();
                                 #[cfg(not(target_arch = "wasm32"))]
                                 {
@@ -5540,25 +5554,6 @@ impl ApplicationHandler for App {
             WindowEvent::CursorMoved { position, .. } => {
                 let point = Point::new(position.x, position.y);
 
-                if btn_state == ElementState::Pressed
-                    && button == MouseButton::Left
-                    && state.ui_state.math_editor.is_some()
-                {
-                    let p = state.input.mouse_position();
-                    let p = egui::Pos2::new(p.x as f32, p.y as f32);
-                    if state
-                        .ui_state
-                        .math_editor_rect
-                        .is_some_and(|r| !r.contains(p))
-                    {
-                        finish_math_editor(state);
-                        state.needs_redraw = true;
-                        state.window.request_redraw();
-                        if !egui_wants_input {
-                            return;
-                        }
-                    }
-                }
                 // Skip canvas processing if egui wants the pointer
                 if egui_wants_input {
                     state.window.set_cursor(CursorIcon::Default);
@@ -5986,25 +5981,6 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::MouseWheel { delta, .. } => {
-                if btn_state == ElementState::Pressed
-                    && button == MouseButton::Left
-                    && state.ui_state.math_editor.is_some()
-                {
-                    let p = state.input.mouse_position();
-                    let p = egui::Pos2::new(p.x as f32, p.y as f32);
-                    if state
-                        .ui_state
-                        .math_editor_rect
-                        .is_some_and(|r| !r.contains(p))
-                    {
-                        finish_math_editor(state);
-                        state.needs_redraw = true;
-                        state.window.request_redraw();
-                        if !egui_wants_input {
-                            return;
-                        }
-                    }
-                }
                 // Skip canvas processing if egui wants the pointer
                 if egui_wants_input {
                     return;

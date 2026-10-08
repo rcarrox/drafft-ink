@@ -2031,9 +2031,13 @@ fn render_right_panel(
                             custom: props.custom_font.clone(),
                             postscript: props.custom_font_postscript.clone(),
                         };
-                        if let Some(font) =
-                            math_font_picker(ui, "math_object_font", &font, &ui_state.local_fonts)
-                        {
+                        if let Some(font) = math_font_picker(
+                            ui,
+                            "math_object_font",
+                            &font,
+                            &ui_state.local_fonts,
+                            &mut ui_state.test_controls,
+                        ) {
                             action = Some(UiAction::SetMathFont(font));
                         }
                         ui.label(
@@ -3538,7 +3542,7 @@ fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAct
 
                     egui::ScrollArea::vertical().max_height(560.0).show(ui, |ui| {
                         widgets_section_label(ui, "Police Math par défaut");
-                        if let Some(font)=math_font_picker(ui,"default_math_font",&ui_state.settings.default_math_font,&ui_state.local_fonts) { action=Some(UiAction::SetDefaultMathFont(font)); }
+                        if let Some(font)=math_font_picker(ui,"default_math_font",&ui_state.settings.default_math_font,&ui_state.local_fonts,&mut ui_state.test_controls) { action=Some(UiAction::SetDefaultMathFont(font)); }
                         ui.add_space(12.0);
                         widgets_section_label(ui, "Police Text par défaut");
                         let label = if ui_state.settings.default_font_postscript == "GoogleSans-Medium" {
@@ -4272,6 +4276,7 @@ fn math_font_picker(
     id: &str,
     current: &TextFont,
     local: &[(String, String)],
+    controls: &mut std::collections::BTreeMap<String, [f32; 4]>,
 ) -> Option<TextFont> {
     let mut picked = None;
     ui.label("Font Family");
@@ -4279,18 +4284,25 @@ fn math_font_picker(
         .custom
         .clone()
         .unwrap_or_else(|| current.family.display_name().into());
-    egui::ComboBox::from_id_salt(id)
+    let combo = egui::ComboBox::from_id_salt(id)
         .selected_text(label)
         .width(200.0)
         .show_ui(ui, |ui| {
             for family in FontFamily::all() {
-                if ui
-                    .selectable_label(
-                        current.custom.is_none() && current.family == *family,
-                        family.display_name(),
-                    )
-                    .clicked()
-                {
+                let response = ui.selectable_label(
+                    current.custom.is_none() && current.family == *family,
+                    family.display_name(),
+                );
+                controls.insert(
+                    format!("{}:{}", id, family.name()),
+                    [
+                        response.rect.min.x,
+                        response.rect.min.y,
+                        response.rect.max.x,
+                        response.rect.max.y,
+                    ],
+                );
+                if response.clicked() {
                     picked = Some(TextFont::from_name(family.name(), ""));
                 }
             }
@@ -4307,5 +4319,14 @@ fn math_font_picker(
                 }
             }
         });
+    controls.insert(
+        id.into(),
+        [
+            combo.response.rect.min.x,
+            combo.response.rect.min.y,
+            combo.response.rect.max.x,
+            combo.response.rect.max.y,
+        ],
+    );
     picked
 }

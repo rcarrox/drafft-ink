@@ -304,3 +304,18 @@ mod geometry_tests {
         assert_eq!(k, GeometryKind::Ellipse);
     }
 }
+
+#[cfg(test)]
+mod inside_margin_tests {
+    use super::*;
+    #[test]
+    fn outline_inner_margin_does_not_expand_outside() {
+        let mut e = Ellipse::new(Point::new(50.0, 50.0), 50.0, 50.0);
+        assert!(e.hit_test(Point::new(12.0, 50.0), 5.0));
+        assert!(!e.hit_test(Point::new(-12.0, 50.0), 5.0));
+        assert!(!e.hit_test(Point::new(50.0, 50.0), 5.0));
+        e.geometry = GeometryKind::Trapezoid;
+        assert!(e.hit_test(Point::new(50.0, 12.0), 5.0));
+        assert!(!e.hit_test(Point::new(50.0, -12.0), 5.0));
+    }
+}

@@ -780,6 +780,12 @@ impl TextEditState {
             return;
         }
         if let Some(layout) = &self.rich_layout {
+            let local_y = local_y
+                + layout
+                    .lines()
+                    .find(|l| local_y >= l.metrics().min_coord && local_y <= l.metrics().max_coord)
+                    .map(|l| inline_baseline_shift(&l, self.font_size))
+                    .unwrap_or(0.0);
             let next = parley::editing::Selection::word_from_point(layout, local_x, local_y);
             self.editor
                 .driver(font_cx, layout_cx)

@@ -281,8 +281,20 @@ function inspectCapture(file) {
     assert(emptyLine.text_caret[1]>0);
     await keys('hello world');await wait(s=>scriptText(s)?.content.endsWith('hello world'));
     await page.keyboard.press('Escape');await control('New canvas');await wait(s=>s.shapes.length===0);
+    await focusCanvasTool('t');await wait(s=>!!s.editing_text);await keys('hello world');await wait(s=>scriptText(s)?.content==='hello world');
+    const word=(await state()).shapes.find(i=>i.shape.Text);
+    await page.mouse.move(word.bounds[0]+25,(word.bounds[1]+word.bounds[3])/2);await page.waitForTimeout(100);
+    await page.mouse.dblclick(word.bounds[0]+25,(word.bounds[1]+word.bounds[3])/2,{delay:80});await wait(s=>s.selected_text==='hello');
+    await keys('X');await wait(s=>scriptText(s)?.content==='X world');
+    await page.keyboard.press('Escape');await control('New canvas');await wait(s=>s.shapes.length===0);
     await focusCanvasTool('m');await wait(s=>!!s.editing_math&&s.math_input_focused);await keys('x+1');await wait(s=>mathText(s)?.source==='x+1');
     await page.mouse.move(650,470);await page.waitForTimeout(100);await page.mouse.click(650,470,{delay:60});await wait(s=>s.editing_math===null&&s.shapes.length===1);
+    const equation=(await state()).shapes.find(i=>i.shape.Math);
+    await page.mouse.move((equation.bounds[0]+equation.bounds[2])/2,(equation.bounds[1]+equation.bounds[3])/2);await page.waitForTimeout(100);
+    await page.mouse.click((equation.bounds[0]+equation.bounds[2])/2,(equation.bounds[1]+equation.bounds[3])/2,{button:'right',delay:60});
+    await control('math_object_font');await control('math_object_font:Noto Sans');await wait(s=>mathText(s)?.font.family==='NotoSans');
+    await page.keyboard.press('Control+z');await wait(s=>mathText(s)?.font.family==='GelPen');
+    await page.mouse.move(650,470);await page.waitForTimeout(100);
     // A subsequent click can place a new Math; a toolbar switch closes it.
     await page.mouse.click(650,470,{delay:60});await wait(s=>!!s.editing_math&&s.math_input_focused&&s.shapes.length===2);await keys('y');
     await control('tool_Rectangle');await wait(s=>s.tool==='Rectangle'&&s.editing_math===null&&s.shapes.length===2);
