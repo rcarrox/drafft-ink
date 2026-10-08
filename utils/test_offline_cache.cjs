@@ -20,6 +20,13 @@ const server=http.createServer((request,response)=>{
   const browser=await chromium.launch({headless:true,args:['--enable-unsafe-webgpu','--use-angle=swiftshader']});
   const context=await browser.newContext({viewport:{width:1280,height:720}});
   await context.addInitScript(()=>{
+    // GPU initialization may outlast the short readiness notice. Observe the
+    // actual visible DOM announcement from page startup, not after canvas load.
+    window.__offlineNoticeSeen=false;
+    new MutationObserver(()=>{
+      const notice=document.getElementById('qraphtinc-offline');
+      if(notice?.isConnected&&!notice.hidden&&notice.textContent.includes('Disponible hors connexion'))window.__offlineNoticeSeen=true;
+    }).observe(document,{subtree:true,childList:true,characterData:true});
     if(!localStorage.getItem('drafftink.user_settings.v1'))localStorage.setItem('drafftink.user_settings.v1',JSON.stringify({restore_last_document:false,autosave_enabled:false,default_font:'Noto Sans',default_font_postscript:'',accent_color:[180,35,100]}));
   });
   const page=await context.newPage(),logs=[];
@@ -31,7 +38,7 @@ const server=http.createServer((request,response)=>{
   };
   try{
     await page.goto(url);await loaded();assert.equal(await page.title(),'Qraphtinc');
-    await page.getByText('Disponible hors connexion',{exact:false}).waitFor({timeout:60000});
+    await page.waitForFunction(()=>window.__offlineNoticeSeen===true,null,{timeout:60000});
     assert.equal(await page.evaluate(()=>navigator.serviceWorker.controller.scriptURL),url+'sw.js');
     await page.evaluate(async()=>{
       localStorage.setItem('offline-user-proof','preserved');
