@@ -281,6 +281,7 @@ pub struct UiState {
     pub inline_formula_draft: Option<InlineFormulaDraft>,
     pub text_command_editor: Option<TextCommandEditor>,
     pub text_command_pos: Pos2,
+    pub text_command_rect: Option<Rect>,
     pub save_status: String,
     pub inline_formula_error: String,
     /// Currently selected tool (mirrored from canvas).
@@ -413,6 +414,7 @@ impl Default for UiState {
             test_controls: Default::default(),
             inline_formula_draft: None,
             text_command_editor: None,
+            text_command_rect: None,
             text_command_pos: Pos2::new(400.0, 300.0),
             save_status: String::new(),
             inline_formula_error: String::new(),
@@ -908,20 +910,6 @@ fn render_tab_bar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                             if response.double_clicked() {
                                 ui_state.renaming_tab = Some(i);
                                 ui_state.tab_rename_buffer = name.clone();
-                            }
-
-                            if selected {
-                                let rename = egui::Button::new(
-                                    egui::RichText::new("✎")
-                                        .size(12.0)
-                                        .color(Color32::from_gray(110)),
-                                )
-                                .fill(Color32::TRANSPARENT)
-                                .corner_radius(egui::CornerRadius::same(4));
-                                if ui.add(rename).on_hover_text("Renommer ce canvas").clicked() {
-                                    ui_state.renaming_tab = Some(i);
-                                    ui_state.tab_rename_buffer = name.clone();
-                                }
                             }
                         }
 
@@ -3789,21 +3777,6 @@ fn render_math_editor(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction>
                     .inner_margin(Margin::symmetric(10, 8))
                     .show(ui, |ui| {
                         let edit_id = egui::Id::new(("math_source", shape_id));
-                        // Replace block-exit arrows with a text event so the widget
-                        // advances its cursor too. In the middle, arrows navigate normally.
-                        if let Some(state) = egui::TextEdit::load_state(ctx, edit_id) {
-                            let at_end = state.cursor.char_range().is_some_and(|r|
-                                r.is_empty() && r.primary.index == editor.input.chars().count());
-                            if at_end && open_structured_depth(&editor.input) > 0 {
-                                ui.input_mut(|i| {
-                                    for event in &mut i.events {
-                                        if matches!(event, egui::Event::Key { key: egui::Key::ArrowRight, pressed: true, modifiers, .. } if !modifiers.any()) {
-                                            *event = egui::Event::Text(" ".to_string());
-                                        }
-                                    }
-                                });
-                            }
-                        }
                         // Egui may surrender focus at frame start on Escape. Restore
                         // this active editor before processing any preceding text events.
                         ui.memory_mut(|m| m.request_focus(edit_id));
@@ -3813,53 +3786,29 @@ fn render_math_editor(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction>
                             .stroke(Stroke::new(1.0, Color32::from_gray(210)))
                             .inner_margin(Margin::symmetric(12, 10))
                             .show(ui, |ui| {
-                                ui.visuals_mut().text_cursor.stroke = Stroke::new(2.0, Color32::BLACK);
+                                ui.visuals_mut().text_cursor.stroke =
+                                    Stroke::new(2.0, Color32::BLACK);
                                 ui.visuals_mut().text_cursor.blink = true;
                                 ui.visuals_mut().text_cursor.on_duration = 0.75;
                                 ui.visuals_mut().text_cursor.off_duration = 0.25;
                                 egui::TextEdit::singleline(&mut editor.input)
-                                        .id(edit_id)
-                                        .desired_width(350.0)
-                                        .font(egui::FontId::new(14.0, input_family.clone()))
-                                        .text_color(Color32::BLACK)
-                                        .frame(false)
-                                        .hint_text("ex. 1/2 +3, x^2 +1, x_1, sqrt(x)")
-                                        .show(ui)
+                                    .id(edit_id)
+                                    .desired_width(350.0)
+                                    .font(egui::FontId::new(14.0, input_family.clone()))
+                                    .text_color(Color32::BLACK)
+                                    .frame(false)
+                                    .hint_text(r"\frac{x+1}{8}")
+                                    .show(ui)
                             })
                             .inner;
                         let response = &output.response;
                         response.request_focus();
 
-                        ui.label(
-                            egui::RichText::new("^ exposant  ·  _ indice  ·  Espace/→ sortir d'un bloc")
-                                .size(10.0)
-                                .color(Color32::from_gray(115)),
-                        );
-
                         if response.changed() {
-                            // Text expanders often inject Unicode superscripts/subscripts.
-                            // Normalize them immediately so unsupported UI glyphs never remain
-                            // in the editable source (e.g. x⁴ becomes x^4 + a block-exit space).
-                            let normalized = normalize_friendly_math_input(&editor.input);
-                            if normalized != editor.input {
-                                if let Some(range) = output.state.cursor.char_range() {
-                                    let map_index = |index: usize| {
-                                        let prefix: String = editor.input.chars().take(index).collect();
-                                        normalize_friendly_math_input(&prefix).chars().count()
-                                    };
-                                    let mut mapped = range;
-                                    mapped.primary.index = map_index(range.primary.index);
-                                    mapped.secondary.index = map_index(range.secondary.index);
-                                    output.state.cursor.set_char_range(Some(mapped));
-                                    output.state.clone().store(ctx, edit_id);
-                                }
-                                editor.input = normalized;
-                            }
-                            let latex = friendly_math_to_latex(&editor.input);
                             action = Some(UiAction::PreviewMath(
                                 shape_id,
                                 editor.input.clone(),
-                                latex,
+                                editor.input.clone(),
                             ));
                         }
 
@@ -3870,7 +3819,7 @@ fn render_math_editor(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction>
                                 editor.original_latex.clone(),
                                 editor.is_new,
                                 editor.input.clone(),
-                                friendly_math_to_latex(&editor.input),
+                                editor.input.clone(),
                             ));
                             close = true;
                         }
@@ -3989,11 +3938,11 @@ mod math_editor_regressions {
         assert!(state.math_editor.is_none());
     }
     #[test]
-    fn right_arrow_exits_one_block_and_preserves_cursor() {
+    fn right_arrow_keeps_raw_latex_and_cursor() {
         let (ctx, mut state) = setup("1/2^3");
         frame(&ctx, &mut state, vec![key(egui::Key::ArrowRight)]);
         frame(&ctx, &mut state, vec![egui::Event::Text("+1".into())]);
-        assert_eq!(state.math_editor.unwrap().input, "1/2^3 +1");
+        assert_eq!(state.math_editor.unwrap().input, "1/2^3+1");
     }
     #[test]
     fn french_dead_caret_composition_is_not_duplicated() {
@@ -4205,7 +4154,7 @@ fn render_text_command_editor(ctx: &Context, state: &mut UiState) -> Option<UiAc
     let exit = ctx.input(|i| i.key_pressed(egui::Key::Escape));
     let editor = state.text_command_editor.as_mut()?;
     let mut action = None;
-    egui::Window::new("Formule dans Text")
+    let window = egui::Window::new("Formule dans Text")
         .title_bar(false)
         .id(egui::Id::new(("text_command_window", editor.formula_id)))
         .collapsible(false)
@@ -4248,15 +4197,13 @@ fn render_text_command_editor(ctx: &Context, state: &mut UiState) -> Option<UiAc
                 "Code formule".into(),
                 [rect.min.x, rect.min.y, rect.max.x, rect.max.y],
             );
-            ui.label(
-                egui::RichText::new(
-                    "Rendu en direct · Entrée : continuer le texte · Échap : valider et sortir",
-                )
-                .size(10.0),
-            );
-            ui.label(
-                egui::RichText::new("frac(a,frac(b,c)) · int(x²,x,1,2) · sqrt(x²)").size(10.0),
-            );
+            if let Some(example) = crate::math_input::command_example(&editor.source) {
+                ui.label(
+                    egui::RichText::new(example)
+                        .size(10.0)
+                        .color(Color32::from_gray(110)),
+                );
+            }
             if output.response.changed() || finish {
                 action = Some(UiAction::EditTextCommand(
                     editor.source.clone(),
@@ -4268,6 +4215,8 @@ fn render_text_command_editor(ctx: &Context, state: &mut UiState) -> Option<UiAc
                 ui.memory_mut(|m| m.surrender_focus(id));
             }
         });
+    state.text_command_rect = window.map(|out| out.response.rect);
+
     action
 }
 

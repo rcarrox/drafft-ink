@@ -147,6 +147,15 @@ function inspectCapture(file) {
     await page.goto(process.env.DRAFFTINK_TEST_URL || 'http://127.0.0.1:8888/?drafftink-test=1');
     await wait(s => s.shapes.length === 0);
     await snapshot(page,'initial.png');
+    await page.mouse.move(300,300);await page.waitForTimeout(100);await page.keyboard.press('r');await wait(s=>s.tool==='Rectangle');
+    await page.mouse.move(300,300);await page.mouse.down();await page.mouse.move(470,410,{steps:6});await page.mouse.up();await wait(s=>s.shapes.length===1);
+    const originalRect=(await state()).shapes[0].shape.Rectangle.position.x;
+    await page.keyboard.press('s');await page.mouse.move(303,350);await page.waitForTimeout(100);await page.mouse.down();await page.mouse.move(1278,350,{steps:12});
+    await wait(s=>s.camera_offset[0]< -30);const edge=(await state()).shapes[0];assert(Math.abs(edge.bounds[0]-1275)<5);
+    await page.mouse.move(900,350,{steps:6});await page.waitForTimeout(100);const stopped=(await state()).camera_offset[0];await page.waitForTimeout(250);assert(Math.abs((await state()).camera_offset[0]-stopped)<1);
+    await page.mouse.up();await page.keyboard.press('Control+z');await wait(s=>Math.abs(s.shapes[0].shape.Rectangle.position.x-originalRect)<1e-7);
+    await control('New canvas');await wait(s=>s.shapes.length===0);
+
     await page.mouse.click(370,270);
     await page.keyboard.press('t');await wait(s=>s.tool==='Text');
     await page.mouse.click(370, 270);
@@ -256,6 +265,13 @@ function inspectCapture(file) {
     await control('New canvas');await wait(s=>s.shapes.length===0);
     await focusCanvasTool('m');await wait(s=>!!s.editing_math&&s.math_input_focused);
     const mathText=s=>s.shapes.find(item=>item.shape.Math)?.shape.Math;
+    await keys('x');await page.keyboard.press('Control+ArrowUp');await keys('3');await wait(s=>mathText(s)?.source==='x^3'&&mathText(s)?.latex==='x^3');
+    await page.keyboard.press('Control+a');await keys('x\\neq y\\in A + x_{i} y_{j}');await wait(s=>mathText(s)?.source==='x\\neq y\\in A + x_{i} y_{j}'&&mathText(s)?.latex===mathText(s)?.source);
+    await page.keyboard.press('Control+a');
+    const fieldRect=(await state()).math_form_rect;await page.mouse.move(fieldRect[0]+20,fieldRect[1]+20);await wait(s=>s.cursor_mode===2);
+    assert(decodeURIComponent(await page.evaluate(()=>document.querySelector('canvas').style.cursor)).includes('>X</text>'));
+    const mathButton=(await state()).controls.tool_Math;await page.mouse.move((mathButton[0]+mathButton[2])/2,(mathButton[1]+mathButton[3])/2);await wait(s=>s.cursor_mode===0);
+    await page.mouse.move(fieldRect[0]+20,fieldRect[1]+20);await wait(s=>s.cursor_mode===2);
     await keys('123456');await wait(s=>mathText(s)?.source==='123456');
     await page.keyboard.press('Control+a');await page.keyboard.press('Control+c');
     await page.waitForFunction(async()=>await navigator.clipboard.readText()==='123456');
@@ -273,6 +289,11 @@ function inspectCapture(file) {
     // Original characters and font-dependent scripts, including symbols without Unicode script glyphs.
     const nextScriptTab=(await state()).active_tab+1;await control('New canvas');await wait(s=>s.active_tab===nextScriptTab&&s.shapes.length===0);
     await focusCanvasTool('t');await wait(s=>!!s.editing_text);
+    for(const brace of ['{','}']) {
+      await input.send('Input.dispatchKeyEvent',{type:'keyDown',key:brace,code:brace==='{'?'Digit4':'Equal',text:brace,unmodifiedText:brace,modifiers:3});
+      await input.send('Input.dispatchKeyEvent',{type:'keyUp',key:brace,code:brace==='{'?'Digit4':'Equal',modifiers:0});
+    }
+    await wait(s=>s.shapes.find(i=>i.id===s.editing_text)?.shape.Text.content==='{}');await page.keyboard.press('Control+a');await page.keyboard.press('Backspace');
     await keys('Base ');await wait(s=>!!s.text_caret);
     const normalCaret=(await state()).text_caret;
     await page.keyboard.press('Control+ArrowUp');const supState=await wait(s=>s.insertion_script===1);
@@ -292,9 +313,10 @@ function inspectCapture(file) {
     await keys('hello world');await wait(s=>scriptText(s)?.content.endsWith('hello world'));
     await page.keyboard.press('Escape');await control('New canvas');await wait(s=>s.shapes.length===0);
     await focusCanvasTool('t');await wait(s=>!!s.editing_text);await keys('hello world');await wait(s=>scriptText(s)?.content==='hello world');
+    await page.keyboard.press('Escape');await wait(s=>s.editing_text===null);await control('tool_Select');
     const word=(await state()).shapes.find(i=>i.shape.Text);
     await page.mouse.move(word.bounds[0]+25,(word.bounds[1]+word.bounds[3])/2);await page.waitForTimeout(100);
-    await page.mouse.dblclick(word.bounds[0]+25,(word.bounds[1]+word.bounds[3])/2,{delay:80});await wait(s=>s.selected_text==='hello');
+    await page.mouse.dblclick(word.bounds[0]+25,(word.bounds[1]+word.bounds[3])/2,{delay:80});await wait(s=>s.selected_text==='hello'&&s.cursor_mode===1);
     await keys('X');await wait(s=>scriptText(s)?.content==='X world');
     await page.keyboard.press('Escape');await control('New canvas');await wait(s=>s.shapes.length===0);
     await focusCanvasTool('m');await wait(s=>!!s.editing_math&&s.math_input_focused);await keys('x+1');await wait(s=>mathText(s)?.source==='x+1');
@@ -308,6 +330,10 @@ function inspectCapture(file) {
     // A subsequent click can place a new Math; a toolbar switch closes it.
     await page.mouse.click(650,470,{delay:60});await wait(s=>!!s.editing_math&&s.math_input_focused&&s.shapes.length===2);await keys('y');
     await control('tool_Rectangle');await wait(s=>s.tool==='Rectangle'&&s.editing_math===null&&s.shapes.length===2);
+    await control('tool_Select');const editMath=(await state()).shapes.find(i=>i.shape.Math);
+    await page.mouse.move((editMath.bounds[0]+editMath.bounds[2])/2,(editMath.bounds[1]+editMath.bounds[3])/2);await page.waitForTimeout(100);await page.mouse.dblclick((editMath.bounds[0]+editMath.bounds[2])/2,(editMath.bounds[1]+editMath.bounds[3])/2,{delay:80});await wait(s=>!!s.editing_math&&s.tool==='Select');
+    const selectedForm=(await state()).math_form_rect;await page.mouse.move(selectedForm[0]+20,selectedForm[1]+20);await wait(s=>s.cursor_mode===2);
+    await page.mouse.move(500,200);await wait(s=>s.cursor_mode===0);await page.keyboard.press('Escape');await wait(s=>s.editing_math===null);
     await control('New canvas');await wait(s=>s.shapes.length===0);await focusCanvasTool('t');await wait(s=>!!s.editing_text);await keys('save');
     const saveCount=(await state()).png_save_requests;
     await page.keyboard.press('Control+s');await wait(s=>s.png_save_requests===saveCount+1);

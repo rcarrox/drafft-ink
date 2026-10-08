@@ -174,18 +174,20 @@
             return result;
         };
 
-        const cursorTemplates=Promise.all(['cursormouse.svg','cursortext.svg'].map(name=>fetch(name).then(r=>{
+        const cursorTemplates=Promise.all(['cursormouse.svg','cursortext.svg','cursormath.svg'].map(name=>fetch(name).then(r=>{
             if(!r.ok) throw new Error('Cursor unavailable'); return r.text();
         })));
         let cursorSVG=null, cursorCanvas=null, cursorObserver=null;
-        let textCursor=false, cursorOutline='#000000', cursorValue='';
+        let cursorKind=0, forceUiCursor=false, cursorOutline='#000000', cursorValue='';
         function applyCursor() {
             if(!cursorSVG || !cursorCanvas) return;
             const native=cursorCanvas.style.cursor;
-            if(/resize|grab|move|pointer|none/.test(native) && !native.startsWith('url(')) return;
+            if(!forceUiCursor && /resize|grab|move|pointer|none/.test(native) && !native.startsWith('url(')) return;
             if(cursorCanvas.style.cursor!==cursorValue) cursorCanvas.style.cursor=cursorValue;
         }
-        window.drafftinkSetCursor=function(text,color) {
+        window.drafftinkSetCursor=function(kind,color,overUi=false) {
+            kind=kind===true?1:Math.max(0,Math.min(2,Number(kind)||0));
+            forceUiCursor=overUi;
             const canvas=document.querySelector('canvas');
             if(canvas!==cursorCanvas) {
                 cursorObserver?.disconnect(); cursorCanvas=canvas;
@@ -194,16 +196,34 @@
                     cursorObserver.observe(canvas,{attributes:true,attributeFilter:['style']});
                 }
             }
-            const changed=textCursor!==text || cursorOutline!==color || !cursorValue;
-            textCursor=text; cursorOutline=/^#[0-9a-f]{6}$/i.test(color)?color:'#000000';
+            const changed=cursorKind!==kind || cursorOutline!==color || !cursorValue;
+            cursorKind=kind; cursorOutline=/^#[0-9a-f]{6}$/i.test(color)?color:'#000000';
             if(cursorSVG && changed) {
-                const svg=textCursor?cursorSVG[1]:cursorSVG[0].replaceAll('currentColor',cursorOutline);
-                cursorValue=`url("data:image/svg+xml,${encodeURIComponent(svg)}") ${textCursor?'14 14, text':'6 5, default'}`;
+                const svg=cursorKind?cursorSVG[cursorKind]:cursorSVG[0].replaceAll('currentColor',cursorOutline);
+                cursorValue=`url("data:image/svg+xml,${encodeURIComponent(svg)}") ${cursorKind?'14 14, text':'6 5, default'}`;
             }
             applyCursor();
         };
-        cursorTemplates.then(svg=>{cursorSVG=svg;cursorValue='';window.drafftinkSetCursor(textCursor,cursorOutline);})
+        cursorTemplates.then(svg=>{cursorSVG=svg;cursorValue='';window.drafftinkSetCursor(cursorKind,cursorOutline,forceUiCursor);})
             .catch(error=>console.warn('Custom cursors unavailable:',error));
+
+        const snapshotTimes=new Map();
+        function snapshotDate(date) {
+            const pad=n=>String(n).padStart(2,'0');
+            return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())}_${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
+        }
+        window.drafftinkSnapshotFilename=function(canvas,extension,date=new Date()) {
+            const name=String(canvas).replace(/[<>:"/\\|?*\x00-\x1f]/g,'_').replace(/[. ]+$/g,'')||'Canvas';
+            const time=Math.max(Math.floor(date.getTime()/1000)*1000,(snapshotTimes.get(name)||0)+1000);
+            snapshotTimes.set(name,time);
+            return `${snapshotDate(new Date(time))} ${name}.${extension}`;
+        };
+        function nextSnapshotName(name) {
+            const m=name.match(/^(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})(\d{2}) (.+)$/);
+            if(!m)throw new Error('Cannot overwrite an existing snapshot');
+            const date=new Date(+m[1],+m[2]-1,+m[3],+m[4],+m[5],+m[6]+1);
+            return `${snapshotDate(date)} ${m[7]}`;
+        }
 
         // Persistent export folder using the File System Access API (Chrome/Edge).
         // Directory handles are structured-cloneable and are kept in IndexedDB.
@@ -280,7 +300,7 @@
             return handle.name || 'Dossier sélectionné';
         };
 
-        window.drafftinkSaveBlobToExportDirectory = async function(filename, blob, automatic=false) {
+        window.drafftinkSaveBlobToExportDirectory = async function(filename, blob, automatic=false, companionJson="") {
             try {
                 window.drafftinkDiskSaveBusy=true;
                 const handle=liveExportDirectory || await getExportDirectoryHandle();
@@ -292,18 +312,26 @@
                     saveStatus('Réautoriser le dossier PNG dans Settings.');window.__drafftinkPngFailed=true;return false;
                 }
                 filename=filename.replace(/[<>:"/\\|?*\x00-\x1f]/g,'_').replace(/[. ]+$/g,'') || 'DrafftInk.png';
-                const file=await handle.getFileHandle(filename,{create:true});
-                const stream=await file.createWritable();
-                try {await stream.write(blob);await stream.close();}
-                catch(error){await stream.abort?.();throw error;}
+                if(/^\d{4}-\d{2}-\d{2}_\d{6} /.test(filename)) {
+                    const exists=async name=>{try{await handle.getFileHandle(name);return true;}catch(e){if(e.name==='NotFoundError')return false;throw e;}};
+                    while(await exists(filename)||(companionJson&&await exists(filename.replace(/\.png$/,'.json'))))filename=nextSnapshotName(filename);
+                }
+                const write=async(name,data)=>{
+                    const file=await handle.getFileHandle(name,{create:true});const stream=await file.createWritable();
+                    try {await stream.write(data);await stream.close();}catch(error){await stream.abort?.();throw error;}
+                };
+                await write(filename,blob);
+                if(companionJson)await write(filename.replace(/\.png$/,'.json'),new Blob([companionJson],{type:'application/json'}));
                 window.drafftinkExportFolderReady=true;window.__drafftinkPngFailed=false;
-                saveStatus('PNG enregistré : '+filename);
+                saveStatus('Enregistré : '+filename);
                 return true;
             } catch(error) {
                 window.__drafftinkPngFailed=true;saveStatus('Échec PNG : vérifier le dossier dans Settings.');
                 console.warn('DrafftInk export folder unavailable:',error);return false;
             } finally {window.drafftinkDiskSaveBusy=false;}
         };
+
+        window.drafftinkSaveSnapshotPair=(name,png,json)=>window.drafftinkSaveBlobToExportDirectory(name,png,true,json);
 
         // The app uses WebGPU. Give a clear message before fetching the WASM
         // rather than failing later with an opaque renderer error.

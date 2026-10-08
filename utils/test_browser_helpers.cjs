@@ -14,7 +14,7 @@ const sandbox={console,Uint8Array,ArrayBuffer,Promise,Map,Math,Number,Infinity,e
   clearTimeout:id=>timers.delete(id), navigator:{permissions:{query:async()=>({state:'prompt'})}},
   window:{dispatchEvent:()=>wakeups++,queryLocalFonts:async()=>{throw Error('Permission API should not be needed')}},
   fetch:async url=>{requests.push(url);
-    if(url==='cursormouse.svg'||url==='cursortext.svg')return{ok:true,text:async()=>fs.readFileSync(path.join(root,'web',url),'utf8')};
+    if(url==='cursormouse.svg'||url==='cursortext.svg'||url==='cursormath.svg')return{ok:true,text:async()=>fs.readFileSync(path.join(root,'web',url),'utf8')};
     if(url==='/local-fonts.json')return{ok:true,json:async()=>catalog};
     if(url==='/local-font/GoogleSans-Medium')return{ok:true,arrayBuffer:async()=>new Uint8Array([0,1,0,0]).buffer};
     return{ok:false};},
@@ -35,7 +35,13 @@ vm.createContext(sandbox);vm.runInContext(helper,sandbox);
   let match=canvas.style.cursor.match(/^url\("data:image\/svg\+xml,([^"\n]+)"\)/);assert(match);
   const mouse=decodeURIComponent(match[1]);assert(mouse.includes('fill="#ffffff"'));assert(mouse.includes('stroke="#0080ff"'));assert(mouse.includes('feDropShadow'));
   sandbox.window.drafftinkSetCursor(true,'#0080ff');assert(canvas.style.cursor.endsWith('14 14, text'));
-  canvas.style.cursor='ew-resize';sandbox.window.drafftinkSetCursor(false,'#000000');assert.equal(canvas.style.cursor,'ew-resize');
+  sandbox.window.drafftinkSetCursor(2,'#0080ff');
+  assert(decodeURIComponent(canvas.style.cursor).includes('>X</text>'));
+  canvas.style.cursor='pointer';sandbox.window.drafftinkSetCursor(0,'#000000',true);assert(canvas.style.cursor.endsWith('6 5, default'));
+  const date=new Date(2026,9,8,11,26,45);
+  assert.equal(sandbox.window.drafftinkSnapshotFilename('Canvas-x01','png',date),'2026-10-08_112645 Canvas-x01.png');
+  assert.equal(sandbox.window.drafftinkSnapshotFilename('Canvas-x01','png',date),'2026-10-08_112646 Canvas-x01.png');
+  canvas.style.cursor='ew-resize';sandbox.window.drafftinkSetCursor(false,'#000000',false);assert.equal(canvas.style.cursor,'ew-resize');
   sandbox.window.drafftinkRequestRepaint(500);sandbox.window.drafftinkRequestRepaint(1000);assert.equal(timers.size,1);
   assert.equal([...timers.values()][0].delay,500);
   sandbox.window.drafftinkRequestRepaint(0);assert.equal(timers.size,1);assert.equal([...timers.values()][0].delay,0);

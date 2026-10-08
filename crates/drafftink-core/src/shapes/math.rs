@@ -123,11 +123,7 @@ impl Math {
     }
 
     pub fn edit_source(&self) -> &str {
-        if self.source.trim().is_empty() {
-            &self.latex
-        } else {
-            &self.source
-        }
+        &self.latex
     }
 }
 
@@ -224,5 +220,17 @@ mod font_json_tests {
             serde_json::from_value::<Math>(json).unwrap().font.family,
             super::super::FontFamily::GelPen
         );
+    }
+}
+
+#[cfg(test)]
+mod raw_edit_source_tests {
+    use super::*;
+    #[test]
+    fn older_friendly_source_edits_as_canonical_latex() {
+        let mut math = Math::new(Point::ZERO, r"\frac{1}{2}".into());
+        math.source = "1/2".into();
+        assert_eq!(math.edit_source(), r"\frac{1}{2}");
+        assert_eq!(math.source, "1/2");
     }
 }
