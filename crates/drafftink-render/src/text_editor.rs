@@ -190,17 +190,6 @@ impl TextEditState {
         self.rich_layout = Some(layout);
     }
     pub fn selection_geometry_with(&self, mut f: impl FnMut(parley::BoundingBox, usize)) {
-        if matches!(
-            key,
-            TextKey::Left
-                | TextKey::Right
-                | TextKey::Up
-                | TextKey::Down
-                | TextKey::Home
-                | TextKey::End
-        ) {
-            self.explicit_script = false;
-        }
         if let Some(layout) = &self.rich_layout {
             let selection = self.editor.raw_selection().refresh(layout);
             selection.geometry_with(layout, |mut rect, line_index| {

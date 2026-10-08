@@ -3629,10 +3629,10 @@ fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAct
                             });
 
                         ui.add_space(14.0);
-                        ui.checkbox(&mut ui_state.settings.hide_properties, "Masquer les propriétés (clic droit sur un objet)");
+                        ui.checkbox(&mut ui_state.settings.hide_properties, "Masquer Properties (clic droit sur un objet ; Stroke reste visible)");
                         ui.checkbox(
                             &mut ui_state.settings.show_properties_for_tools,
-                            "Afficher Properties pour les outils (Text reste toujours visible)",
+                            "Afficher Properties pour les outils actifs",
                         );
 
                         ui.add_space(16.0);

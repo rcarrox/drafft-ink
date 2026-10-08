@@ -940,6 +940,13 @@ impl EventHandler {
                 canvas.tool_manager.cancel();
             }
             ToolKind::Math => {
+                // A consumed outside click never began a tool interaction.
+                if matches!(
+                    canvas.tool_manager.state,
+                    drafftink_core::tools::ToolState::Idle
+                ) {
+                    return;
+                }
                 // Math tool: create an equation and immediately request the formula editor.
                 let mut math = Math::new(world_point, String::new());
                 math.style = current_style.clone();

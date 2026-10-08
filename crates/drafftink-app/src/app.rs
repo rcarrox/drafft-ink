@@ -3912,7 +3912,7 @@ impl ApplicationHandler for App {
                             }
                             UiAction::SetDefaultMathFont(font) => {
                                 state.ui_state.settings.default_math_font = font.clone();
-                                state.ui_state.settings.save();
+                                crate::settings::save_settings(&state.ui_state.settings);
                                 request_math_font(&font);
                             }
                             UiAction::SetMathFont(font) => {
