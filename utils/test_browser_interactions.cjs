@@ -177,9 +177,9 @@ function inspectCapture(file) {
     await page.mouse.move(300,300);await page.waitForTimeout(100);await page.keyboard.press('r');await wait(s=>s.tool==='Rectangle');
     await page.mouse.move(300,300);await page.mouse.down();await page.mouse.move(470,410,{steps:6});await page.mouse.up();await wait(s=>s.shapes.length===1);
     const originalRect=(await state()).shapes[0].shape.Rectangle.position.x;
-    await page.keyboard.press('s');await page.mouse.move(303,350);await page.waitForTimeout(100);await page.mouse.down();await page.mouse.move(1278,350,{steps:12});
+    await page.keyboard.press('s');await page.mouse.move(303,320);await page.waitForTimeout(100);await page.mouse.down();await page.mouse.move(1278,320,{steps:12});
     await wait(s=>s.camera_offset[0]< -30);const edge=(await state()).shapes[0];assert(Math.abs(edge.bounds[0]-1275)<5);
-    await page.mouse.move(900,350,{steps:6});await page.waitForTimeout(100);const stopped=(await state()).camera_offset[0];await page.waitForTimeout(250);assert(Math.abs((await state()).camera_offset[0]-stopped)<1);
+    await page.mouse.move(900,320,{steps:6});await page.waitForTimeout(100);const stopped=(await state()).camera_offset[0];await page.waitForTimeout(250);assert(Math.abs((await state()).camera_offset[0]-stopped)<1);
     await page.mouse.up();await page.keyboard.press('Control+z');await wait(s=>Math.abs(s.shapes[0].shape.Rectangle.position.x-originalRect)<1e-7);
     await control('New canvas');await wait(s=>s.shapes.length===0);
 
@@ -188,7 +188,7 @@ function inspectCapture(file) {
     await page.mouse.move(320,260);await page.mouse.down();await page.mouse.move(440,350,{steps:6});await page.mouse.up();
     await wait(s=>s.shapes.length===1&&s.selected_count===1);
     await page.mouse.move(440,350);await page.waitForTimeout(100);await page.mouse.down();await page.mouse.move(510,390,{steps:6});await page.mouse.up();
-    await wait(s=>s.shapes.length===1&&s.shapes[0].shape.Rectangle.width>170&&s.tool==='Rectangle');
+    await wait(s=>s.shapes.length===1&&s.shapes[0].bounds[2]-s.shapes[0].bounds[0]>170&&s.tool==='Rectangle');
     await control('New canvas');await wait(s=>s.shapes.length===0);
 
     await page.mouse.click(370,270);
