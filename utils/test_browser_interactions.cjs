@@ -198,7 +198,7 @@ function inspectCapture(file) {
     await page.keyboard.press('Escape');await wait(s=>s.editing_text===null);
     // A validated formula reopens with a direct double-click.
     const validCommand=await state();
-    const commandId=validCommand.shapes.find(item=>item.shape.Text?.formulas.some(f=>f.kind==='Code')).id;
+    const commandId=validCommand.shapes.find(item=>item.shape.Text?.formulas.some(f=>f.math.source==='sum(kx,k,1,n)')).id;
     const commandBounds=validCommand.shapes.find(item=>item.id===commandId).bounds;
     await page.keyboard.press('s');
     await page.mouse.dblclick(commandBounds[0]+15,(commandBounds[1]+commandBounds[3])/2);

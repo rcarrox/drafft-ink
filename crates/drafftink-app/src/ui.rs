@@ -3575,7 +3575,6 @@ fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAct
                         }
                         ui.label(egui::RichText::new("La version Windows lit vos polices localement. Aucun fichier de police n’est envoyé à un serveur distant.")
                             .size(11.0).color(Color32::from_gray(100)));
-                        ui.label(egui::RichText::new("Math : Google Sans Medium").size(11.0).color(Color32::from_gray(70)));
                         if !ui_state.font_error.is_empty() {
                             ui.label(egui::RichText::new(&ui_state.font_error).size(11.0).color(Color32::from_rgb(160,65,25)));
                         }
