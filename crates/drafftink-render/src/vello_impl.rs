@@ -3675,7 +3675,8 @@ mod cursor_and_math_font_tests {
         assert_eq!(e.script_value(), 1);
         {
             let (f, l) = r.contexts_mut();
-            e.handle_key(TextKey::ToggleSuperscript, TextModifiers::default(), f, l);
+            e.handle_key(TextKey::Right, TextModifiers::default(), f, l);
+            assert_eq!(e.script_value(), 0);
             e.handle_key(TextKey::Enter, TextModifiers::default(), f, l);
         }
         t.content = e.text();

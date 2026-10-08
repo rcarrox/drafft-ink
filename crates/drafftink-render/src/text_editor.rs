@@ -487,6 +487,23 @@ impl TextEditState {
         let action_mod = modifiers.action_mod();
         let shift = modifiers.shift;
 
+        // Right still exits an explicitly entered script. While navigating
+        // existing styled text it moves normally and follows the next glyph.
+        if matches!(key, TextKey::Right)
+            && !action_mod
+            && !shift
+            && self.script_mode != ScriptMode::Normal
+            && self.editor.raw_selection().is_collapsed()
+            && (self.explicit_script
+                || self.editor.raw_selection().focus().index()
+                    == self.editor.text().to_string().len())
+        {
+            self.script_mode = ScriptMode::Normal;
+            self.explicit_script = true;
+            self.update_layout_cache(font_cx, layout_cx);
+            return TextEditResult::Handled;
+        }
+
         if matches!(
             key,
             TextKey::Left

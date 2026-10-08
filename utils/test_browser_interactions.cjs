@@ -286,7 +286,7 @@ function inspectCapture(file) {
     await page.keyboard.press('Escape');await control('New canvas');await wait(s=>s.shapes.length===0);
     await focusCanvasTool('t');await wait(s=>!!s.editing_text);await keys('x');await page.keyboard.press('Control+ArrowUp');await keys('45 6');
     await wait(s=>scriptText(s)?.content==='x45 6'&&scriptText(s).char_styles.slice(1).every(c=>c.script===1));
-    await page.keyboard.press('Control+ArrowUp');await page.keyboard.press('Enter');
+    await page.keyboard.press('ArrowRight');await wait(s=>s.insertion_script===0);await page.keyboard.press('Enter');
     const emptyLine=await wait(s=>scriptText(s)?.content==='x45 6\n'&&s.text_caret?.[0]<1);
     assert(emptyLine.text_caret[1]>0);
     await keys('hello world');await wait(s=>scriptText(s)?.content.endsWith('hello world'));
