@@ -35,10 +35,6 @@ pub struct SelectedShapeProps {
     pub has_selection: bool,
     /// Number of selected shapes.
     pub selection_count: usize,
-    /// Whether all currently selected shapes are pinned to the viewport.
-    pub selection_pinned: bool,
-    /// Background color used for viewport-pinned shapes.
-    pub pin_background: Color32,
     /// Is the selected shape a text shape?
     pub is_text: bool,
     /// Is the selected shape a math shape?
@@ -301,6 +297,10 @@ pub struct UiState {
     pub stroke_style: StrokeStyle,
     /// Number of selected shapes.
     pub selection_count: usize,
+    /// Whether all currently selected shapes are pinned to the viewport.
+    pub selection_pinned: bool,
+    /// Background color used for viewport-pinned shapes.
+    pub pin_background: Color32,
     /// Whether the hamburger menu is open.
     pub menu_open: bool,
     /// Which color popover is currently open.
