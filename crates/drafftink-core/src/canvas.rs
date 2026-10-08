@@ -22,6 +22,20 @@ struct DocumentSnapshot {
     shapes: HashMap<ShapeId, Shape>,
     /// Z-order of shapes.
     z_order: Vec<ShapeId>,
+    #[serde(default)]
+    pinned_shapes: HashMap<ShapeId, PinnedShape>,
+}
+
+/// Viewport-fixed shape metadata. Pinned shape geometry is stored in screen pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct PinnedShape {
+    /// Opaque or translucent screen-space background behind the shape.
+    #[serde(default = "default_pin_background")]
+    pub background: crate::shapes::SerializableColor,
+}
+
+fn default_pin_background() -> crate::shapes::SerializableColor {
+    crate::shapes::SerializableColor::white()
 }
 
 // Count deep-cloned payloads; image source bytes are Arc-shared and counted nowhere twice.
@@ -72,6 +86,9 @@ pub struct CanvasDocument {
     pub shapes: HashMap<ShapeId, Shape>,
     /// Z-order of shapes (back to front).
     pub z_order: Vec<ShapeId>,
+    /// Shapes transformed to screen coordinates and rendered independently of the camera.
+    #[serde(default)]
+    pub pinned_shapes: HashMap<ShapeId, PinnedShape>,
     /// Undo history stack.
     #[serde(skip)]
     undo_stack: Vec<DocumentSnapshot>,
@@ -94,6 +111,7 @@ impl CanvasDocument {
             name: "Untitled".to_string(),
             shapes: HashMap::new(),
             z_order: Vec::new(),
+            pinned_shapes: HashMap::new(),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
         }
@@ -104,6 +122,7 @@ impl CanvasDocument {
         DocumentSnapshot {
             shapes: self.shapes.clone(),
             z_order: self.z_order.clone(),
+            pinned_shapes: self.pinned_shapes.clone(),
         }
     }
 
@@ -113,6 +132,7 @@ impl CanvasDocument {
             name: self.name.clone(),
             shapes: self.shapes.clone(),
             z_order: self.z_order.clone(),
+            pinned_shapes: self.pinned_shapes.clone(),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
         }
@@ -157,6 +177,7 @@ impl CanvasDocument {
             // Restore the snapshot
             self.shapes = snapshot.shapes;
             self.z_order = snapshot.z_order;
+            self.pinned_shapes = snapshot.pinned_shapes;
             self.trim_history();
 
             true
@@ -176,6 +197,7 @@ impl CanvasDocument {
             // Restore the snapshot
             self.shapes = snapshot.shapes;
             self.z_order = snapshot.z_order;
+            self.pinned_shapes = snapshot.pinned_shapes;
             self.trim_history();
 
             true
@@ -204,6 +226,7 @@ impl CanvasDocument {
     /// Remove a shape from the document.
     pub fn remove_shape(&mut self, id: ShapeId) -> Option<Shape> {
         self.z_order.retain(|&shape_id| shape_id != id);
+        self.pinned_shapes.remove(&id);
         self.shapes.remove(&id)
     }
 
@@ -215,6 +238,7 @@ impl CanvasDocument {
         };
 
         self.z_order.remove(index);
+        self.pinned_shapes.remove(&id);
         self.shapes.remove(&id);
 
         for (offset, shape) in replacements.into_iter().enumerate() {
@@ -228,6 +252,7 @@ impl CanvasDocument {
     pub fn clear(&mut self) {
         self.shapes.clear();
         self.z_order.clear();
+        self.pinned_shapes.clear();
     }
 
     /// Get a shape by ID.
@@ -238,6 +263,10 @@ impl CanvasDocument {
     /// Get a mutable reference to a shape by ID.
     pub fn get_shape_mut(&mut self, id: ShapeId) -> Option<&mut Shape> {
         self.shapes.get_mut(&id)
+    }
+
+    pub fn is_pinned(&self, id: ShapeId) -> bool {
+        self.pinned_shapes.contains_key(&id)
     }
 
     /// Get shapes in z-order (back to front).
@@ -285,6 +314,9 @@ impl CanvasDocument {
     pub fn bounds(&self) -> Option<Rect> {
         let mut result: Option<Rect> = None;
         for shape in self.shapes.values() {
+            if self.is_pinned(shape.id()) {
+                continue;
+            }
             let bounds = shape.bounds();
             result = Some(match result {
                 Some(r) => r.union(bounds),
@@ -785,6 +817,23 @@ mod tests {
         doc.add_shape(Shape::Rectangle(rect));
         assert_eq!(doc.len(), 1);
         assert!(doc.get_shape(id).is_some());
+    }
+
+    #[test]
+    fn pinned_shape_metadata_round_trips_and_undoes() {
+        let mut doc = CanvasDocument::new();
+        let rect = Rectangle::new(Point::new(10.0, 20.0), 80.0, 50.0);
+        let id = rect.id();
+        doc.add_shape(Shape::Rectangle(rect));
+        doc.push_undo();
+        doc.pinned_shapes.insert(id, PinnedShape { background: SerializableColor::new(240, 248, 255, 255) });
+        let restored = CanvasDocument::from_json(&doc.to_json().unwrap()).unwrap();
+        assert!(restored.is_pinned(id));
+        assert_eq!(restored.pinned_shapes[&id].background, SerializableColor::new(240, 248, 255, 255));
+        assert!(doc.undo());
+        assert!(!doc.is_pinned(id));
+        assert!(doc.redo());
+        assert!(doc.is_pinned(id));
     }
 
     #[test]

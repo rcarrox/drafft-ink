@@ -2577,11 +2577,6 @@ impl ApplicationHandler for App {
                 .and_then(|v| v.as_f64())
                 .unwrap_or(self.config.height as f64);
 
-            // Remove loading indicator
-            if let Some(loading) = document.get_element_by_id("loading") {
-                let _ = loading.remove();
-            }
-
             // Create canvas
             let canvas = document
                 .get_element_by_id("drafftink-canvas")
@@ -3402,7 +3397,11 @@ impl ApplicationHandler for App {
                     .and_then(|editor| state.canvas.document.get_shape(editor.shape_id))
                     .and_then(|shape| match shape {
                         Shape::Math(math) => {
-                            let p = state.canvas.camera.world_to_screen(math.position);
+                            let p = if state.canvas.document.is_pinned(editor.shape_id) {
+                                math.position
+                            } else {
+                                state.canvas.camera.world_to_screen(math.position)
+                            };
                             Some(egui::Pos2::new(p.x as f32, p.y as f32))
                         }
                         _ => None,
@@ -3443,6 +3442,10 @@ impl ApplicationHandler for App {
 
                 // Get selected shape properties for the right panel
                 let selection_count = state.canvas.selection.len();
+                state.ui_state.selection_pinned = state.canvas.selection.first().is_some_and(|id| state.canvas.document.is_pinned(*id));
+                state.ui_state.pin_background = state.canvas.selection.first().and_then(|id| state.canvas.document.pinned_shapes.get(id))
+                    .map(|pin| egui::Color32::from_rgba_unmultiplied(pin.background.r, pin.background.g, pin.background.b, pin.background.a))
+                    .unwrap_or(egui::Color32::WHITE);
                 let mut selected_props = if selection_count >= 1 {
                     let shape_id = state.canvas.selection[0];
                     if let Some(shape) = state.canvas.document.get_shape(shape_id) {
@@ -3688,6 +3691,21 @@ impl ApplicationHandler for App {
                                         &state.canvas.document,
                                         state.websocket.as_ref(),
                                     );
+                                }
+                            }
+                            UiAction::TogglePinned => {
+                                toggle_selected_pinning(state);
+                            }
+                            UiAction::SetPinnedBackground(color) => {
+                                if !state.canvas.selection.is_empty() {
+                                    state.canvas.document.push_undo();
+                                    let background = drafftink_core::shapes::SerializableColor::new(color.r(), color.g(), color.b(), color.a());
+                                    for &id in &state.canvas.selection.clone() {
+                                        if let Some(pinned) = state.canvas.document.pinned_shapes.get_mut(&id) {
+                                            pinned.background = background;
+                                        }
+                                    }
+                                    state.ui_state.pin_background = color;
                                 }
                             }
                             UiAction::SetOutlinePattern(pattern) => {
@@ -5321,13 +5339,14 @@ impl ApplicationHandler for App {
                     {
                         let shapes: Vec<_> = state.canvas.document.shapes_ordered().map(|shape| {
                             let bounds=shape.bounds();
-                            let top_left=state.canvas.camera.world_to_screen(Point::new(bounds.x0,bounds.y0));
-                            let bottom_right=state.canvas.camera.world_to_screen(Point::new(bounds.x1,bounds.y1));
+                            let to_screen=|p| if state.canvas.document.is_pinned(shape.id()) { p } else { state.canvas.camera.world_to_screen(p) };
+                            let top_left=to_screen(Point::new(bounds.x0,bounds.y0));
+                            let bottom_right=to_screen(Point::new(bounds.x1,bounds.y1));
                             let handles:Vec<_>=drafftink_core::selection::get_handles(shape).into_iter().map(|handle| {
-                                let p=state.canvas.camera.world_to_screen(handle.position);
+                                let p=to_screen(handle.position);
                                 serde_json::json!({"kind":format!("{:?}",handle.kind),"x":p.x,"y":p.y})
                             }).collect();
-                            serde_json::json!({"id":shape.id(),"shape":shape,"bounds":[top_left.x,top_left.y,bottom_right.x,bottom_right.y],"handles":handles})
+                            serde_json::json!({"id":shape.id(),"shape":shape,"pinned":state.canvas.document.is_pinned(shape.id()),"bounds":[top_left.x,top_left.y,bottom_right.x,bottom_right.y],"handles":handles})
                         }).collect();
 
                         let status = serde_json::json!({"shapes":shapes,"presentation":state.ui_state.presentation_mode,"tool":format!("{:?}",state.ui_state.current_tool),"editing_text":state.event_handler.editing_text,"inline_dialog":state.ui_state.inline_formula_draft.is_some(),"inline_error":state.ui_state.inline_formula_error,"zoom":state.canvas.camera.zoom,"camera_offset":[state.canvas.camera.offset.x,state.canvas.camera.offset.y],"cursor_mode":browser_cursor_kind(state).0,"png_save_requests":state.png_save_requests,"active_tab":state.active_tab,"tabs":state.tabs.len(),"memory":{"parked_shapes_total":state.tabs.iter().map(|tab|tab.document.len()).sum::<usize>(),"image_cache_bytes":state.shape_renderer.image_cache_bytes(),"image_cache_budget_bytes":32*1024*1024,"path_cache_payload_bytes":state.shape_renderer.path_cache_bytes(),"history_payload_bytes":state.canvas.document.history_memory_bytes(),"render_target_allocations":state.render_target_allocations,"render_target_bytes":state.surface.config.width as u64*state.surface.config.height as u64*4},"geometry":format!("{:?}",state.ui_state.geometry),"context_properties":state.ui_state.context_properties,"properties_visible":!state.ui_state.context_rects.is_empty(),"selected_text":state.text_edit_state.as_ref().and_then(|e|e.editor().selected_text()).map(|s|s.to_string()),"insertion_script":state.text_edit_state.as_ref().map(|e|e.script_value()),"text_caret":state.text_edit_state.as_ref().and_then(|e|e.cursor_geometry(1.5)).map(|r|[r.x0,r.y0,r.x1,r.y1]),"editing_math":state.ui_state.math_editor.as_ref().map(|e| e.shape_id),"math_form_rect":state.ui_state.math_editor_rect.map(|r|[r.min.x,r.min.y,r.max.x,r.max.y]),"math_input_focused":state.ui_state.math_editor.as_ref().is_some_and(|e|state.egui_ctx.memory(|m|m.focused()==Some(egui::Id::new(("math_source",e.shape_id))))),"command_editor":state.ui_state.text_command_editor.as_ref().map(|e| &e.source),"selected_count":state.canvas.selection.len(),"accent_color":state.ui_state.settings.accent_color,"selection_rect":selection_rect.map(|r|[r.x0,r.y0,r.x1,r.y1]),"controls":state.ui_state.test_controls});
@@ -5342,7 +5361,11 @@ impl ApplicationHandler for App {
                 // Render text in edit mode (with cursor and selection)
                 if let Some(text_id) = state.event_handler.editing_text {
                     if let Some(Shape::Text(text)) = state.canvas.document.get_shape(text_id) {
-                        let camera_transform = state.canvas.camera.transform();
+                        let camera_transform = if state.canvas.document.is_pinned(text_id) {
+                            kurbo::Affine::IDENTITY
+                        } else {
+                            state.canvas.camera.transform()
+                        };
 
                         // Ensure edit state exists
                         if state.text_edit_state.is_none() {
@@ -5559,6 +5582,11 @@ impl ApplicationHandler for App {
                     state.egui_renderer.free_texture(id);
                 }
                 surface_texture.present();
+                #[cfg(target_arch = "wasm32")]
+                {
+                    // Keep the splash visible until a real WebGPU frame has been presented.
+                    let _ = js_sys::eval("if(window.drafftinkLoadingDone){window.drafftinkLoadingDone();}");
+                }
 
                 if state.event_handler.editing_text.is_some() {
                     state
@@ -5665,8 +5693,10 @@ impl ApplicationHandler for App {
                     if let Some(text_id) = state.event_handler.editing_text {
                         if let Some(Shape::Text(text)) = state.canvas.document.get_shape(text_id) {
                             // Convert drag position to text-local coordinates
-                            let local_x = text.editing_local_point(world_point).x as f32;
-                            let local_y = text.editing_local_point(world_point).y as f32;
+                            let edit_point = if state.canvas.document.is_pinned(text_id) { state.canvas.camera.world_to_screen(world_point) } else { world_point };
+                            let local = text.editing_local_point(edit_point);
+                            let local_x = local.x as f32;
+                            let local_y = local.y as f32;
 
                             // Extend selection during drag using new API
                             if let Some(edit_state) = &mut state.text_edit_state {
@@ -5816,14 +5846,7 @@ impl ApplicationHandler for App {
 
                 let position = state.input.mouse_position();
                 if mouse_btn == MouseButton::Right && btn_state == ElementState::Pressed {
-                    let point = state.canvas.camera.screen_to_world(position);
-                    if let Some(id) = state
-                        .canvas
-                        .document
-                        .shapes_at_point(point, 5.0 / state.canvas.camera.zoom)
-                        .first()
-                        .copied()
-                    {
+                    if let Some(id) = shape_ids_at_screen(&state.canvas, position).first().copied() {
                         if !state.canvas.selection.contains(&id) {
                             state.canvas.clear_selection();
                             state.canvas.selection.push(id);
@@ -5843,10 +5866,7 @@ impl ApplicationHandler for App {
                             // Handle text editing cursor positioning
                             if let Some(text_id) = state.event_handler.editing_text {
                                 // Check if click is still on the text being edited
-                                let hits = state
-                                    .canvas
-                                    .document
-                                    .shapes_at_point(world_point, 5.0 / state.canvas.camera.zoom);
+                                let hits = shape_ids_at_screen(&state.canvas, position);
                                 let clicked_on_editing =
                                     hits.first().map(|&id| id == text_id).unwrap_or(false);
 
@@ -5855,10 +5875,10 @@ impl ApplicationHandler for App {
                                         state.canvas.document.get_shape(text_id)
                                     {
                                         // Convert click to text-local coordinates
-                                        let local_x =
-                                            text.editing_local_point(world_point).x as f32;
-                                        let local_y =
-                                            text.editing_local_point(world_point).y as f32;
+                                        let edit_point = if state.canvas.document.is_pinned(text_id) { state.canvas.camera.world_to_screen(world_point) } else { world_point };
+                                        let local = text.editing_local_point(edit_point);
+                                        let local_x = local.x as f32;
+                                        let local_y = local.y as f32;
 
                                         // Ensure edit state exists
                                         if state.text_edit_state.is_none() {
@@ -6549,6 +6569,12 @@ impl ApplicationHandler for App {
                         }
                         if has_modifier {
                             let has_shift = state.input.shift();
+                            if key_str.eq_ignore_ascii_case("l") {
+                                toggle_selected_pinning(state);
+                                state.needs_redraw = true;
+                                state.window.request_redraw();
+                                return;
+                            }
                             match key_str {
                                 "a" | "A" => {
                                     state.canvas.select_all();
@@ -7192,12 +7218,15 @@ impl ApplicationHandler for App {
                                         if !event.repeat {
                                             state.canvas.document.push_undo();
                                         }
-                                        let translation = kurbo::Affine::translate(delta);
                                         for &id in &state.canvas.selection {
+                                            let is_pinned = state.canvas.document.is_pinned(id);
                                             if let Some(shape) =
                                                 state.canvas.document.get_shape_mut(id)
                                             {
-                                                shape.transform(translation);
+                                                let local_delta = if is_pinned {
+                                                    delta * state.canvas.camera.zoom
+                                                } else { delta };
+                                                shape.transform(kurbo::Affine::translate(local_delta));
                                             }
                                         }
                                     }
@@ -7382,7 +7411,13 @@ fn position_text_command_panel(state: &mut AppState, text_id: drafftink_core::sh
     } else {
         rect_corners(text.bounds())
     };
-    let screen = world.map(|p| state.canvas.camera.world_to_screen(p));
+    let screen = world.map(|p| {
+        if state.canvas.document.is_pinned(text_id) {
+            p
+        } else {
+            state.canvas.camera.world_to_screen(p)
+        }
+    });
     let scale = state.egui_ctx.pixels_per_point() as f64;
     let left = screen.iter().map(|p| p.x).fold(f64::INFINITY, f64::min);
     let bottom = screen.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max);
@@ -7558,7 +7593,12 @@ fn select_formula_at(state: &mut AppState, world: Point) {
     let Some(Shape::Text(text)) = state.canvas.document.get_shape(id) else {
         return;
     };
-    let local = text.editing_local_point(world);
+    let edit_point = if state.canvas.document.is_pinned(id) {
+        state.canvas.camera.world_to_screen(world)
+    } else {
+        world
+    };
+    let local = text.editing_local_point(edit_point);
     let byte = state
         .text_edit_state
         .as_ref()
@@ -7736,11 +7776,74 @@ fn move_selection_by_key(state: &mut AppState, key: &str, repeat: bool, fast: bo
     if !repeat {
         state.canvas.document.push_undo();
     }
-    for id in &state.canvas.selection {
-        if let Some(shape) = state.canvas.document.get_shape_mut(*id) {
-            shape.transform(kurbo::Affine::translate(delta));
+    for id in state.canvas.selection.clone() {
+        let local_delta = if state.canvas.document.is_pinned(id) {
+            delta * state.canvas.camera.zoom
+        } else {
+            delta
+        };
+        if let Some(shape) = state.canvas.document.get_shape_mut(id) {
+            shape.transform(kurbo::Affine::translate(local_delta));
         }
     }
+}
+
+fn toggle_selected_pinning(state: &mut AppState) {
+    use drafftink_core::canvas::PinnedShape;
+    if state.canvas.selection.is_empty() {
+        return;
+    }
+    let all_pinned = state
+        .canvas
+        .selection
+        .iter()
+        .all(|id| state.canvas.document.is_pinned(*id));
+    let transform = state.canvas.camera.transform();
+    state.canvas.document.push_undo();
+    for id in state.canvas.selection.clone() {
+        if all_pinned {
+            if state.canvas.document.pinned_shapes.remove(&id).is_some() {
+                if let Some(shape) = state.canvas.document.get_shape_mut(id) {
+                    shape.transform(transform.inverse());
+                }
+            }
+        } else {
+            if let Some(shape) = state.canvas.document.get_shape_mut(id) {
+                shape.transform(transform);
+            }
+            state.canvas.document.pinned_shapes.insert(
+                id,
+                PinnedShape {
+                    background: drafftink_core::shapes::SerializableColor::white(),
+                },
+            );
+        }
+    }
+    state.ui_state.selection_pinned = !all_pinned;
+    state.ui_state.pin_background = egui::Color32::WHITE;
+}
+
+fn shape_ids_at_screen(
+    canvas: &Canvas,
+    screen_point: Point,
+) -> Vec<drafftink_core::shapes::ShapeId> {
+    let world_point = canvas.camera.screen_to_world(screen_point);
+    let tolerance = 5.0 / canvas.camera.zoom;
+    canvas
+        .document
+        .z_order
+        .iter()
+        .rev()
+        .filter_map(|id| {
+            let shape = canvas.document.get_shape(*id)?;
+            let (point, hit_tolerance) = if canvas.document.is_pinned(*id) {
+                (screen_point, tolerance * canvas.camera.zoom)
+            } else {
+                (world_point, tolerance)
+            };
+            shape.hit_test(point, hit_tolerance).then_some(*id)
+        })
+        .collect()
 }
 
 fn request_math_font(font: &drafftink_core::shapes::TextFont) {
@@ -7826,6 +7929,7 @@ fn browser_cursor_kind(state: &AppState) -> (u8, bool) {
         ToolKind::Text => (1, false),
         ToolKind::Math => (2, false),
         ToolKind::Eraser => (3, false),
+        ToolKind::Freehand | ToolKind::Highlighter => (4, false),
         _ => {
             let point = state
                 .canvas

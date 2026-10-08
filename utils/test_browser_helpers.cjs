@@ -1,6 +1,11 @@
 const fs=require('fs'); const vm=require('vm'); const assert=require('node:assert/strict');
 const path=require('path'); const root=path.join(__dirname,'..');
 const html=fs.readFileSync(path.join(root,'web/index.html'),'utf8');
+const splashStart=html.indexOf('        window.drafftinkLoadingDone = function()');
+const splashEnd=html.indexOf('\n        // Prevent the browser',splashStart);
+assert(splashStart>=0&&splashEnd>splashStart);new vm.Script(html.slice(splashStart,splashEnd));
+assert(html.includes('window.drafftinkLoadingDone = function()'));
+assert.equal((html.match(/loading\.remove\(\)/g)||[]).length,1,'the splash is removed only by the first-frame fade callback');
 const start=html.indexOf('        // Sparse repaint scheduling:');
 const end=html.indexOf('\n        // ',html.indexOf('        cursorTemplates.then',start)+20);
 const helper=html.slice(start,end); new vm.Script(helper);
@@ -14,7 +19,7 @@ const sandbox={console,Uint8Array,ArrayBuffer,Promise,Map,Math,Number,Infinity,e
   clearTimeout:id=>timers.delete(id), navigator:{permissions:{query:async()=>({state:'prompt'})}},
   window:{dispatchEvent:()=>wakeups++,queryLocalFonts:async()=>{throw Error('Permission API should not be needed')}},
   fetch:async url=>{requests.push(url);
-    if(url==='cursormouse.svg'||url==='cursortext.svg'||url==='cursormath.svg'||url==='cursoreraser.svg')return{ok:true,text:async()=>fs.readFileSync(path.join(root,'web',url),'utf8')};
+    if(url==='cursormouse.svg'||url==='cursortext.svg'||url==='cursormath.svg'||url==='cursoreraser.svg'||url==='cursordraw.svg')return{ok:true,text:async()=>fs.readFileSync(path.join(root,'web',url),'utf8')};
     if(url==='/local-fonts.json')return{ok:true,json:async()=>catalog};
     if(url==='/local-font/GoogleSans-Medium')return{ok:true,arrayBuffer:async()=>new Uint8Array([0,1,0,0]).buffer};
     return{ok:false};},
@@ -40,6 +45,9 @@ vm.createContext(sandbox);vm.runInContext(helper,sandbox);
   sandbox.window.drafftinkSetCursor(3,'#0080ff');
   assert(canvas.style.cursor.endsWith('4 18, default'));
   assert(decodeURIComponent(canvas.style.cursor).includes('M12.48 3'));
+  sandbox.window.drafftinkSetCursor(4,'#0080ff');
+  assert(canvas.style.cursor.endsWith('3 21, default'));
+  assert(decodeURIComponent(canvas.style.cursor).includes('M18.62 1.5'));
   canvas.style.cursor='pointer';sandbox.window.drafftinkSetCursor(0,'#000000',true);assert(canvas.style.cursor.endsWith('6 5, default'));
   const date=new Date(2026,9,8,11,26,45);
   assert.equal(sandbox.window.drafftinkSnapshotFilename('Canvas-x01','png',date),'2026-10-08_112645 Canvas-x01.png');

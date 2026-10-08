@@ -2334,6 +2334,9 @@ impl Renderer for VelloRenderer {
 
         // Draw all shapes in z-order (skip shape being edited or off-screen)
         for shape in ctx.canvas.document.shapes_ordered() {
+            if ctx.canvas.document.is_pinned(shape.id()) {
+                continue;
+            }
             if ctx.editing_shape_id == Some(shape.id()) {
                 continue;
             }
@@ -2343,6 +2346,42 @@ impl Renderer for VelloRenderer {
                 let is_selected = ctx.canvas.is_selected(shape.id());
                 self.render_shape(shape, camera_transform, is_selected);
             }
+        }
+
+        // Pinned shapes are stored in screen pixels; draw them above the canvas using
+        // the identity transform so their position and size do not follow the camera.
+        for shape in ctx.canvas.document.shapes_ordered() {
+            let Some(pin) = ctx.canvas.document.pinned_shapes.get(&shape.id()) else {
+                continue;
+            };
+            let bounds = shape.bounds().inflate(4.0, 4.0);
+            let bg = Color::from(pin.background);
+            if bg.to_rgba8().a > 0 {
+                self.scene.fill(
+                    Fill::NonZero,
+                    Affine::IDENTITY,
+                    bg,
+                    None,
+                    &BezPath::from_rect(bounds),
+                );
+            }
+            self.render_shape(shape, Affine::IDENTITY, ctx.canvas.is_selected(shape.id()));
+            let mut pin_mark = BezPath::new();
+            pin_mark.move_to(Point::new(bounds.x1 - 9.0, bounds.y0 - 1.0));
+            pin_mark.line_to(Point::new(bounds.x1 - 2.0, bounds.y0 + 6.0));
+            pin_mark.move_to(Point::new(bounds.x1 - 7.0, bounds.y0 + 1.0));
+            pin_mark.line_to(Point::new(bounds.x1 - 11.0, bounds.y0 + 5.0));
+            pin_mark.line_to(Point::new(bounds.x1 - 6.0, bounds.y0 + 10.0));
+            pin_mark.line_to(Point::new(bounds.x1 - 2.0, bounds.y0 + 6.0));
+            pin_mark.move_to(Point::new(bounds.x1 - 8.0, bounds.y0 + 8.0));
+            pin_mark.line_to(Point::new(bounds.x1 - 13.0, bounds.y0 + 13.0));
+            self.scene.stroke(
+                &Stroke::new(1.5),
+                Affine::IDENTITY,
+                Color::from_rgb8(20, 20, 20),
+                None,
+                &pin_mark,
+            );
         }
 
         // Draw preview shape if tool is active

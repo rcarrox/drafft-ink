@@ -612,16 +612,16 @@ impl EventHandler {
 
         match canvas.tool_manager.current_tool {
             ToolKind::Text => {
-                let hits = canvas
-                    .document
-                    .shapes_at_point(world_point, 5.0 / canvas.camera.zoom);
+                let hits = shapes_at_pointer(canvas, world_point, 5.0 / canvas.camera.zoom);
                 if let Some(&id) = hits.first() {
                     if let Some(shape @ Shape::Text(_)) = canvas.document.get_shape(id) {
-                        if let Some(handle) = hit_test_handles(shape, world_point, handle_tolerance)
+                        let point = shape_point(canvas, id, world_point);
+                        let tolerance = if canvas.document.is_pinned(id) { HANDLE_HIT_TOLERANCE } else { handle_tolerance };
+                        if let Some(handle) = hit_test_handles(shape, point, tolerance)
                         {
                             return Some(Some(handle));
                         }
-                        if hit_test_boundary(shape, world_point, boundary_tolerance) {
+                        if hit_test_boundary(shape, point, if canvas.document.is_pinned(id) { 8.0 } else { boundary_tolerance }) {
                             return Some(None); // move
                         }
                     }
@@ -630,15 +630,15 @@ impl EventHandler {
             ToolKind::Select => {
                 for &shape_id in &canvas.selection {
                     if let Some(shape) = canvas.document.get_shape(shape_id) {
-                        if let Some(handle) = hit_test_handles(shape, world_point, handle_tolerance)
+                        let point = shape_point(canvas, shape_id, world_point);
+                        let tolerance = if canvas.document.is_pinned(shape_id) { HANDLE_HIT_TOLERANCE } else { handle_tolerance };
+                        if let Some(handle) = hit_test_handles(shape, point, tolerance)
                         {
                             return Some(Some(handle));
                         }
                     }
                 }
-                let hits = canvas
-                    .document
-                    .shapes_at_point(world_point, 5.0 / canvas.camera.zoom);
+                let hits = shapes_at_pointer(canvas, world_point, 5.0 / canvas.camera.zoom);
                 if !hits.is_empty() {
                     return Some(None); // move
                 }
@@ -687,9 +687,7 @@ impl EventHandler {
         }
         // If we're editing text and click elsewhere, stop editing
         if self.editing_text.is_some() {
-            let hits = canvas
-                .document
-                .shapes_at_point(world_point, 5.0 / canvas.camera.zoom);
+            let hits = shapes_at_pointer(canvas, world_point, 5.0 / canvas.camera.zoom);
             let clicked_on_editing = hits
                 .first()
                 .map(|&id| Some(id) == self.editing_text)
@@ -705,23 +703,22 @@ impl EventHandler {
         match canvas.tool_manager.current_tool {
             ToolKind::Text => {
                 // Text tool: check if clicking on existing text
-                let hits = canvas
-                    .document
-                    .shapes_at_point(world_point, 5.0 / canvas.camera.zoom);
+                let hits = shapes_at_pointer(canvas, world_point, 5.0 / canvas.camera.zoom);
                 if let Some(&id) = hits.first() {
                     if let Some(shape @ Shape::Text(_)) = canvas.document.get_shape(id) {
-                        let boundary_tolerance = 8.0 / canvas.camera.zoom;
-                        let handle_tolerance = HANDLE_HIT_TOLERANCE / canvas.camera.zoom;
+                        let point = shape_point(canvas, id, world_point);
+                        let boundary_tolerance = if canvas.document.is_pinned(id) { 8.0 } else { 8.0 / canvas.camera.zoom };
+                        let handle_tolerance = if canvas.document.is_pinned(id) { HANDLE_HIT_TOLERANCE } else { HANDLE_HIT_TOLERANCE / canvas.camera.zoom };
 
                         // Check for handle hit first (for scaling)
                         if let Some(handle_kind) =
-                            hit_test_handles(shape, world_point, handle_tolerance)
+                            hit_test_handles(shape, point, handle_tolerance)
                         {
                             // Start handle manipulation (scale)
                             self.manipulation = Some(ManipulationState::new(
                                 id,
                                 Some(handle_kind),
-                                world_point,
+                                point,
                                 shape.clone(),
                             ));
                             canvas.clear_selection();
@@ -730,7 +727,7 @@ impl EventHandler {
                         }
 
                         // Check for boundary hit (for dragging)
-                        if hit_test_boundary(shape, world_point, boundary_tolerance) {
+                        if hit_test_boundary(shape, point, boundary_tolerance) {
                             // Start move operation
                             let mut original_shapes = std::collections::HashMap::new();
                             original_shapes.insert(id, shape.clone());
@@ -752,9 +749,7 @@ impl EventHandler {
             ToolKind::Select => {
                 // Check for double-click on text shape to enter edit mode
                 if input.is_double_click() {
-                    let hits = canvas
-                        .document
-                        .shapes_at_point(world_point, 5.0 / canvas.camera.zoom);
+                    let hits = shapes_at_pointer(canvas, world_point, 5.0 / canvas.camera.zoom);
                     if let Some(&id) = hits.first() {
                         if let Some(Shape::Text(_)) = canvas.document.get_shape(id) {
                             // Double-click on text - enter edit mode
@@ -777,7 +772,7 @@ impl EventHandler {
                     for &shape_id in &canvas.selection {
                         if let Some(shape) = canvas.document.get_shape(shape_id) {
                             if let Some(HandleKind::Rotate) =
-                                hit_test_handles(shape, world_point, handle_tolerance)
+                                hit_test_handles(shape, shape_point(canvas, shape_id, world_point), if canvas.document.is_pinned(shape_id) { HANDLE_HIT_TOLERANCE } else { handle_tolerance })
                             {
                                 // Double-click on rotation handle - reset to 0°
                                 canvas.document.push_undo();
@@ -795,14 +790,20 @@ impl EventHandler {
 
                 for &shape_id in &canvas.selection {
                     if let Some(shape) = canvas.document.get_shape(shape_id) {
+                        let point = shape_point(canvas, shape_id, world_point);
+                        let tolerance = if canvas.document.is_pinned(shape_id) {
+                            HANDLE_HIT_TOLERANCE
+                        } else {
+                            handle_tolerance
+                        };
                         if let Some(handle_kind) =
-                            hit_test_handles(shape, world_point, handle_tolerance)
+                            hit_test_handles(shape, point, tolerance)
                         {
                             // Start handle manipulation
                             self.manipulation = Some(ManipulationState::new(
                                 shape_id,
                                 Some(handle_kind),
-                                world_point,
+                                point,
                                 shape.clone(),
                             ));
                             return;
@@ -811,11 +812,9 @@ impl EventHandler {
                 }
 
                 // Check for shape hit (for selection or move)
-                let hits = canvas
-                    .document
-                    .shapes_at_point(world_point, 5.0 / canvas.camera.zoom);
+                let hits = shapes_at_pointer(canvas, world_point, 5.0 / canvas.camera.zoom);
                 if let Some(&id) = hits.first() {
-                    if input.shift() {
+                    if input.shift() || input.ctrl() {
                         // Add to/toggle selection
                         if canvas.is_selected(id) {
                             canvas.selection.retain(|&s| s != id);
@@ -1239,7 +1238,15 @@ impl EventHandler {
         self.smart_guides.clear();
 
         // If we're manipulating a shape, update it
+        let manipulation_point = self.manipulation.as_ref().map(|manip| {
+            if canvas.document.is_pinned(manip.shape_id) {
+                canvas.camera.world_to_screen(world_point)
+            } else {
+                world_point
+            }
+        });
         if let Some(manip) = &mut self.manipulation {
+            let world_point = manipulation_point.unwrap_or(world_point);
             // Check if this is a rotation handle
             if matches!(manip.handle, Some(HandleKind::Rotate)) {
                 // Handle rotation - Shift key snaps to 15° increments
@@ -1563,17 +1570,21 @@ impl EventHandler {
             );
 
             // Apply movement to shapes
-            let translation = kurbo::Affine::translate(snap_result);
             if mm.is_duplicate {
                 // For duplicate, move the duplicated shapes (originals stay in place)
                 for (idx, &dup_id) in mm.duplicated_ids.iter().enumerate() {
                     // Get the corresponding original shape
                     let original_shape = mm.original_shapes.values().nth(idx);
+                    let delta = if canvas.document.is_pinned(dup_id) {
+                        snap_result * canvas.camera.zoom
+                    } else {
+                        snap_result
+                    };
                     if let (Some(orig), Some(shape)) =
                         (original_shape, canvas.document.get_shape_mut(dup_id))
                     {
                         let mut new_shape = orig.clone();
-                        new_shape.transform(translation);
+                        new_shape.transform(kurbo::Affine::translate(delta));
                         *shape = new_shape;
                     }
                 }
@@ -1581,7 +1592,12 @@ impl EventHandler {
                 // Normal move - move the original shapes
                 for (shape_id, original_shape) in &mm.original_shapes {
                     let mut new_shape = original_shape.clone();
-                    new_shape.transform(translation);
+                    let delta = if canvas.document.is_pinned(*shape_id) {
+                        snap_result * canvas.camera.zoom
+                    } else {
+                        snap_result
+                    };
+                    new_shape.transform(kurbo::Affine::translate(delta));
                     if let Some(shape) = canvas.document.get_shape_mut(*shape_id) {
                         *shape = new_shape;
                     }
@@ -1899,6 +1915,33 @@ mod future_font_regressions {
     }
 }
 
+fn shape_point(canvas: &Canvas, id: ShapeId, world_point: Point) -> Point {
+    if canvas.document.is_pinned(id) {
+        canvas.camera.world_to_screen(world_point)
+    } else {
+        world_point
+    }
+}
+
+fn shapes_at_pointer(canvas: &Canvas, world_point: Point, world_tolerance: f64) -> Vec<ShapeId> {
+    let screen_point = canvas.camera.world_to_screen(world_point);
+    canvas
+        .document
+        .z_order
+        .iter()
+        .rev()
+        .filter_map(|id| {
+            let shape = canvas.document.get_shape(*id)?;
+            let (point, tolerance) = if canvas.document.is_pinned(*id) {
+                (screen_point, world_tolerance * canvas.camera.zoom)
+            } else {
+                (world_point, world_tolerance)
+            };
+            shape.hit_test(point, tolerance).then_some(*id)
+        })
+        .collect()
+}
+
 /// Screen velocity grows smoothly toward the edge and is bounded outside it.
 pub(crate) fn edge_pan_velocity(point: Point, viewport: Size, margin: f64) -> kurbo::Vec2 {
     fn axis(p: f64, length: f64, margin: f64) -> f64 {
@@ -1931,5 +1974,30 @@ mod edge_pan_tests {
         assert!(edge_pan_velocity(Point::new(2.0, 300.0), size, 48.0).x < -500.0);
         let out = edge_pan_velocity(Point::new(900.0, 900.0), size, 48.0);
         assert_eq!(out, kurbo::Vec2::new(600.0, 600.0));
+    }
+}
+
+#[cfg(test)]
+mod pinned_pointer_tests {
+    use super::*;
+    use drafftink_core::canvas::PinnedShape;
+    use drafftink_core::shapes::{Rectangle, SerializableColor};
+
+    #[test]
+    fn pinned_hit_testing_uses_screen_coordinates_after_camera_moves() {
+        let mut canvas = Canvas::new();
+        canvas.camera.zoom = 2.0;
+        canvas.camera.offset = kurbo::Vec2::new(40.0, 25.0);
+        let rect = Rectangle::new(Point::new(10.0, 10.0), 40.0, 30.0);
+        let id = rect.id();
+        let mut shape = Shape::Rectangle(rect);
+        shape.transform(canvas.camera.transform());
+        canvas.document.add_shape(shape);
+        canvas.document.pinned_shapes.insert(id, PinnedShape { background: SerializableColor::white() });
+        let screen_point = canvas.document.get_shape(id).unwrap().bounds().center();
+        canvas.camera.zoom = 0.4;
+        canvas.camera.offset = kurbo::Vec2::new(-400.0, 170.0);
+        let pointer_world = canvas.camera.screen_to_world(screen_point);
+        assert_eq!(shapes_at_pointer(&canvas, pointer_world, 5.0 / canvas.camera.zoom), vec![id]);
     }
 }

@@ -425,6 +425,8 @@ impl Default for UiState {
             stroke_width: 2.0,
             stroke_style: StrokeStyle::Solid,
             selection_count: 0,
+            selection_pinned: false,
+            pin_background: Color32::WHITE,
             menu_open: false,
             color_popover: ColorPopover::None,
             grid_style: GridStyle::default(),
@@ -542,6 +544,8 @@ pub enum UiAction {
     SetStrokeColor(Color32),
     /// Change fill color.
     SetFillColor(Option<Color32>),
+    TogglePinned,
+    SetPinnedBackground(Color32),
     /// Change stroke width.
     SetStrokeWidth(f32),
     SetOutlinePattern(StrokeStyle),
@@ -1136,7 +1140,7 @@ fn render_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                     };
                     let response = IconButton::new(icon, label)
                         .shortcut(ui_state.settings.shortcut_for(tool.kind))
-                        .selected(is_selected)
+                        .selected(is_selected && !matches!(tool.kind, ToolKind::Select | ToolKind::Pan))
                         .tool()
                         .show_response(ui);
                     ui_state.test_controls.insert(
@@ -1503,6 +1507,32 @@ fn render_properties_panel(ctx: &Context, ui_state: &mut UiState) -> Option<UiAc
     .show(ctx, |ui| {
         panel_frame().show(ui, |ui| {
             panel_grip(ui);
+            if ui_state.selection_count > 0 {
+                ui.horizontal(|ui| {
+                    let title = if ui_state.selection_pinned { "Détacher de l’écran" } else { "Épingler à l’écran" };
+                    if IconButton::new(include_image!("../assets/pin.svg"), title)
+                        .small()
+                        .selected(ui_state.selection_pinned)
+                        .show(ui)
+                    {
+                        action = Some(UiAction::TogglePinned);
+                    }
+                    if ui_state.selection_pinned {
+                        ui.label("Fond");
+                        for color in [Color32::WHITE, Color32::from_rgb(255, 249, 196), Color32::from_rgb(255, 224, 230), Color32::from_rgb(220, 245, 255), Color32::TRANSPARENT] {
+                            let (rect, response) = ui.allocate_exact_size(Vec2::splat(16.0), egui::Sense::click());
+                            ui.painter().rect_filled(rect, 3.0, color);
+                            ui.painter().rect_stroke(rect, 3.0, Stroke::new(1.0, Color32::from_gray(110)), egui::StrokeKind::Inside);
+                            if ui_state.pin_background == color && color != Color32::TRANSPARENT {
+                                ui.painter().circle_filled(rect.center(), 2.0, Color32::from_gray(60));
+                            }
+                            if response.clicked() {
+                                action = Some(UiAction::SetPinnedBackground(color));
+                            }
+                        }
+                    }
+                });
+            }
             if ui_state.current_tool == ToolKind::Eraser {
                 ui.horizontal(|ui| {
                     widgets_section_label(ui, "Eraser");
