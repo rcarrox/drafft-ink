@@ -180,7 +180,8 @@ function inspectCapture(file) {
     const nudgeFine=(await state()).shapes.find(item=>item.id===commandId);
     await page.keyboard.press('Shift+ArrowRight');await wait(s=>Math.abs(s.shapes.find(item=>item.id===commandId).bounds[0]-nudgeFine.bounds[0]-20*s.zoom)<0.01);
     // Original characters and font-dependent scripts, including symbols without Unicode script glyphs.
-    await page.keyboard.press('t');await page.mouse.click(820,420);await wait(s=>!!s.editing_text);
+    await control('New canvas');await wait(s=>s.active_tab===1&&s.shapes.length===0);
+    await page.mouse.click(400,300);await page.keyboard.press('t');await wait(s=>s.tool==='Text');await page.mouse.click(400,300);await wait(s=>!!s.editing_text);
     await keys('Base ');await page.keyboard.press('Control+ArrowUp');await keys('AZ09α≤@');await page.keyboard.press('Control+ArrowUp');await keys(' fin');
     const scriptText=s=>s.shapes.find(item=>item.id===s.editing_text)?.shape.Text;
     await wait(s=>scriptText(s)?.content==='Base AZ09α≤@ fin');
