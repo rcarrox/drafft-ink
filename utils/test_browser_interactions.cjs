@@ -179,32 +179,10 @@ function inspectCapture(file) {
     await page.keyboard.press('ArrowRight');await wait(s=>Math.abs(s.shapes.find(item=>item.id===commandId).bounds[0]-nudgeBefore.bounds[0]-1)<0.01);
     const nudgeFine=(await state()).shapes.find(item=>item.id===commandId);
     await page.keyboard.press('Shift+ArrowRight');await wait(s=>Math.abs(s.shapes.find(item=>item.id===commandId).bounds[0]-nudgeFine.bounds[0]-20*s.zoom)<0.01);
-    // Original characters and font-dependent scripts, including symbols without Unicode script glyphs.
-    await control('New canvas');await wait(s=>s.active_tab===1&&s.shapes.length===0);
-    await page.mouse.click(400,300);await page.keyboard.press('t');await wait(s=>s.tool==='Text');await page.mouse.click(400,300);await wait(s=>!!s.editing_text);
-    await keys('Base ');await page.keyboard.press('Control+ArrowUp');await keys('AZ09α≤@');await page.keyboard.press('Control+ArrowUp');await keys(' fin');
-    const scriptText=s=>s.shapes.find(item=>item.id===s.editing_text)?.shape.Text;
-    await wait(s=>scriptText(s)?.content==='Base AZ09α≤@ fin');
-    await wait(s=>scriptText(s).char_styles.slice(5,12).every(style=>style.script===1));
-    await page.keyboard.press('Control+a');await page.keyboard.press('Control+ArrowDown');await wait(s=>scriptText(s).char_styles.every(style=>style.script===-1));
-    const saveCount=(await state()).png_save_requests;
-    await page.keyboard.press('Control+s');await wait(s=>s.png_save_requests===saveCount+1);
-    await page.keyboard.press('Escape');await wait(s=>s.editing_text===null);
-
-    // Failed software-GPU PNG readback can keep that page busy. These independent
-    // input checks use a fresh context, rather than depending on export completion.
-    const earlierPage=page, earlierInput=input;
-    const featureContext=await browser.newContext({viewport:{width:1280,height:720},permissions:['clipboard-read','clipboard-write']});
-    await featureContext.addInitScript(()=>localStorage.setItem('drafftink.user_settings.v1',JSON.stringify({restore_last_document:false,intro_json:'',autosave_enabled:false,default_font:'Noto Sans',default_font_postscript:''})));
-    page=await featureContext.newPage();input=await featureContext.newCDPSession(page);
-    page.on('console',message=>logs.push(message.type()+': '+message.text()));
-    page.on('pageerror',error=>logs.push('PAGEERROR: '+error));
-    await page.goto(process.env.DRAFFTINK_TEST_URL || 'http://127.0.0.1:8888/?drafftink-test=1');
-    await page.bringToFront();await wait(s=>s.shapes.length===0);
-    await page.locator('canvas').focus();
+    // Run input/clipboard checks before requesting a GPU PNG export.
     // New code command uses the same inline axis and supports live completion.
     await control('New canvas');await wait(s=>s.shapes.length===0);
-    await page.mouse.click(400,300);await page.keyboard.press('t');await page.mouse.click(400,300);await wait(s=>!!s.editing_text);
+    await page.keyboard.press('Escape');await page.keyboard.press('Escape');await page.keyboard.press('t');await page.mouse.click(400,300);await wait(s=>!!s.editing_text);
     await keys('bin(');await wait(s=>s.command_editor==='bin(');
     await keys('n,k)');await wait(s=>commandText(s)?.formulas[0].math.latex==='\\binom{n}{k}');
     await page.keyboard.press('Enter');await page.keyboard.press('Escape');await wait(s=>s.editing_text===null);
@@ -224,7 +202,7 @@ function inspectCapture(file) {
     await resizeBin(false);await resizeBin(true);
     // Math's browser clipboard replaces just the selection, then inserts at the caret.
     await control('New canvas');await wait(s=>s.shapes.length===0);
-    await page.mouse.click(400,300);await page.keyboard.press('m');await page.mouse.click(400,300);
+    await page.keyboard.press('Escape');await page.keyboard.press('Escape');await page.keyboard.press('m');await page.mouse.click(400,300);
     const mathText=s=>s.shapes.find(item=>item.shape.Math)?.shape.Math;
     await keys('123456');await wait(s=>mathText(s)?.source==='123456');
     await page.keyboard.press('Control+a');await page.keyboard.press('Control+c');
@@ -239,7 +217,17 @@ function inspectCapture(file) {
     await wait(s=>mathText(s)?.source.includes('}')&&!mathText(s)?.source.includes('_'));
     await page.keyboard.press('Escape');
 
-    await featureContext.close();page=earlierPage;input=earlierInput;
+    // Original characters and font-dependent scripts, including symbols without Unicode script glyphs.
+    const nextScriptTab=(await state()).active_tab+1;await control('New canvas');await wait(s=>s.active_tab===nextScriptTab&&s.shapes.length===0);
+    await page.mouse.click(400,300);await page.keyboard.press('t');await wait(s=>s.tool==='Text');await page.mouse.click(400,300);await wait(s=>!!s.editing_text);
+    await keys('Base ');await page.keyboard.press('Control+ArrowUp');await keys('AZ09α≤@');await page.keyboard.press('Control+ArrowUp');await keys(' fin');
+    const scriptText=s=>s.shapes.find(item=>item.id===s.editing_text)?.shape.Text;
+    await wait(s=>scriptText(s)?.content==='Base AZ09α≤@ fin');
+    await wait(s=>scriptText(s).char_styles.slice(5,12).every(style=>style.script===1));
+    await page.keyboard.press('Control+a');await page.keyboard.press('Control+ArrowDown');await wait(s=>scriptText(s).char_styles.every(style=>style.script===-1));
+    const saveCount=(await state()).png_save_requests;
+    await page.keyboard.press('Control+s');await wait(s=>s.png_save_requests===saveCount+1);
+    await page.keyboard.press('Escape');await wait(s=>s.editing_text===null);
 
     // Separate browser context with a public, deterministic 1200x2000 PNG fixture.
     const imageContext = await browser.newContext({viewport:{width:1280,height:720}});
