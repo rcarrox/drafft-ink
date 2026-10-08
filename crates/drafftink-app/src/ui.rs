@@ -377,6 +377,9 @@ pub struct UiState {
     pub font_error: String,
     pub math_input_font_ready: bool,
     pub laser_color_open: bool,
+    pub geometry: drafftink_core::shapes::GeometryKind,
+    pub context_properties: bool,
+    pub context_rects: Vec<Rect>,
     pub laser_color_pos: Pos2,
     /// Names of the open tabs, in order (synced from the app each frame).
     pub tab_names: Vec<String>,
@@ -459,6 +462,9 @@ impl Default for UiState {
             font_error: String::new(),
             math_input_font_ready: false,
             laser_color_open: false,
+            geometry: Default::default(),
+            context_properties: false,
+            context_rects: Vec::new(),
             laser_color_pos: Pos2::new(72.0, 200.0),
             tab_names: Vec::new(),
             active_tab: 0,
@@ -510,6 +516,7 @@ impl UiState {
 pub enum UiAction {
     /// Change the current tool.
     SetTool(ToolKind),
+    SetGeometry(drafftink_core::shapes::GeometryKind),
     /// Change eraser behavior.
     SetEraserMode(EraserMode),
     SetDefaultFont(String, String),
@@ -762,6 +769,14 @@ pub fn render_ui(
     selected_props: &SelectedShapeProps,
 ) -> Option<UiAction> {
     ui_state.test_controls.clear();
+    if ctx.input(|i| i.pointer.primary_pressed())
+        && ctx
+            .input(|i| i.pointer.interact_pos())
+            .is_some_and(|p| !ui_state.context_rects.iter().any(|r| r.contains(p)))
+    {
+        ui_state.context_properties = false;
+    }
+    ui_state.context_rects.clear();
     if ui_state.presentation_mode {
         return None;
     }
@@ -1085,13 +1100,51 @@ fn render_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
 
                 for tool in &tools {
                     let is_selected = ui_state.current_tool == tool.kind;
-                    let response = IconButton::new(tool.icon.clone(), tool.label)
+                    let label = if tool.kind == ToolKind::Ellipse {
+                        ui_state.geometry.label()
+                    } else {
+                        tool.label
+                    };
+                    let icon = if tool.kind == ToolKind::Ellipse {
+                        match ui_state.geometry {
+                            drafftink_core::shapes::GeometryKind::Triangle => {
+                                include_image!("../assets/triangle.svg")
+                            }
+                            drafftink_core::shapes::GeometryKind::Parallelogram => {
+                                include_image!("../assets/parallelogram.svg")
+                            }
+                            drafftink_core::shapes::GeometryKind::Trapezoid => {
+                                include_image!("../assets/trapezoid.svg")
+                            }
+                            drafftink_core::shapes::GeometryKind::Diamond => {
+                                include_image!("../assets/diamond.svg")
+                            }
+                            _ => tool.icon.clone(),
+                        }
+                    } else {
+                        tool.icon.clone()
+                    };
+                    let response = IconButton::new(icon, label)
                         .shortcut(ui_state.settings.shortcut_for(tool.kind))
                         .selected(is_selected)
                         .tool()
                         .show_response(ui);
                     if response.clicked() {
                         action = Some(UiAction::SetTool(tool.kind));
+                    }
+                    if tool.kind == ToolKind::Ellipse {
+                        response.context_menu(|ui| {
+                            ui.label("Forme — raccourci répété pour changer");
+                            for kind in drafftink_core::shapes::GeometryKind::ALL {
+                                if ui
+                                    .selectable_label(ui_state.geometry == kind, kind.label())
+                                    .clicked()
+                                {
+                                    action = Some(UiAction::SetGeometry(kind));
+                                    ui.close();
+                                }
+                            }
+                        });
                     }
                     if tool.kind == ToolKind::LaserPointer && response.secondary_clicked() {
                         ui_state.laser_color_open = !ui_state.laser_color_open;
@@ -1411,6 +1464,9 @@ const QUICK_COLORS: &[usize] = &[10, 0, 6, 2, 13, 17]; // Blue, Red, Emerald, Am
 
 /// Render the properties panel at the top.
 fn render_properties_panel(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
+    if ui_state.settings.hide_properties && !ui_state.context_properties {
+        return None;
+    }
     let mut action = None;
     let mut stroke_rect = Rect::NOTHING;
     let mut fill_rect = Rect::NOTHING;
@@ -1543,6 +1599,7 @@ fn render_properties_panel(ctx: &Context, ui_state: &mut UiState) -> Option<UiAc
             });
         });
     });
+    ui_state.context_rects.push(output.response.rect);
     remember_panel(ui_state, "properties", &output.response);
     let (color, rect, title) = match ui_state.color_popover {
         ColorPopover::StrokeFull => (ui_state.stroke_color, stroke_rect, "Stroke Color"),
@@ -1700,6 +1757,9 @@ fn render_right_panel(
     ui_state: &mut UiState,
     props: &SelectedShapeProps,
 ) -> Option<UiAction> {
+    if ui_state.settings.hide_properties && !ui_state.context_properties {
+        return None;
+    }
     let mut props = props.clone();
     if ui_state.current_tool == ToolKind::Text && !props.has_selection {
         props.font_family = ui_state.current_text_font.family;
@@ -1711,7 +1771,7 @@ fn render_right_panel(
     // is active even if generic tool-properties are disabled, and disappear as
     // soon as another tool is selected. Other tool panels respect Settings.
     let text_tool_active = ui_state.current_tool == ToolKind::Text;
-    if props.has_selection && props.is_text && !text_tool_active {
+    if props.has_selection && props.is_text && !text_tool_active && !ui_state.context_properties {
         return None;
     }
     if !props.has_selection
@@ -2363,6 +2423,7 @@ fn render_right_panel(
             });
     });
 
+    ui_state.context_rects.push(output.response.rect);
     remember_panel(ui_state, "right_panel", &output.response);
     action
 }
@@ -3574,6 +3635,7 @@ fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAct
                             });
 
                         ui.add_space(14.0);
+                        ui.checkbox(&mut ui_state.settings.hide_properties, "Masquer les propriétés (clic droit sur un objet)");
                         ui.checkbox(
                             &mut ui_state.settings.show_properties_for_tools,
                             "Afficher Properties pour les outils (Text reste toujours visible)",

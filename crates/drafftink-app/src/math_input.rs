@@ -535,7 +535,7 @@ pub fn dead_caret_text(text: &str) -> String {
 /// Match a complete command prefix immediately before the text caret.
 pub fn text_command_prefix(text: &str, caret: usize) -> Option<(usize, &'static str)> {
     let prefix = text.get(..caret)?;
-    for name in ["sum", "prod", "int", "lim", "sqrt", "frac", "bin"] {
+    for name in ["sum", "prod", "int", "lim", "sqrt", "root", "frac", "bin"] {
         let marker = format!("{name}(");
         if prefix.ends_with(&marker) {
             let start = prefix.len() - marker.len();

@@ -11,7 +11,7 @@ mod rectangle;
 mod text;
 
 pub use arrow::Arrow;
-pub use ellipse::Ellipse;
+pub use ellipse::{Ellipse, GeometryKind};
 pub use freehand::Freehand;
 pub use group::Group;
 pub use image::{Image, ImageFormat};

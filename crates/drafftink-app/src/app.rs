@@ -1865,7 +1865,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            title: "DrafftInk".to_string(),
+            title: "draphtInQ".to_string(),
             width: 1280,
             height: 800,
             grid_style: GridStyle::Lines,
@@ -3493,6 +3493,14 @@ impl ApplicationHandler for App {
                     if let Some(action) = render_ui(ctx, &mut state.ui_state, &selected_props) {
                         ui_action_taken = true;
                         match action.clone() {
+                            UiAction::SetGeometry(kind) => {
+                                state.ui_state.geometry = kind;
+                                state.canvas.tool_manager.geometry = kind;
+                                state.canvas.set_tool(ToolKind::Ellipse);
+                                state.ui_state.current_tool = ToolKind::Ellipse;
+                                state.ui_state.sloppiness =
+                                    drafftink_core::shapes::Sloppiness::Architect;
+                            }
                             UiAction::SetTool(tool) => {
                                 state.ui_state.text_command_editor = None;
                                 if tool != ToolKind::Text {
@@ -5661,6 +5669,25 @@ impl ApplicationHandler for App {
                 };
 
                 let position = state.input.mouse_position();
+                if mouse_btn == MouseButton::Right && btn_state == ElementState::Pressed {
+                    let point = state.canvas.camera.screen_to_world(position);
+                    if let Some(id) = state
+                        .canvas
+                        .document
+                        .shapes_at_point(point, 5.0 / state.canvas.camera.zoom)
+                        .first()
+                        .copied()
+                    {
+                        if !state.canvas.selection.contains(&id) {
+                            state.canvas.clear_selection();
+                            state.canvas.selection.push(id);
+                        }
+                        state.ui_state.context_properties = true;
+                        state.needs_redraw = true;
+                        state.window.request_redraw();
+                    }
+                    return;
+                }
 
                 match btn_state {
                     ElementState::Pressed => {
@@ -6881,6 +6908,16 @@ impl ApplicationHandler for App {
                                 }
                                 key if state.ui_state.settings.tool_for_key(key).is_some() => {
                                     if let Some(tool) = state.ui_state.settings.tool_for_key(key) {
+                                        if tool == ToolKind::Ellipse
+                                            && state.canvas.tool_manager.current_tool
+                                                == ToolKind::Ellipse
+                                            && !event.repeat
+                                        {
+                                            state.ui_state.geometry =
+                                                state.ui_state.geometry.next();
+                                            state.canvas.tool_manager.geometry =
+                                                state.ui_state.geometry;
+                                        }
                                         if tool != ToolKind::Text {
                                             if state.event_handler.editing_text.is_some() {
                                                 state

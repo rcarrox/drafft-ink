@@ -97,6 +97,7 @@ pub struct ToolManager {
     pub current_style: ShapeStyle,
     /// Corner radius for new rectangles (0 = sharp corners).
     pub corner_radius: f64,
+    pub geometry: crate::shapes::GeometryKind,
     /// Calligraphy mode for freehand (MSD smoothing).
     pub calligraphy_mode: bool,
     /// Pressure simulation mode (varies width based on speed).
@@ -119,6 +120,7 @@ impl Default for ToolManager {
             smoothed_pressure: 1.0,
             current_style: ShapeStyle::default(),
             corner_radius: 0.0,
+            geometry: Default::default(),
             calligraphy_mode: true,
             pressure_simulation: false,
             msd_pos: Point::ZERO,
@@ -349,7 +351,9 @@ impl ToolManager {
                     start.x.max(end.x),
                     start.y.max(end.y),
                 );
-                Some(Shape::Ellipse(Ellipse::from_rect(rect)))
+                let mut shape = Ellipse::from_rect(rect);
+                shape.geometry = self.geometry;
+                Some(Shape::Ellipse(shape))
             }
             ToolKind::Line => Some(Shape::Line(Line::new(start, end))),
             ToolKind::Arrow => Some(Shape::Arrow(Arrow::new(start, end))),

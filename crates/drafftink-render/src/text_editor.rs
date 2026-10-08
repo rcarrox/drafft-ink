@@ -5,6 +5,29 @@ use parley::{FontContext, LayoutContext, StyleProperty};
 use peniko::Brush;
 use std::time::Duration;
 
+fn script_cursor(mut rect: parley::BoundingBox, font_size: f32, script: i8) -> parley::BoundingBox {
+    // Use the insertion mode, even before its first character is typed.
+    let size = font_size as f64;
+    let baseline = rect.y1 - size * 0.2;
+    let scale = if script > 0 {
+        0.65
+    } else if script < 0 {
+        0.64
+    } else {
+        1.0
+    };
+    let offset = if script > 0 {
+        -size * 0.4
+    } else if script < 0 {
+        size * 0.2
+    } else {
+        0.0
+    };
+    rect.y0 = baseline - size * scale + offset;
+    rect.y1 = baseline + size * scale * 0.2 + offset;
+    rect
+}
+
 // Use web_time for WASM compatibility
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
@@ -205,12 +228,15 @@ impl TextEditState {
                 l.text_range().contains(&cursor.index()) || l.text_range().end == cursor.index()
             }) {
                 let shift = inline_baseline_shift(&line, self.font_size) as f64;
-                rect.y0 -= shift;
-                rect.y1 -= shift;
+                let baseline = line.metrics().baseline as f64 - shift;
+                rect.y0 = baseline - self.font_size as f64;
+                rect.y1 = baseline + self.font_size as f64 * 0.2;
             }
-            Some(rect)
+            Some(script_cursor(rect, self.font_size, self.script_value()))
         } else {
-            self.editor.cursor_geometry(size)
+            self.editor
+                .cursor_geometry(size)
+                .map(|rect| script_cursor(rect, self.font_size, self.script_value()))
         }
     }
 
@@ -934,5 +960,21 @@ mod math_axis_units_test {
         let axis = super::math_layout_axis(include_bytes!("../assets/rex-xits.otf"), 0, 20.0);
         // STIX Two Math: AxisHeight=258, UPM=1000; ReX lays out 20pt at 96px/in.
         assert!((axis - 6.88).abs() < 0.0001);
+    }
+}
+
+#[cfg(test)]
+mod insertion_cursor_tests {
+    #[test]
+    fn insertion_mode_changes_caret_before_typing() {
+        let r = parley::BoundingBox::new(10.0, 0.0, 11.5, 24.0);
+        let normal = super::script_cursor(r, 20.0, 0);
+        let sup = super::script_cursor(r, 20.0, 1);
+        let sub = super::script_cursor(r, 20.0, -1);
+        assert!(sup.height() < normal.height());
+        assert!(sub.height() < normal.height());
+        assert!(sup.y0 < normal.y0);
+        assert!(sub.y0 > normal.y0);
+        assert_eq!(sup.x0, normal.x0);
     }
 }
