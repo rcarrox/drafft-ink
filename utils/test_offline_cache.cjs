@@ -37,7 +37,7 @@ const server=http.createServer((request,response)=>{
     await page.waitForFunction(()=>!!navigator.serviceWorker.controller,null,{timeout:60000});
   };
   try{
-    await page.goto(url);await loaded();assert.equal(await page.title(),'Qraphtinc');
+    await page.goto(url);await loaded();assert.equal(await page.title(),'Qursor🌿');
     await page.waitForFunction(()=>window.__offlineNoticeSeen===true,null,{timeout:60000});
     assert.equal(await page.evaluate(()=>navigator.serviceWorker.controller.scriptURL),url+'sw.js');
     await page.evaluate(async()=>{
@@ -51,11 +51,11 @@ const server=http.createServer((request,response)=>{
       });
     });
     await context.setOffline(true);await page.reload();await loaded();
-    assert.equal(await page.title(),'Qraphtinc');
+    assert.equal(await page.title(),'Qursor🌿');
     assert.equal(await page.evaluate(async()=>new Uint8Array(await (await fetch('./pkg/drafftink_app_bg.wasm')).arrayBuffer())[1]),97);
     // A worker from a partial FTP upload must fail without replacing the good cache.
     const indexFile=path.join(root,'index.html'),original=fs.readFileSync(indexFile,'utf8');
-    const newer=original.replace('<title>Qraphtinc</title>','<title>Qraphtinc update test</title>');
+    const newer=original.replace('<title>Qursor🌿</title>','<title>Qursor🌿 update test</title>');
     fs.writeFileSync(indexFile,newer);build();fs.writeFileSync(indexFile,original);
     // Prepare the partial upload before reconnecting; the online event also
     // checks for updates, and must not race a still-old server response.
@@ -70,16 +70,16 @@ const server=http.createServer((request,response)=>{
     await context.setOffline(false);
     await page.evaluate(async()=>{const r=await navigator.serviceWorker.getRegistration();await r.update();});
     await page.waitForFunction(()=>window.__offlineRejectedBuild===true,null,{timeout:60000});
-    await context.setOffline(true);await page.reload();await loaded();assert.equal(await page.title(),'Qraphtinc');
+    await context.setOffline(true);await page.reload();await loaded();assert.equal(await page.title(),'Qursor🌿');
     // Finish upload; the new release waits and leaves this sheet running.
     fs.writeFileSync(indexFile,newer);await context.setOffline(false);
     await page.evaluate(async()=>{const r=await navigator.serviceWorker.getRegistration();await r.update();});
     await page.waitForFunction(async()=>!!(await navigator.serviceWorker.getRegistration())?.waiting,null,{timeout:60000});
-    assert.equal(await page.title(),'Qraphtinc');
+    assert.equal(await page.title(),'Qursor🌿');
     page.once('dialog',dialog=>dialog.accept());
     await page.getByRole('button',{name:'Installer et recharger'}).click();
-    await page.waitForFunction(()=>document.title==='Qraphtinc update test',null,{timeout:60000});await loaded();
-    await context.setOffline(true);await page.reload();await loaded();assert.equal(await page.title(),'Qraphtinc update test');
+    await page.waitForFunction(()=>document.title==='Qursor🌿 update test',null,{timeout:60000});await loaded();
+    await context.setOffline(true);await page.reload();await loaded();assert.equal(await page.title(),'Qursor🌿 update test');
     assert.equal(await page.evaluate(()=>localStorage.getItem('offline-user-proof')),'preserved');
     assert.deepEqual(await page.evaluate(()=>JSON.parse(localStorage.getItem('drafftink.user_settings.v1')).accent_color),[180,35,100]);
     assert.equal(await page.evaluate(()=>new Promise((resolve,reject)=>{

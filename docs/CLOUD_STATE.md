@@ -78,3 +78,8 @@ La 0.16.0 est livrée (PR #17 et correctif packaging #18, main 82e730609d5f48577
 ### 0.18.0 — Web hors connexion (en validation)
 
 0.17.0 livrée : PR #19, main1645013d2a8a5c96c3b7c09fd54c758e1bc4a5ce, CI37797374127 huit contrôles verts/202 tests Rust, Portable37797374348 réussi et ZIP vérifié. Site utilisateur confirmé sur https://ilamartin.fr/qrapht/web/ (pas /qrapht/). Utilisateur demande explicitement une version avec cache hors connexion. Branche0.18 : service worker limité au sous-dossier, assets vérifiés par SHA256, cache versionné selon le build réel, activation de mise à jour sur clic, conservation du stockage utilisateur. Pas de Rust modifié ni compilation locale. Tests manifest et Chromium réel hors réseau/envoi partiel/mise à jour à valider en Actions ; CI, fusion et ZIP restent à confirmer dans la PR de cette version. FTP manuel utilisateur, aucune connexion serveur reçue.
+
+
+### 0.19.0 — Qursor🌿, même ZIP local et FTP (en validation)
+
+0.18.0 livrée : PR #20 fusionnée, main c97aa6c3d642007446dd57baa363dc045cb6ca1c, CI 37816053158 huit contrôles verts et 202 tests Rust, Portable 37816053165 réussi ; ZIP Web et Windows vérifiés, cache hors connexion testé. Branche codex/0.19.0-qursor-local-ftp : page renommée Qursor🌿, lanceur Lancer Qursor.cmd et guide unique Local/FTP. Artefact combiné contenant les mêmes fichiers web pour localhost et public_html/qrapht/web/. Clés du cache et données conservées ; tests des titres adaptés. Aucun code Rust modifié. Compilation via Actions uniquement. CI, fusion et livraison 0.19 restent à confirmer dans la PR ; pas d’accès FTP ni déploiement serveur effectué.
