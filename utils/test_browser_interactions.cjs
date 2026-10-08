@@ -175,6 +175,12 @@ function inspectCapture(file) {
     await wait(s=>s.selected_count===2);
     await page.keyboard.press('Control+l');await wait(s=>s.shapes.every(shape=>shape.pinned));
     await page.keyboard.press('Control+z');await wait(s=>s.shapes.every(shape=>!shape.pinned));
+    // Undo restores the document snapshot and clears selection; select both again.
+    await page.mouse.click(...multiSelectPoint);await wait(s=>s.selected_count===1);
+    const secondBounds=(await state()).shapes[1].bounds;
+    const secondPoint=[secondBounds[0]+1,secondBounds[1]+1];
+    await page.keyboard.down('Control');await page.mouse.click(...secondPoint);await page.keyboard.up('Control');
+    await wait(s=>s.selected_count===2);
     await page.keyboard.press('Control+l');await wait(s=>s.shapes.every(shape=>shape.pinned));
     await page.keyboard.press('Control+l');await wait(s=>s.shapes.every(shape=>!shape.pinned));
     await snapshot(page,'accent-selection.png');
