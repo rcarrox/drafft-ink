@@ -134,6 +134,30 @@ function inspectCapture(file) {
     await wait(s=>s.shapes.some(i=>i.shape.Ellipse?.geometry==='Trapezoid'));
     await snapshot(page,'geometry-context.png');
     await geometryContext.close();
+    // A canvas marquee continues and releases over a floating toolbar without
+    // activating its tool; a fresh click afterwards still works normally.
+    const captureContext=await browser.newContext({viewport:{width:1280,height:720}});
+    await captureContext.addInitScript(()=>localStorage.setItem('drafftink.user_settings.v1',JSON.stringify({restore_last_document:false,autosave_enabled:false,accent_color:[180,35,100]})));
+    page=await captureContext.newPage();await page.goto(process.env.DRAFFTINK_TEST_URL || 'http://127.0.0.1:8888/?drafftink-test=1');
+    await wait(s=>s.shapes.length===0);assert.deepEqual((await state()).accent_color,[180,35,100]);
+    await page.mouse.move(400,350);await page.waitForTimeout(100);await page.keyboard.press('r');
+    await wait(s=>s.tool==='Rectangle');await page.mouse.down();await page.mouse.move(540,410,{steps:8});await page.mouse.up();await wait(s=>s.shapes.length===1);
+    await page.keyboard.press('s');await wait(s=>s.tool==='Select');
+    const tool=(await state()).controls.tool_Ellipse;assert(tool);
+    const target=[(tool[0]+tool[2])/2,(tool[1]+tool[3])/2];
+    await page.mouse.move(700,500);await page.waitForTimeout(100);await page.mouse.down();
+    await page.mouse.move(...target,{steps:15});
+    const captured=await wait(s=>s.selection_rect!==null);
+    const rectangle=captured.selection_rect;
+    // Default camera zoom/offset are one/zero; destination follows the mouse
+    // all the way into the panel, rather than stopping at its boundary.
+    assert(Math.abs(rectangle[0]-target[0])<2||Math.abs(rectangle[2]-target[0])<2);
+    assert(Math.abs(rectangle[1]-target[1])<2||Math.abs(rectangle[3]-target[1])<2);
+    await page.mouse.up();await wait(s=>s.selection_rect===null&&s.tool==='Select');
+    assert.equal((await state()).selected_count,1);
+    await snapshot(page,'accent-selection.png');
+    await page.mouse.move(700,500);await page.waitForTimeout(100);await control('tool_Ellipse');await wait(s=>s.tool==='Ellipse');
+    await captureContext.close();
     // Math form pointer bounds use egui points, even on a scaled display.
     const dpiContext=await browser.newContext({viewport:{width:1280,height:720},deviceScaleFactor:2});
     await dpiContext.addInitScript(()=>localStorage.setItem('drafftink.user_settings.v1',JSON.stringify({restore_last_document:false,autosave_enabled:false,default_font:'Noto Sans',default_font_postscript:''})));

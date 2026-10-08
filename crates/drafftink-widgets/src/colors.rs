@@ -570,8 +570,11 @@ impl<'a> ColorSwatch<'a> {
                     );
                 } else if self.selected && self.style.selection_style == SelectionStyle::OuterBorder
                 {
-                    ui.painter()
-                        .circle_stroke(center, radius, Stroke::new(2.0, theme::ACCENT));
+                    ui.painter().circle_stroke(
+                        center,
+                        radius,
+                        Stroke::new(2.0, ui.visuals().selection.bg_fill),
+                    );
                 }
             } else {
                 // Rounded rect swatch

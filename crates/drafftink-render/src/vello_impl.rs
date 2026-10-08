@@ -2062,7 +2062,7 @@ impl VelloRenderer {
         }
 
         // Selection color (semi-transparent blue)
-        let selection_color = Color::from_rgba8(70, 130, 180, 128); // STEEL_BLUE-ish
+        let selection_color = self.selection_color.with_alpha(0.5);
 
         // Draw selection background (now layout is computed)
         edit_state.selection_geometry_with(|rect, _| {
@@ -2810,7 +2810,7 @@ impl VelloRenderer {
     /// Stroke width and dash pattern are scaled inversely with zoom.
     fn render_selection_rect(&mut self, rect: Rect, transform: Affine) {
         // Fill with semi-transparent blue
-        let fill_color = Color::from_rgba8(59, 130, 246, 25);
+        let fill_color = self.selection_color.with_alpha(0.1);
         let mut path = BezPath::new();
         path.move_to(Point::new(rect.x0, rect.y0));
         path.line_to(Point::new(rect.x1, rect.y0));
