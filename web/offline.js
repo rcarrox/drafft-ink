@@ -4,6 +4,7 @@
     // Existing canvas diagnostic tests deliberately bypass caching; dedicated offline tests exercise it.
     if (new URLSearchParams(location.search).has('drafftink-test') && !new URLSearchParams(location.search).has('offline-test')) return;
     let registration, updateRequested = false, started = false;
+    let hadController = !!navigator.serviceWorker.controller;
     const notice = document.createElement('div');
     notice.id = 'qraphtinc-offline';
     notice.style.cssText = 'position:fixed;right:12px;bottom:12px;z-index:10000;font:12px system-ui;color:#222;background:#fff;border:1px solid #ddd;border-radius:8px;padding:7px 10px;box-shadow:0 2px 6px #0002;max-width:290px';
@@ -44,6 +45,10 @@
     };
     navigator.serviceWorker.addEventListener('controllerchange', () => {
         if (updateRequested) location.reload();
+        else if (!hadController) {
+            hadController = true;
+            ready();
+        }
         else if (started) {
             // Another tab may activate the update. Do not reload this sheet.
             show('Version actualisée. Rechargez après avoir enregistré votre travail.');

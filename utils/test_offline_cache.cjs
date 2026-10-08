@@ -31,6 +31,7 @@ const server=http.createServer((request,response)=>{
   };
   try{
     await page.goto(url);await loaded();assert.equal(await page.title(),'Qraphtinc');
+    await page.getByText('Disponible hors connexion',{exact:false}).waitFor({timeout:60000});
     assert.equal(await page.evaluate(()=>navigator.serviceWorker.controller.scriptURL),url+'sw.js');
     await page.evaluate(async()=>{
       localStorage.setItem('offline-user-proof','preserved');
