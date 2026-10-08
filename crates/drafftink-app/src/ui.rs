@@ -277,6 +277,7 @@ pub struct UiState {
     pub inline_formula_draft: Option<InlineFormulaDraft>,
     pub text_command_editor: Option<TextCommandEditor>,
     pub text_command_pos: Pos2,
+    pub save_status: String,
     pub inline_formula_error: String,
     /// Currently selected tool (mirrored from canvas).
     pub current_tool: ToolKind,
@@ -404,6 +405,7 @@ impl Default for UiState {
             inline_formula_draft: None,
             text_command_editor: None,
             text_command_pos: Pos2::new(400.0, 300.0),
+            save_status: String::new(),
             inline_formula_error: String::new(),
             eraser_mode: EraserMode::Classic,
             stroke_color: TAILWIND_COLORS[11].shades[6], // Indigo 500
@@ -763,6 +765,15 @@ pub fn render_ui(
     if ui_state.presentation_mode {
         return None;
     }
+    if !ui_state.save_status.is_empty() {
+        egui::Area::new(egui::Id::new("save_notice"))
+            .anchor(egui::Align2::RIGHT_BOTTOM, [-12.0, -65.0])
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.label(&ui_state.save_status);
+                });
+            });
+    }
     egui_extras::install_image_loaders(ctx);
 
     let toolbar_action = render_toolbar(ctx, ui_state);
@@ -961,7 +972,7 @@ fn floating_area(_ctx: &Context, state: &UiState, id: &str, default: Pos2) -> eg
         "toolbar" => Vec2::new(50.0, 440.0),
         "right_panel" => Vec2::new(260.0, 400.0),
         "bottom_toolbar" => Vec2::new(440.0, 38.0),
-        "properties" => Vec2::new(420.0, 112.0),
+        "properties" => Vec2::new(340.0, 112.0),
         "laser_palette" => Vec2::new(210.0, 140.0),
         _ => Vec2::new(300.0, 200.0),
     };
@@ -1408,7 +1419,7 @@ fn render_properties_panel(ctx: &Context, ui_state: &mut UiState) -> Option<UiAc
         ctx,
         ui_state,
         "properties",
-        Pos2::new((screen.width() - 400.0).max(24.0) / 2.0, 12.0),
+        Pos2::new((screen.width() - 340.0).max(24.0) / 2.0, 12.0),
     )
     .show(ctx, |ui| {
         panel_frame().show(ui, |ui| {
@@ -1427,7 +1438,7 @@ fn render_properties_panel(ctx: &Context, ui_state: &mut UiState) -> Option<UiAc
                 });
             }
             ui.horizontal_top(|ui| {
-                ui.spacing_mut().item_spacing = Vec2::new(18.0, 4.0);
+                ui.spacing_mut().item_spacing = Vec2::new(12.0, 4.0);
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing = Vec2::new(2.0, 4.0);
                     widgets_section_label(ui, "Stroke");
@@ -3630,11 +3641,15 @@ fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAct
                         ui.add_space(16.0);
                         ui.separator();
                         ui.add_space(10.0);
+                        widgets_section_label(ui,"Zoom au pavé tactile");
+                        ui.add(egui::Slider::new(&mut ui_state.settings.touchpad_zoom_speed,0.25..=8.0).text("Vitesse ×"));
+                        ui.label("2× par défaut ; 1× retrouve la vitesse précédente.");
+                        ui.separator();
                         widgets_section_label(ui, "Sauvegarde automatique");
                         ui.add_space(5.0);
                         ui.checkbox(
                             &mut ui_state.settings.autosave_enabled,
-                            "Activer la sauvegarde automatique",
+                            "PNG automatique dans le dossier choisi",
                         );
                         ui.horizontal(|ui| {
                             ui.label("Intervalle");
@@ -3646,6 +3661,9 @@ fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAct
                                 .suffix(" s"),
                             );
                         });
+                        ui.label("Choisir un dossier d’export autorisé pour l’enregistrement PNG régulier.");
+                        ui.label("Ctrl+S : PNG complet ; Ctrl+Shift+S : document JSON.");
+                        if !ui_state.save_status.is_empty(){ui.label(&ui_state.save_status);}
                         ui.checkbox(
                             &mut ui_state.settings.restore_last_document,
                             "Restaurer la dernière feuille au démarrage",

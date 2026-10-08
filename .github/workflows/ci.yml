@@ -21,7 +21,9 @@ jobs:
         with:
           node-version: '22'
       - name: Test cursor, repaint, and local-font helpers
-        run: node utils/test_browser_helpers.cjs
+        run: |
+          node utils/test_browser_helpers.cjs
+          node utils/test_file_saving.cjs
       - name: Check portable cloud fixtures and scripts
         run: |
           bash -n scripts/cloud/setup.sh scripts/cloud/check.sh

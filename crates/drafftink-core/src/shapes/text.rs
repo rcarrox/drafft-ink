@@ -168,6 +168,8 @@ pub struct CharacterStyle {
     pub bold: bool,
     pub italic: bool,
     pub underline: bool,
+    #[serde(default)]
+    pub script: i8,
 }
 
 /// A formula occupies one object-replacement character in the text flow.
@@ -359,6 +361,45 @@ impl Text {
         self.invalidate_cache();
     }
 
+    pub fn toggle_script(&mut self, range: std::ops::Range<usize>, script: i8) {
+        self.char_styles
+            .resize(self.content.chars().count(), CharacterStyle::default());
+        let start = self.content[..range.start].chars().count();
+        let end = self.content[..range.end].chars().count();
+        let value = if self.char_styles[start..end]
+            .iter()
+            .all(|s| s.script == script)
+        {
+            0
+        } else {
+            script
+        };
+        for style in &mut self.char_styles[start..end] {
+            style.script = value;
+        }
+        self.invalidate_cache();
+    }
+    pub fn set_inserted_script(&mut self, old: &str, script: i8) {
+        let before: Vec<_> = old.chars().collect();
+        let after: Vec<_> = self.content.chars().collect();
+        let prefix = before
+            .iter()
+            .zip(&after)
+            .take_while(|(a, b)| a == b)
+            .count();
+        let suffix = before[prefix..]
+            .iter()
+            .rev()
+            .zip(after[prefix..].iter().rev())
+            .take_while(|(a, b)| a == b)
+            .count();
+        self.char_styles
+            .resize(after.len(), CharacterStyle::default());
+        for style in &mut self.char_styles[prefix..after.len() - suffix] {
+            style.script = script;
+        }
+        self.invalidate_cache();
+    }
     pub fn toggle_format(&mut self, range: std::ops::Range<usize>, kind: char) {
         self.char_styles
             .resize(self.content.chars().count(), CharacterStyle::default());
@@ -666,5 +707,24 @@ mod formatting_tests {
         let restored: Text = serde_json::from_str(&serde_json::to_string(&text).unwrap()).unwrap();
         assert_eq!(restored.char_styles, text.char_styles);
         assert_eq!(restored.formulas[0].math.latex, r"\frac{1}{2}");
+    }
+}
+
+#[cfg(test)]
+mod script_style_tests {
+    use super::*;
+    #[test]
+    fn any_character_scripts_preserve_original_text_and_json() {
+        let original = "AbXYZ09αβ≤≥@!?";
+        let mut text = Text::new(Point::ZERO, original.into());
+        text.toggle_script(0..original.len(), 1);
+        assert_eq!(text.content, original);
+        assert!(text.char_styles.iter().all(|s| s.script == 1));
+        let restored: Text = serde_json::from_str(&serde_json::to_string(&text).unwrap()).unwrap();
+        assert_eq!(restored.char_styles, text.char_styles);
+        text.toggle_script(0..original.len(), 1);
+        assert!(text.char_styles.iter().all(|s| s.script == 0));
+        text.toggle_script(0..original.len(), -1);
+        assert!(text.char_styles.iter().all(|s| s.script == -1));
     }
 }

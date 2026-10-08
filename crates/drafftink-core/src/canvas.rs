@@ -107,6 +107,16 @@ impl CanvasDocument {
         }
     }
 
+    pub fn persisted_copy(&self) -> Self {
+        Self {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            shapes: self.shapes.clone(),
+            z_order: self.z_order.clone(),
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+        }
+    }
     /// Push current state to undo stack (call before making changes).
     pub fn push_undo(&mut self) {
         let snapshot = self.snapshot();

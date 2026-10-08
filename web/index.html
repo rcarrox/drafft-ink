@@ -254,27 +254,55 @@
             return (await handle.requestPermission(options)) === 'granted';
         }
 
+        let liveExportDirectory=null;
+        window.drafftinkExportFolderReady=false;
+        window.drafftinkSaveStatus='';
+        function saveStatus(message) {window.drafftinkSaveStatus=message;window.drafftinkRequestRepaint?.(0);}
+        getExportDirectoryHandle().then(async handle=>{
+            liveExportDirectory=handle;
+            window.drafftinkExportFolderReady=!!handle && (await handle.queryPermission({mode:'readwrite'}))==='granted';
+            if(handle && !window.drafftinkExportFolderReady)saveStatus('Réautoriser le dossier PNG dans Settings.');
+        }).catch(()=>{});
+        document.addEventListener('keydown',event=>{
+            if(event.ctrlKey && event.key.toLowerCase()==='s' && liveExportDirectory) {
+                window.drafftinkFolderPermissionPromise=ensureReadWritePermission(liveExportDirectory).then(granted=>{
+                    window.drafftinkExportFolderReady=granted;return granted;
+                });
+            }
+        });
         window.drafftinkPickExportDirectory = async function() {
             if (!window.showDirectoryPicker) return '';
             const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
             if (!(await ensureReadWritePermission(handle))) return '';
             await putExportDirectoryHandle(handle);
+            liveExportDirectory=handle;window.drafftinkExportFolderReady=true;
+            saveStatus('Dossier PNG prêt : '+handle.name);
             return handle.name || 'Dossier sélectionné';
         };
 
-        window.drafftinkSaveBlobToExportDirectory = async function(filename, blob) {
+        window.drafftinkSaveBlobToExportDirectory = async function(filename, blob, automatic=false) {
             try {
-                const handle = await getExportDirectoryHandle();
-                if (!handle || !(await ensureReadWritePermission(handle))) return false;
-                const fileHandle = await handle.getFileHandle(filename, { create: true });
-                const writable = await fileHandle.createWritable();
-                await writable.write(blob);
-                await writable.close();
+                window.drafftinkDiskSaveBusy=true;
+                const handle=liveExportDirectory || await getExportDirectoryHandle();
+                if(!handle) {if(automatic)saveStatus('Choisir un dossier PNG dans Settings.');return false;}
+                if(window.drafftinkFolderPermissionPromise)await window.drafftinkFolderPermissionPromise;
+                const granted=(await handle.queryPermission({mode:'readwrite'}))==='granted';
+                if(!granted && (automatic || !(await ensureReadWritePermission(handle)))) {
+                    window.drafftinkExportFolderReady=false;
+                    saveStatus('Réautoriser le dossier PNG dans Settings.');window.__drafftinkPngFailed=true;return false;
+                }
+                filename=filename.replace(/[<>:"/\\|?*\x00-\x1f]/g,'_').replace(/[. ]+$/g,'') || 'DrafftInk.png';
+                const file=await handle.getFileHandle(filename,{create:true});
+                const stream=await file.createWritable();
+                try {await stream.write(blob);await stream.close();}
+                catch(error){await stream.abort?.();throw error;}
+                window.drafftinkExportFolderReady=true;window.__drafftinkPngFailed=false;
+                saveStatus('PNG enregistré : '+filename);
                 return true;
-            } catch (error) {
-                console.warn('DrafftInk export folder unavailable:', error);
-                return false;
-            }
+            } catch(error) {
+                window.__drafftinkPngFailed=true;saveStatus('Échec PNG : vérifier le dossier dans Settings.');
+                console.warn('DrafftInk export folder unavailable:',error);return false;
+            } finally {window.drafftinkDiskSaveBusy=false;}
         };
 
         // The app uses WebGPU. Give a clear message before fetching the WASM
