@@ -11,7 +11,8 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  WASM_PACK_VERSION: 0.16.0
+  # Tool version is independent of VERSION_LOCAL; keep its verified checksum.
+  WASM_PACK_VERSION: 0.15.0
   WASM_PACK_SHA256: c09f971ecaed9a2efc80fdcea7a00ef6b53c7fadc8c57d1f61b53a6aa66b668a
 
 jobs:
