@@ -773,6 +773,12 @@ fn apply_box_resize(shape: &mut Shape, kind: HandleKind, delta: kurbo::Vec2, asp
             rect.height = nh.abs();
         }
         Shape::Ellipse(ellipse) => {
+            if nw < 0.0 {
+                ellipse.flip_x = !ellipse.flip_x;
+            }
+            if nh < 0.0 {
+                ellipse.flip_y = !ellipse.flip_y;
+            }
             ellipse.center = center;
             ellipse.radius_x = nw.abs() / 2.0;
             ellipse.radius_y = nh.abs() / 2.0;

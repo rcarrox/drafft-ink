@@ -41,7 +41,7 @@ function inspectCapture(file) {
 (async () => {
   const browser = await chromium.launch({ channel: 'chromium', headless: true, args: ['--enable-unsafe-webgpu', '--use-angle=swiftshader'] });
   const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, permissions: ['clipboard-read','clipboard-write'] });
-  await context.addInitScript(() => localStorage.setItem('drafftink.user_settings.v1', JSON.stringify({ restore_last_document: false, intro_json: '', autosave_enabled: false, default_font: 'Noto Sans', default_font_postscript: '' })));
+  await context.addInitScript(() => localStorage.setItem('drafftink.user_settings.v1', JSON.stringify({ restore_last_document: false, intro_json: '', autosave_enabled: false, hide_properties: false, default_font: 'Noto Sans', default_font_postscript: '' })));
   let page = await context.newPage();
   const logs = [];
   page.on('console', message => logs.push(message.type() + ': ' + message.text()));
@@ -104,6 +104,36 @@ function inspectCapture(file) {
   };
   const fill = async (name, value) => { await control(name); await page.keyboard.press('Control+a'); await keys(value); };
   try {
+    // Default contextual properties and shape chooser, without altering the
+    // legacy suite's explicit always-visible properties preference.
+    const mainPage = page;
+    const geometryContext = await browser.newContext({viewport:{width:1280,height:720}});
+    await geometryContext.addInitScript(()=>localStorage.setItem('drafftink.user_settings.v1',JSON.stringify({restore_last_document:false,autosave_enabled:false,default_font:'Noto Sans',default_font_postscript:''})));
+    page = await geometryContext.newPage();
+    await page.goto(process.env.DRAFFTINK_TEST_URL || 'http://127.0.0.1:8888/?drafftink-test=1');
+    await wait(s=>s.shapes.length===0&&!s.properties_visible);
+    assert.equal(await page.title(),'draphtInQ');
+    await page.mouse.move(400,300);await page.waitForTimeout(100);
+    await page.keyboard.press('o');await wait(s=>s.tool==='Ellipse'&&s.geometry==='Ellipse');
+    await page.keyboard.press('o');await wait(s=>s.geometry==='Triangle');
+    await page.mouse.move(300,270);await page.mouse.down();await page.mouse.move(460,410,{steps:8});await page.mouse.up();
+    const tri = await wait(s=>s.shapes.some(i=>i.shape.Ellipse?.geometry==='Triangle'));
+    assert(!tri.properties_visible);
+    await page.keyboard.press('Control+z');await wait(s=>s.shapes.length===0);
+    await page.keyboard.press('Control+Shift+z');await wait(s=>s.shapes.length===1);
+    await page.mouse.move(380,270);await page.waitForTimeout(100);
+    await page.mouse.click(380,270,{button:'right',delay:60});
+    await wait(s=>s.context_properties&&s.properties_visible);
+    await page.mouse.move(600,500);await page.waitForTimeout(100);await page.mouse.click(600,500);
+    await wait(s=>!s.context_properties&&!s.properties_visible);
+    const ellipseButton=(await state()).controls.tool_Ellipse;
+    await page.mouse.move((ellipseButton[0]+ellipseButton[2])/2,(ellipseButton[1]+ellipseButton[3])/2);await page.waitForTimeout(100);
+    await page.mouse.click((ellipseButton[0]+ellipseButton[2])/2,(ellipseButton[1]+ellipseButton[3])/2,{button:'right',delay:60});
+    await control('geometry_Trapezoid');await wait(s=>s.geometry==='Trapezoid');
+    await page.mouse.move(700,270);await page.waitForTimeout(100);await page.mouse.down();await page.mouse.move(850,410,{steps:8});await page.mouse.up();
+    await wait(s=>s.shapes.some(i=>i.shape.Ellipse?.geometry==='Trapezoid'));
+    await snapshot(page,'geometry-context.png');
+    await geometryContext.close();page=mainPage;
     await page.goto(process.env.DRAFFTINK_TEST_URL || 'http://127.0.0.1:8888/?drafftink-test=1');
     await wait(s => s.shapes.length === 0);
     await snapshot(page,'initial.png');
@@ -233,7 +263,11 @@ function inspectCapture(file) {
     // Original characters and font-dependent scripts, including symbols without Unicode script glyphs.
     const nextScriptTab=(await state()).active_tab+1;await control('New canvas');await wait(s=>s.active_tab===nextScriptTab&&s.shapes.length===0);
     await focusCanvasTool('t');await wait(s=>!!s.editing_text);
-    await keys('Base ');await page.keyboard.press('Control+ArrowUp');await keys('AZ09α≤@');await page.keyboard.press('Control+ArrowUp');await keys(' fin');
+    await keys('Base ');await wait(s=>!!s.text_caret);
+    const normalCaret=(await state()).text_caret;
+    await page.keyboard.press('Control+ArrowUp');const supState=await wait(s=>s.insertion_script===1);
+    assert(supState.text_caret[3]-supState.text_caret[1]<normalCaret[3]-normalCaret[1]);assert(supState.text_caret[1]<normalCaret[1]);
+    await keys('AZ09α≤@');await page.keyboard.press('Control+ArrowUp');await keys(' fin');
     const scriptText=s=>s.shapes.find(item=>item.id===s.editing_text)?.shape.Text;
     await wait(s=>scriptText(s)?.content==='Base AZ09α≤@ fin');
     await wait(s=>scriptText(s).char_styles.slice(5,12).every(style=>style.script===1));

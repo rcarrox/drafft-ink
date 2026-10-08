@@ -28,7 +28,7 @@ if not exist ".drafftink-server.pid" (
 :menu
 cls
 echo ======================================
-echo           DrafftInk Local 0.2.0
+echo           draphtInQ 0.14.0
 echo ======================================
 echo.
 echo   1 - Google Chrome

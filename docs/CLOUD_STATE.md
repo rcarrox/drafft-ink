@@ -26,3 +26,30 @@ La PR #14 centralise la fusion et la provenance du ZIP final DrafftInk_Windows_P
 Pour reprendre, vérifier main/PR #14 et les workflows CI / Build DrafftInk Portable du commit fusionné.
 Un aperçu isolé port 8897 reste ouvert ; préserver sa feuille et l'onglet utilisateur 8887.
 Ne jamais utiliser les attentes download de Cua (ancien blocage) ; télécharger via le connecteur GitHub.
+
+## Reprise 0.14.0 — draphtInQ / formes / saisie
+
+Base main 9709a6062a13ed28aefdd86ad40e964108f7f4a4 (0.13 livrée, PR14).
+Branche codex/0.14.0-branding-shapes, PR15. Travail local toujours autorisé,
+compilation Rust/WASM exclusivement GitHub Actions. Validation en cours : ne pas annoncer fusion/livraison avant les workflows et la vérification du ZIP.
+
+Nom d'application draphtInQ et favicon SVG noir transparent fourni par l'utilisateur.
+Caret Text petit/décalé selon le mode Ctrl+haut/bas avant toute saisie ; glyphes
+Math mesurés et dessinés avec la même police primaire, structures MATH conservées.
+Catalogue de glyphes partagé ; pas de nouvelles allocations du catalogue par formule.
+U+FFFC reste dans le document mais sa représentation de layout est U+200B (mêmes
+offsets UTF8), supprimant le symbole OBJ. root(x,n) ouvre le mini éditeur, imbrication conservée.
+
+Masquer les propriétés est activé par défaut dans Settings ; clic droit sur l'objet
+ouvre les panneaux, clic extérieur les referme. Préférence inverse conserve les panneaux.
+Menu clic droit Ellipse : ellipse/triangle/parallélogramme/trapèze/losange ; répétition
+du raccourci configuré cycle les variantes (maintien ne cycle pas). Icône suit la forme.
+Variantes géométriques dans Shape::Ellipse.geometry avec défaut rétrocompatible,
+path/hit-test/miroirs locaux, mêmes styles, rotation, resize et Undo/Redo. Pas de collaboration.
+
+Tests ajoutés : métriques police, caret, chemins/hit-test/JSON ancien et nouveau,
+root imbriqué et interactions Chromium du menu et des panneaux. La suite historique
+fixe explicitement hide_properties=false pour tester l'ancien affichage permanent.
+Limite connue GPU logiciel : lire les résultats de capture séparément ; ne pas affirmer
+une validation de pixels quand WebGPU perd son instance. Aucune mesure Edge RAM nouvelle.
+Préserver le canvas ouvert port8897 et l'onglet8887 ; utiliser un aperçu isolé pour tester.

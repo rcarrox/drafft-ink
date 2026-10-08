@@ -1329,9 +1329,10 @@ impl VelloRenderer {
             }
         };
 
+        let layout_text = text.content.replace('￼', "​");
         let mut builder =
             self.layout_cx
-                .ranged_builder(&mut self.font_cx, &text.content, 1.0, false);
+                .ranged_builder(&mut self.font_cx, &layout_text, 1.0, false);
         for &(id, index, width, height) in &inline {
             builder.push_inline_box(parley::InlineBox {
                 id,
@@ -1398,7 +1399,7 @@ impl VelloRenderer {
             byte_offset += ch.len_utf8();
         }
 
-        let mut layout = builder.build(&text.content);
+        let mut layout = builder.build(&layout_text);
         layout.break_all_lines(None);
         layout.align(
             None,
@@ -1425,6 +1426,9 @@ impl VelloRenderer {
                     + text_script_offset(text, glyph_run.run().text_range().start)
                     - crate::text_editor::inline_baseline_shift(&line, text.font_size as f32);
                 let run = glyph_run.run();
+                if run.font_size() <= 0.0 {
+                    continue;
+                }
                 let font = run.font();
                 let run_font_size = run.font_size();
                 let synthesis = run.synthesis();
@@ -1668,7 +1672,8 @@ impl VelloRenderer {
         let Ok(nodes) = rex::parser::parse(&math.latex) else {
             return false;
         };
-        let engine = LayoutBuilder::new(&math_font)
+        let mixed_font = crate::rex_backend::MixedMathFont::new(math_font, primary_face);
+        let engine = LayoutBuilder::new(&mixed_font)
             .font_size(math.font_size)
             .build();
         let Ok(layout) = engine.layout(&nodes) else {
@@ -1678,8 +1683,8 @@ impl VelloRenderer {
         let mut scene = Scene::new();
         let mut backend = VelloBackend::new(
             &mut scene,
-            &math_font,
-            primary_face.as_ref(),
+            &mixed_font.math,
+            mixed_font.primary.as_ref(),
             Affine::IDENTITY,
             math.style.stroke_with_opacity(),
         );
@@ -1833,7 +1838,7 @@ impl VelloRenderer {
         }
 
         // Get the current text content from the editor
-        let editor_text: String = edit_state.editor().text().to_string();
+        let editor_text: String = edit_state.editor().text().to_string().replace('￼', "​");
 
         // Build a layout with per-character colors (PlainEditor doesn't support ranged styles)
         let mut builder =
@@ -1976,6 +1981,9 @@ impl VelloRenderer {
                     + text_script_offset(text, glyph_run.run().text_range().start)
                     - crate::text_editor::inline_baseline_shift(&line, text.font_size as f32);
                 let run = glyph_run.run();
+                if run.font_size() <= 0.0 {
+                    continue;
+                }
                 let font = run.font();
                 let font_size = run.font_size();
                 let synthesis = run.synthesis();
@@ -2446,6 +2454,9 @@ impl VelloRenderer {
                 let mut x = glyph_run.offset();
                 let y = glyph_run.baseline();
                 let run = glyph_run.run();
+                if run.font_size() <= 0.0 {
+                    continue;
+                }
                 let font = run.font();
                 let font_size = run.font_size();
 

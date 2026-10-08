@@ -1865,7 +1865,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            title: "DrafftInk".to_string(),
+            title: "draphtInQ".to_string(),
             width: 1280,
             height: 800,
             grid_style: GridStyle::Lines,
@@ -3493,6 +3493,14 @@ impl ApplicationHandler for App {
                     if let Some(action) = render_ui(ctx, &mut state.ui_state, &selected_props) {
                         ui_action_taken = true;
                         match action.clone() {
+                            UiAction::SetGeometry(kind) => {
+                                state.ui_state.geometry = kind;
+                                state.canvas.tool_manager.geometry = kind;
+                                state.canvas.set_tool(ToolKind::Ellipse);
+                                state.ui_state.current_tool = ToolKind::Ellipse;
+                                state.ui_state.sloppiness =
+                                    drafftink_core::shapes::Sloppiness::Architect;
+                            }
                             UiAction::SetTool(tool) => {
                                 state.ui_state.text_command_editor = None;
                                 if tool != ToolKind::Text {
@@ -5220,7 +5228,7 @@ impl ApplicationHandler for App {
                             serde_json::json!({"id":shape.id(),"shape":shape,"bounds":[top_left.x,top_left.y,bottom_right.x,bottom_right.y],"handles":handles})
                         }).collect();
 
-                        let status = serde_json::json!({"shapes":shapes,"presentation":state.ui_state.presentation_mode,"tool":format!("{:?}",state.ui_state.current_tool),"editing_text":state.event_handler.editing_text,"inline_dialog":state.ui_state.inline_formula_draft.is_some(),"inline_error":state.ui_state.inline_formula_error,"zoom":state.canvas.camera.zoom,"png_save_requests":state.png_save_requests,"active_tab":state.active_tab,"tabs":state.tabs.len(),"memory":{"parked_shapes_total":state.tabs.iter().map(|tab|tab.document.len()).sum::<usize>(),"image_cache_bytes":state.shape_renderer.image_cache_bytes(),"image_cache_budget_bytes":32*1024*1024,"path_cache_payload_bytes":state.shape_renderer.path_cache_bytes(),"history_payload_bytes":state.canvas.document.history_memory_bytes(),"render_target_allocations":state.render_target_allocations,"render_target_bytes":state.surface.config.width as u64*state.surface.config.height as u64*4},"editing_math":state.ui_state.math_editor.as_ref().map(|e| e.shape_id),"math_input_focused":state.ui_state.math_editor.as_ref().is_some_and(|e|state.egui_ctx.memory(|m|m.focused()==Some(egui::Id::new(("math_source",e.shape_id))))),"command_editor":state.ui_state.text_command_editor.as_ref().map(|e| &e.source),"controls":state.ui_state.test_controls});
+                        let status = serde_json::json!({"shapes":shapes,"presentation":state.ui_state.presentation_mode,"tool":format!("{:?}",state.ui_state.current_tool),"editing_text":state.event_handler.editing_text,"inline_dialog":state.ui_state.inline_formula_draft.is_some(),"inline_error":state.ui_state.inline_formula_error,"zoom":state.canvas.camera.zoom,"png_save_requests":state.png_save_requests,"active_tab":state.active_tab,"tabs":state.tabs.len(),"memory":{"parked_shapes_total":state.tabs.iter().map(|tab|tab.document.len()).sum::<usize>(),"image_cache_bytes":state.shape_renderer.image_cache_bytes(),"image_cache_budget_bytes":32*1024*1024,"path_cache_payload_bytes":state.shape_renderer.path_cache_bytes(),"history_payload_bytes":state.canvas.document.history_memory_bytes(),"render_target_allocations":state.render_target_allocations,"render_target_bytes":state.surface.config.width as u64*state.surface.config.height as u64*4},"geometry":format!("{:?}",state.ui_state.geometry),"context_properties":state.ui_state.context_properties,"properties_visible":!state.ui_state.context_rects.is_empty(),"insertion_script":state.text_edit_state.as_ref().map(|e|e.script_value()),"text_caret":state.text_edit_state.as_ref().and_then(|e|e.cursor_geometry(1.5)).map(|r|[r.x0,r.y0,r.x1,r.y1]),"editing_math":state.ui_state.math_editor.as_ref().map(|e| e.shape_id),"math_input_focused":state.ui_state.math_editor.as_ref().is_some_and(|e|state.egui_ctx.memory(|m|m.focused()==Some(egui::Id::new(("math_source",e.shape_id))))),"command_editor":state.ui_state.text_command_editor.as_ref().map(|e| &e.source),"controls":state.ui_state.test_controls});
                         let _ = js_sys::Reflect::set(
                             window.as_ref(),
                             &JsValue::from_str("__drafftinkTestState"),
@@ -5661,6 +5669,25 @@ impl ApplicationHandler for App {
                 };
 
                 let position = state.input.mouse_position();
+                if mouse_btn == MouseButton::Right && btn_state == ElementState::Pressed {
+                    let point = state.canvas.camera.screen_to_world(position);
+                    if let Some(id) = state
+                        .canvas
+                        .document
+                        .shapes_at_point(point, 5.0 / state.canvas.camera.zoom)
+                        .first()
+                        .copied()
+                    {
+                        if !state.canvas.selection.contains(&id) {
+                            state.canvas.clear_selection();
+                            state.canvas.selection.push(id);
+                        }
+                        state.ui_state.context_properties = true;
+                        state.needs_redraw = true;
+                        state.window.request_redraw();
+                    }
+                    return;
+                }
 
                 match btn_state {
                     ElementState::Pressed => {
@@ -6881,6 +6908,16 @@ impl ApplicationHandler for App {
                                 }
                                 key if state.ui_state.settings.tool_for_key(key).is_some() => {
                                     if let Some(tool) = state.ui_state.settings.tool_for_key(key) {
+                                        if tool == ToolKind::Ellipse
+                                            && state.canvas.tool_manager.current_tool
+                                                == ToolKind::Ellipse
+                                            && !event.repeat
+                                        {
+                                            state.ui_state.geometry =
+                                                state.ui_state.geometry.next();
+                                            state.canvas.tool_manager.geometry =
+                                                state.ui_state.geometry;
+                                        }
                                         if tool != ToolKind::Text {
                                             if state.event_handler.editing_text.is_some() {
                                                 state

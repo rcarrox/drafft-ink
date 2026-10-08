@@ -535,7 +535,7 @@ pub fn dead_caret_text(text: &str) -> String {
 /// Match a complete command prefix immediately before the text caret.
 pub fn text_command_prefix(text: &str, caret: usize) -> Option<(usize, &'static str)> {
     let prefix = text.get(..caret)?;
-    for name in ["sum", "prod", "int", "lim", "sqrt", "frac", "bin"] {
+    for name in ["sum", "prod", "int", "lim", "sqrt", "root", "frac", "bin"] {
         let marker = format!("{name}(");
         if prefix.ends_with(&marker) {
             let start = prefix.len() - marker.len();
@@ -652,6 +652,21 @@ mod binomial_and_infinity_tests {
         assert_eq!(
             friendly_math_to_latex(r"\int_{0}^{∞} x"),
             r"\int_{0}^{\infty } x"
+        );
+    }
+}
+
+#[cfg(test)]
+mod live_root_tests {
+    #[test]
+    fn root_prefix_nested_preview() {
+        assert_eq!(
+            super::text_command_prefix("root(", 5),
+            Some((0, "root".into()))
+        );
+        assert_eq!(
+            super::friendly_math_to_latex("root(frac(a,b),3)"),
+            r"\sqrt[3]{\frac{a}{b}}"
         );
     }
 }
