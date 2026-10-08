@@ -190,6 +190,13 @@ impl TextEditState {
         }
     }
 
+    pub fn script_value(&self) -> i8 {
+        match self.script_mode {
+            ScriptMode::Normal => 0,
+            ScriptMode::Superscript => 1,
+            ScriptMode::Subscript => -1,
+        }
+    }
     pub fn set_rich_layout(&mut self, layout: parley::Layout<Brush>) {
         self.rich_layout = Some(layout);
     }
@@ -621,39 +628,18 @@ impl TextEditState {
             TextKey::Paste(ref text) => {
                 drv.insert_or_replace_selection(text);
             }
-            TextKey::ToggleSuperscript => {
+            TextKey::ToggleSuperscript | TextKey::ToggleSubscript => {
                 drop(drv);
-                if let Some(selected) = self.editor.selected_text().map(str::to_string) {
-                    let converted = convert_script_text(&selected, ScriptMode::Superscript);
-                    let mut drv = self.editor.driver(font_cx, layout_cx);
-                    drv.insert_or_replace_selection(&converted);
-                    drop(drv);
-                    self.script_mode = ScriptMode::Normal;
+                let wanted = if matches!(key, TextKey::ToggleSuperscript) {
+                    ScriptMode::Superscript
                 } else {
-                    self.script_mode = if self.script_mode == ScriptMode::Superscript {
-                        ScriptMode::Normal
-                    } else {
-                        ScriptMode::Superscript
-                    };
-                }
-                self.update_layout_cache(font_cx, layout_cx);
-                return TextEditResult::Handled;
-            }
-            TextKey::ToggleSubscript => {
-                drop(drv);
-                if let Some(selected) = self.editor.selected_text().map(str::to_string) {
-                    let converted = convert_script_text(&selected, ScriptMode::Subscript);
-                    let mut drv = self.editor.driver(font_cx, layout_cx);
-                    drv.insert_or_replace_selection(&converted);
-                    drop(drv);
-                    self.script_mode = ScriptMode::Normal;
+                    ScriptMode::Subscript
+                };
+                self.script_mode = if self.script_mode == wanted {
+                    ScriptMode::Normal
                 } else {
-                    self.script_mode = if self.script_mode == ScriptMode::Subscript {
-                        ScriptMode::Normal
-                    } else {
-                        ScriptMode::Subscript
-                    };
-                }
+                    wanted
+                };
                 self.update_layout_cache(font_cx, layout_cx);
                 return TextEditResult::Handled;
             }
@@ -671,8 +657,7 @@ impl TextEditState {
                             self.script_mode = ScriptMode::Normal;
                             drv.insert_or_replace_selection(" ");
                         } else {
-                            let converted = convert_script_text(c, self.script_mode);
-                            drv.insert_or_replace_selection(&converted);
+                            drv.insert_or_replace_selection(c);
                         }
                     } else {
                         drv.insert_or_replace_selection(c);
@@ -981,7 +966,7 @@ pub(crate) fn inline_baseline_shift(line: &parley::layout::Line<'_, Brush>, size
         .find(|run| run.font_size() > 0.0)
         .map(|run| {
             let font = run.font();
-            font_math_axis(font.data.data(), font.index, run.font_size())
+            font_math_axis(font.data.data(), font.index, size)
         })
         .unwrap_or(size * 0.27);
     height * 0.5 - axis

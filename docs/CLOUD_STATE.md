@@ -1,14 +1,11 @@
-# État de reprise — 0.11.0
+# Reprise — 0.12.0
 
-7 octobre 2026. Travail local autorisé ; Rust/WASM compilés exclusivement par GitHub Actions.
-Branche codex/0.11.0-memory-budget. Lire la PR de cette branche pour les statuts CI/fusion/artefacts finaux.
+8 octobre 2026. Branche codex/0.12.0-text-save-controls ; lire sa PR pour validation/fusion/artefact exacts. Travail local autorisé, Rust/WASM exclusivement Actions.
 
-Demande : alléger l’application, cible comparable aux 200 Mo de Paint.NET. Les 800 Mo précédemment relevés étaient l’ensemble d’Edge dans Windows ; ne pas attribuer ce total à l’onglet et ne pas annoncer un total inférieur à 200 Mo sans mesure comparable.
+Demandes : nudge fin 1 pixel vs Shift pas20 historique et répétition ; vrais styles exposant/indice sur tout caractère de Text ; font parent appliquée aux chiffres/lettres des formules inline ; Ctrl+S PNG complet et autoPNG périodique dans dossier autorisé ; vitesse pinch2× configurable ; Stroke plus compact. EXE uniquement une question : ne pas construire/remplacer Chrome/Edge sans demande. Une version native pourrait réduire le coût navigateur mais doit conserver fonts/touchpad et être mesurée ; wrapperElectron conserveChromium.
 
-Changements en validation : réutilisation texture d’écran/scène ; moteur GPU Area-only et partagé à l’export ; readback libéré avant encodage PNG ; cache LRU images 32 Mio avec aperçus zoom/2048 px, export original complet sans rétention de son décodage ; caches des canvas inactifs libérés ; documents/historiques déplacés entre canvas sans copie ; historique de payloads clonés 16 Mio et cache de géométrie environ 4 Mio ; WASM chargé par streaming ; diagnostics de composants et de mémoire WASM/JS. Les budgets de cache ne sont pas la RAM totale. Le moteur Vello conserve des réserves GPU fixes importantes ; ne pas les réduire aveuglément sans protection contre les dépassements.
+En validation. SourceAuto précédente écrivait uniquementIndexedDB ; garder récupération maisajouterPNG.Ctrl+Shift+S JSON. Autosave sanspermission ne doit pas télécharger ni demanderpermission enarrière-plan. Statutvisible,récupérationaprèséchec,unchangedskip. Les caractères restentinchangés.JSONscriptdefault0compatible. Préservermémoire0.11,pinchpan,Beeftext,cropmirrorUndo et math. Pas deprivatefonts publiées. TestsGPUlogicielCIlimités,ne pasaffirmerpixelsvalides surcaptureuniforme.
 
-Tests ciblés natifs et Chromium : aperçus/qualité originale/JSON source inchangée, LRU et suppression des caches, historique Undo/Redo, absence d’accumulation des chemins pendant drag, réutilisation texture et basculement retour entre deux canvas. Maintenir les régressions 0.10 et le pinch/pan.
+Dernière livraison0.11 : mainb7c6440e1bedee6e90e77f34aac4dd061eb3ff6e, PR12, CI37715815143/Portable37715815060 réussis. ZipSHA2565d42480cd9c552d0df647409aac5bcfbfbdc0e6255148ec55827678de0556233. 200MoEdgeTotalnonvérifié ; WASM21%de moins cas2images.
 
-Dernière livraison : 0.10.0, main04b84a6534f8e020b6571c08dd165ba6347e9d09, PR #11 fusionnée, CI37660570262 et portable37660570353 réussis. ZIP SHA256c3d8dba54a211d35d2a5cef561d54821d5322dac714d80e37837e3b8b6aee662. Publication exacte dans la description de PR11.
-
-Les vérifications visuelles restent locales ; le WebGPU logiciel du CI peut perdre son instance et les captures uniformes sont signalées comme indisponibles, jamais comme succès visuel. Les événements Beeftext sont simulés. Clippy historique non bloquant. Aucun environnement Codex Cloud publié par cette tâche. Aucune police privée publiée.
+IMPORTANTOUTILS : ne jamais réessayer Cua.waitForEvent(download) ; a bloqué20958secondes. TéléchargerlesartifactsviaGitHub et testerfilesystemavecVM/mocks/CI plutôtqu’attendreunévénementdedownloadducontrôleurnavigateur. Usertab8887 àpréserver.

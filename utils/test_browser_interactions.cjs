@@ -173,6 +173,22 @@ function inspectCapture(file) {
     await wait(s=>s.shapes.find(item=>item.id===commandId)?.shape.Text.display_scale[0]<0);
     await page.keyboard.press('Control+z');await wait(s=>s.shapes.find(item=>item.id===commandId)?.shape.Text.display_scale[0]>0);
 
+    // One physical render pixel for a normal arrow, historical GRID_SIZE for Shift.
+    const nudgeBefore=(await state()).shapes.find(item=>item.id===commandId);
+    await page.keyboard.press('ArrowRight');await wait(s=>Math.abs(s.shapes.find(item=>item.id===commandId).bounds[0]-nudgeBefore.bounds[0]-1)<0.01);
+    const nudgeFine=(await state()).shapes.find(item=>item.id===commandId);
+    await page.keyboard.press('Shift+ArrowRight');await wait(s=>Math.abs(s.shapes.find(item=>item.id===commandId).bounds[0]-nudgeFine.bounds[0]-20*s.zoom)<0.01);
+    // Original characters and font-dependent scripts, including symbols without Unicode script glyphs.
+    await page.keyboard.press('t');await page.mouse.click(700,420);await wait(s=>!!s.editing_text);
+    await keys('Base ');await page.keyboard.press('Control+ArrowUp');await keys('AZ09α≤@');await page.keyboard.press('Control+ArrowUp');await keys(' fin');
+    const scriptText=s=>s.shapes.find(item=>item.id===s.editing_text)?.shape.Text;
+    await wait(s=>scriptText(s)?.content==='Base AZ09α≤@ fin');
+    await wait(s=>scriptText(s).char_styles.slice(5,12).every(style=>style.script===1));
+    await page.keyboard.press('Control+a');await page.keyboard.press('Control+ArrowDown');await wait(s=>scriptText(s).char_styles.every(style=>style.script===-1));
+    const saveCount=(await state()).png_save_requests;
+    await page.keyboard.press('Control+s');await wait(s=>s.png_save_requests===saveCount+1);
+    await page.keyboard.press('Escape');await wait(s=>s.editing_text===null);
+
     // Separate browser context with a public, deterministic 1200x2000 PNG fixture.
     const imageContext = await browser.newContext({viewport:{width:1280,height:720}});
     const imageId='00000000-0000-4000-8000-000000000001';

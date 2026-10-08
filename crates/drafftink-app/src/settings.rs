@@ -21,6 +21,7 @@ pub struct UserSettings {
     pub intro_json: String,
     pub intro_name: String,
     pub export_folder_name: String,
+    pub touchpad_zoom_speed: f64,
     pub autosave_enabled: bool,
     pub autosave_interval_secs: u64,
     pub restore_last_document: bool,
@@ -52,6 +53,7 @@ impl Default for UserSettings {
             intro_json: String::new(),
             intro_name: String::new(),
             export_folder_name: String::new(),
+            touchpad_zoom_speed: 2.0,
             autosave_enabled: true,
             autosave_interval_secs: 5,
             restore_last_document: true,
@@ -130,6 +132,11 @@ impl UserSettings {
     }
 
     pub fn sanitize(&mut self) {
+        self.touchpad_zoom_speed = if self.touchpad_zoom_speed.is_finite() {
+            self.touchpad_zoom_speed.clamp(0.25, 8.0)
+        } else {
+            2.0
+        };
         self.autosave_interval_secs = self.autosave_interval_secs.clamp(1, 3600);
 
         // Migrate the 0.4.x defaults to the new 0.5.x layout without

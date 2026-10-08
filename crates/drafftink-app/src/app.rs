@@ -463,7 +463,7 @@ pub mod file_ops {
     /// Save document to IndexedDB (real persistence).
     pub fn save_document(document: &CanvasDocument, name: &str) {
         let doc_id = name.to_string();
-        let doc_clone = document.clone();
+        let doc_clone = document.persisted_copy();
 
         STORAGE.with(|storage| {
             let storage = storage.clone();
@@ -486,7 +486,7 @@ pub mod file_ops {
 
     /// Auto-save document to IndexedDB (silent, no logging).
     pub fn autosave_document(document: &CanvasDocument) {
-        let doc_clone = document.clone();
+        let doc_clone = document.persisted_copy();
 
         STORAGE.with(|storage| {
             let storage = storage.clone();
@@ -726,6 +726,52 @@ pub mod file_ops {
     /// Export PNG (triggers browser download).
     pub fn export_png(png_data: &[u8], name: &str) {
         download_binary_file(&format!("{}.png", name), png_data, "image/png");
+    }
+
+    pub fn browser_flag(name: &str) -> bool {
+        web_sys::window()
+            .and_then(|w| js_sys::Reflect::get(&w, &name.into()).ok())
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    }
+    pub fn save_status() -> String {
+        web_sys::window()
+            .and_then(|w| js_sys::Reflect::get(&w, &"drafftinkSaveStatus".into()).ok())
+            .and_then(|v| v.as_string())
+            .unwrap_or_default()
+    }
+    pub fn export_png_automatic(bytes: &[u8], name: &str) {
+        let data = js_sys::Uint8Array::from(bytes);
+        let parts = js_sys::Array::new();
+        parts.push(&data);
+        let options = web_sys::BlobPropertyBag::new();
+        options.set_type("image/png");
+        let Ok(blob) = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &options)
+        else {
+            return;
+        };
+        let name = name.to_string();
+        wasm_bindgen_futures::spawn_local(async move {
+            let Some(window) = web_sys::window() else {
+                return;
+            };
+            if let Ok(value) =
+                js_sys::Reflect::get(&window, &"drafftinkSaveBlobToExportDirectory".into())
+            {
+                if let Ok(function) = value.dyn_into::<js_sys::Function>() {
+                    let args = js_sys::Array::new();
+                    args.push(&name.into());
+                    args.push(&blob);
+                    args.push(&JsValue::TRUE);
+                    if let Ok(promise) = function
+                        .apply(&window, &args)
+                        .and_then(|v| v.dyn_into::<js_sys::Promise>())
+                    {
+                        let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+                    }
+                }
+            }
+        });
     }
 
     /// Copy PNG to clipboard using the async Clipboard API.
@@ -1538,6 +1584,32 @@ pub fn spawn_png_export_async(
     is_copy: bool,
     scene_json: Option<String>,
 ) {
+    spawn_png_export_async_mode(
+        vello_renderer,
+        device,
+        queue,
+        scene,
+        width,
+        height,
+        filename,
+        is_copy,
+        scene_json,
+        false,
+    );
+}
+#[cfg(target_arch = "wasm32")]
+fn spawn_png_export_async_mode(
+    vello_renderer: &mut vello::Renderer,
+    device: &vello::wgpu::Device,
+    queue: &vello::wgpu::Queue,
+    scene: Scene,
+    width: u32,
+    height: u32,
+    filename: String,
+    is_copy: bool,
+    scene_json: Option<String>,
+    automatic: bool,
+) {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     if width == 0 || height == 0 {
@@ -1545,6 +1617,7 @@ pub fn spawn_png_export_async(
         return;
     }
 
+    let busy_guard = PngBusyGuard::new();
     log::info!("Starting async PNG export: {}x{}", width, height);
 
     // Share the display renderer and scratch buffers; GPU submissions remain ordered.
@@ -1641,6 +1714,7 @@ pub fn spawn_png_export_async(
     // Spawn async task to poll and wait for mapping
     // Move readback_buffer into the task so we can access it after mapping completes
     wasm_bindgen_futures::spawn_local(async move {
+        let mut _busy_guard = busy_guard;
         // Poll and yield until the callback fires
         let mut attempts = 0u32;
         const MAX_ATTEMPTS: u32 = 600; // ~10 seconds at 60fps
@@ -1692,9 +1766,12 @@ pub fn spawn_png_export_async(
             }
         };
 
+        _busy_guard.0 = true;
         // Either copy to clipboard or trigger download
         if is_copy {
             file_ops::copy_png_to_clipboard(png_data);
+        } else if automatic {
+            file_ops::export_png_automatic(&png_data, &filename);
         } else {
             file_ops::export_png(&png_data, &filename.trim_end_matches(".png"));
             log::info!("PNG export complete: {} bytes", png_data.len());
@@ -1876,6 +1953,9 @@ struct AppState {
     egui_renderer: egui_wgpu::Renderer,
     ui_state: UiState,
     ui_keyboard_pending: bool,
+    pending_png_save: Option<bool>,
+    last_png_signature: u64,
+    png_save_requests: u64,
 
     // State
     canvas: Canvas,
@@ -2242,6 +2322,9 @@ impl App {
             egui_renderer,
             ui_state: UiState::default(),
             ui_keyboard_pending: false,
+            pending_png_save: None,
+            last_png_signature: 0,
+            png_save_requests: 0,
             canvas,
             tabs: vec![TabState {
                 name: "Canvas".to_string(),
@@ -2736,6 +2819,23 @@ impl ApplicationHandler for App {
             }
         }
 
+        if let WindowEvent::KeyboardInput { event, .. } = &event {
+            if event.state == ElementState::Pressed
+                && !event.repeat
+                && state.input.ctrl()
+                && matches!(&event.logical_key,Key::Character(c) if c.eq_ignore_ascii_case("s"))
+            {
+                if state.input.shift() {
+                    file_ops::save_document(&state.canvas.document, &state.canvas.document.name);
+                } else {
+                    state.pending_png_save = Some(false);
+                }
+                state.needs_redraw = true;
+                state.window.request_redraw();
+                return;
+            }
+        }
+
         // Let egui process the event first
         let egui_response = state.egui_state.on_window_event(&state.window, &event);
 
@@ -3042,6 +3142,7 @@ impl ApplicationHandler for App {
                             {
                                 text.content = new_text;
                                 text.sync_spans_after_edit(&old_text);
+                                text.set_inserted_script(&old_text, edit_state.script_value());
                             }
                         }
                     }
@@ -3267,6 +3368,9 @@ impl ApplicationHandler for App {
                             >= state.ui_state.settings.autosave_interval_secs.max(1)
                     {
                         file_ops::autosave_document(&state.canvas.document);
+                        if state.pending_png_save.is_none() {
+                            state.pending_png_save = Some(true);
+                        }
                         state.last_autosave = web_time::Instant::now();
                     }
                 }
@@ -4980,6 +5084,16 @@ impl ApplicationHandler for App {
 
                 let smart_guides = state.event_handler.smart_guides.clone();
 
+                if let Some(automatic) = state.pending_png_save.take() {
+                    if let Some(render_cx) = self.render_cx.as_ref() {
+                        save_canvas_png(state, render_cx, automatic);
+                    }
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    state.ui_state.save_status = file_ops::save_status();
+                }
+
                 let render_ctx = RenderContext::new(&state.canvas, viewport_size)
                     .with_scale_factor(state.window.scale_factor())
                     .with_background(state.config.background_color)
@@ -5024,7 +5138,7 @@ impl ApplicationHandler for App {
                             serde_json::json!({"id":shape.id(),"shape":shape,"bounds":[top_left.x,top_left.y,bottom_right.x,bottom_right.y],"handles":handles})
                         }).collect();
 
-                        let status = serde_json::json!({"shapes":shapes,"presentation":state.ui_state.presentation_mode,"tool":format!("{:?}",state.ui_state.current_tool),"editing_text":state.event_handler.editing_text,"inline_dialog":state.ui_state.inline_formula_draft.is_some(),"inline_error":state.ui_state.inline_formula_error,"active_tab":state.active_tab,"tabs":state.tabs.len(),"memory":{"parked_shapes_total":state.tabs.iter().map(|tab|tab.document.len()).sum::<usize>(),"image_cache_bytes":state.shape_renderer.image_cache_bytes(),"image_cache_budget_bytes":32*1024*1024,"path_cache_payload_bytes":state.shape_renderer.path_cache_bytes(),"history_payload_bytes":state.canvas.document.history_memory_bytes(),"render_target_allocations":state.render_target_allocations,"render_target_bytes":state.surface.config.width as u64*state.surface.config.height as u64*4},"command_editor":state.ui_state.text_command_editor.as_ref().map(|e| &e.source),"controls":state.ui_state.test_controls});
+                        let status = serde_json::json!({"shapes":shapes,"presentation":state.ui_state.presentation_mode,"tool":format!("{:?}",state.ui_state.current_tool),"editing_text":state.event_handler.editing_text,"inline_dialog":state.ui_state.inline_formula_draft.is_some(),"inline_error":state.ui_state.inline_formula_error,"zoom":state.canvas.camera.zoom,"png_save_requests":state.png_save_requests,"active_tab":state.active_tab,"tabs":state.tabs.len(),"memory":{"parked_shapes_total":state.tabs.iter().map(|tab|tab.document.len()).sum::<usize>(),"image_cache_bytes":state.shape_renderer.image_cache_bytes(),"image_cache_budget_bytes":32*1024*1024,"path_cache_payload_bytes":state.shape_renderer.path_cache_bytes(),"history_payload_bytes":state.canvas.document.history_memory_bytes(),"render_target_allocations":state.render_target_allocations,"render_target_bytes":state.surface.config.width as u64*state.surface.config.height as u64*4},"command_editor":state.ui_state.text_command_editor.as_ref().map(|e| &e.source),"controls":state.ui_state.test_controls});
                         let _ = js_sys::Reflect::set(
                             window.as_ref(),
                             &JsValue::from_str("__drafftinkTestState"),
@@ -5691,7 +5805,10 @@ impl ApplicationHandler for App {
 
                 if let Some((factor, x, y)) = browser_pinch {
                     // Real Chrome/Edge precision-touchpad pinch, centered at the fingers.
-                    state.canvas.camera.zoom_at(Point::new(x, y), factor);
+                    state.canvas.camera.zoom_at(
+                        Point::new(x, y),
+                        factor.powf(state.ui_state.settings.touchpad_zoom_speed),
+                    );
                     state.ui_state.zoom_level = state.canvas.camera.zoom;
                 } else if state.input.ctrl() {
                     // Physical Ctrl/Cmd + wheel = zoom.
@@ -5725,7 +5842,10 @@ impl ApplicationHandler for App {
                 if let Some((pan_delta, zoom_delta, zoom_center)) = gesture {
                     // Two-finger gesture: pinch-zoom and pan
                     if (zoom_delta - 1.0).abs() > 0.001 {
-                        state.canvas.camera.zoom_at(zoom_center, zoom_delta);
+                        state.canvas.camera.zoom_at(
+                            zoom_center,
+                            zoom_delta.powf(state.ui_state.settings.touchpad_zoom_speed),
+                        );
                     }
                     if pan_delta.length() > 0.1 {
                         state.canvas.camera.pan(pan_delta);
@@ -5986,6 +6106,31 @@ impl ApplicationHandler for App {
                         });
 
                         if let Some(key) = text_key {
+                            if matches!(key, TextKey::ToggleSuperscript | TextKey::ToggleSubscript)
+                            {
+                                if let Some(range) = state
+                                    .text_edit_state
+                                    .as_ref()
+                                    .and_then(|e| e.selection_range())
+                                {
+                                    state.canvas.document.push_undo();
+                                    if let Some(Shape::Text(text)) =
+                                        state.canvas.document.get_shape_mut(text_id)
+                                    {
+                                        text.toggle_script(
+                                            range,
+                                            if matches!(key, TextKey::ToggleSuperscript) {
+                                                1
+                                            } else {
+                                                -1
+                                            },
+                                        );
+                                    }
+                                    state.needs_redraw = true;
+                                    state.window.request_redraw();
+                                    return;
+                                }
+                            }
                             log::debug!("Text edit key: {:?}", key);
                             let modifiers = TextModifiers {
                                 shift: state.input.shift(),
@@ -6017,6 +6162,10 @@ impl ApplicationHandler for App {
                                         {
                                             text.content = new_text;
                                             text.sync_spans_after_edit(&old_text);
+                                            text.set_inserted_script(
+                                                &old_text,
+                                                edit_state.script_value(),
+                                            );
                                         }
                                         state.event_handler.exit_text_edit(&mut state.canvas);
                                         state.text_edit_state = None;
@@ -6029,6 +6178,10 @@ impl ApplicationHandler for App {
                                         {
                                             text.content = new_text;
                                             text.sync_spans_after_edit(&old_text);
+                                            text.set_inserted_script(
+                                                &old_text,
+                                                edit_state.script_value(),
+                                            );
                                         }
                                     }
                                     TextEditResult::Copy(text_to_copy) => {
@@ -6046,6 +6199,10 @@ impl ApplicationHandler for App {
                                         {
                                             text.content = new_text;
                                             text.sync_spans_after_edit(&old_text);
+                                            text.set_inserted_script(
+                                                &old_text,
+                                                edit_state.script_value(),
+                                            );
                                         }
                                     }
                                     TextEditResult::NotHandled => {}
@@ -6733,14 +6890,21 @@ impl ApplicationHandler for App {
                                 "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight" => {
                                     if !state.canvas.selection.is_empty() {
                                         use drafftink_core::GRID_SIZE;
+                                        let step = if state.input.shift() {
+                                            GRID_SIZE
+                                        } else {
+                                            1.0 / state.canvas.camera.zoom
+                                        };
                                         let delta = match key_str {
-                                            "ArrowUp" => kurbo::Vec2::new(0.0, -GRID_SIZE),
-                                            "ArrowDown" => kurbo::Vec2::new(0.0, GRID_SIZE),
-                                            "ArrowLeft" => kurbo::Vec2::new(-GRID_SIZE, 0.0),
-                                            "ArrowRight" => kurbo::Vec2::new(GRID_SIZE, 0.0),
+                                            "ArrowUp" => kurbo::Vec2::new(0.0, -step),
+                                            "ArrowDown" => kurbo::Vec2::new(0.0, step),
+                                            "ArrowLeft" => kurbo::Vec2::new(-step, 0.0),
+                                            "ArrowRight" => kurbo::Vec2::new(step, 0.0),
                                             _ => return,
                                         };
-                                        state.canvas.document.push_undo();
+                                        if !event.repeat {
+                                            state.canvas.document.push_undo();
+                                        }
                                         let translation = kurbo::Affine::translate(delta);
                                         for &id in &state.canvas.selection {
                                             if let Some(shape) =
@@ -7127,4 +7291,111 @@ fn rect_corners(b: kurbo::Rect) -> [Point; 4] {
         Point::new(b.x1, b.y1),
         Point::new(b.x0, b.y1),
     ]
+}
+
+#[cfg(target_arch = "wasm32")]
+struct PngBusyGuard(bool);
+#[cfg(target_arch = "wasm32")]
+impl PngBusyGuard {
+    fn new() -> Self {
+        if let Some(w) = web_sys::window() {
+            let _ = js_sys::Reflect::set(
+                &w,
+                &"__drafftinkPngBusy".into(),
+                &wasm_bindgen::JsValue::TRUE,
+            );
+        }
+        Self(false)
+    }
+}
+#[cfg(target_arch = "wasm32")]
+impl Drop for PngBusyGuard {
+    fn drop(&mut self) {
+        if let Some(w) = web_sys::window() {
+            if !self.0 {
+                let _ = js_sys::Reflect::set(
+                    &w,
+                    &"__drafftinkPngFailed".into(),
+                    &wasm_bindgen::JsValue::TRUE,
+                );
+            }
+            let _ = js_sys::Reflect::set(
+                &w,
+                &"__drafftinkPngBusy".into(),
+                &wasm_bindgen::JsValue::FALSE,
+            );
+        }
+        file_ops::schedule_repaint(0);
+    }
+}
+fn save_canvas_png(state: &mut AppState, render_cx: &vello::util::RenderContext, automatic: bool) {
+    #[cfg(target_arch = "wasm32")]
+    if file_ops::browser_flag("__drafftinkPngBusy")
+        || file_ops::browser_flag("drafftinkDiskSaveBusy")
+        || (automatic && !file_ops::browser_flag("drafftinkExportFolderReady"))
+    {
+        return;
+    }
+    #[cfg(target_arch = "wasm32")]
+    if file_ops::browser_flag("__drafftinkPngFailed") {
+        state.last_png_signature = 0;
+        if let Some(w) = web_sys::window() {
+            let _ = js_sys::Reflect::set(
+                &w,
+                &"__drafftinkPngFailed".into(),
+                &wasm_bindgen::JsValue::FALSE,
+            );
+        }
+    }
+    if state.canvas.document.is_empty() {
+        return;
+    }
+    let Ok(json) = state.canvas.document.to_json() else {
+        return;
+    };
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    json.hash(&mut hash);
+    let signature = hash.finish();
+    if automatic && state.last_png_signature == signature {
+        return;
+    }
+    state.png_save_requests += 1;
+    let (scene, bounds) = state
+        .shape_renderer
+        .build_export_scene(&state.canvas.document, state.ui_state.export_scale as f64);
+    let Some(bounds) = bounds else {
+        return;
+    };
+    let width = bounds.width().ceil() as u32;
+    let height = bounds.height().ceil() as u32;
+    let handle = &render_cx.devices[state.surface.dev_id];
+    let filename = format!("{}.png", state.canvas.document.name);
+    #[cfg(target_arch = "wasm32")]
+    spawn_png_export_async_mode(
+        &mut state.vello_renderer,
+        &handle.device,
+        &handle.queue,
+        scene,
+        width,
+        height,
+        filename,
+        false,
+        Some(json),
+        automatic,
+    );
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(result) = render_scene_to_png(
+        &handle.device,
+        &handle.queue,
+        &mut state.vello_renderer,
+        &scene,
+        width,
+        height,
+    ) {
+        if let Some(bytes) = encode_png(&result.rgba_data, width, height, Some(&json)) {
+            file_ops::export_png(&bytes, &state.canvas.document.name);
+        }
+    }
+    state.last_png_signature = signature;
 }

@@ -1,4 +1,4 @@
-# DrafftInk Local 0.11.0
+# DrafftInk Local 0.12.0
 
 Version personnelle du tableau DrafftInk, sans collaboration reseau.
 
@@ -26,7 +26,7 @@ Workflow : `.github/workflows/build-portable.yml`.
 
 A chaque push sur `main`, deux artefacts sont produits :
 
-- `DrafftInk-Windows-Portable-0.11.0` : version locale Windows precompilee ;
+- `DrafftInk-Windows-Portable-0.12.0` : version locale Windows precompilee ;
 - `DrafftInk-Web-0.9.0` : fichiers statiques a deposer sur un serveur web.
 
 ## Modifications de cette branche
@@ -138,3 +138,11 @@ Pour rééditer une formule validée : sélectionner l’outil Select puis doubl
 Cache d’images décodées limité à 32 Mio, libération des caches des canvas inactifs, aperçus adaptés au zoom (2048 pixels maximum sur le grand côté). Les données originales restent dans le document et sont utilisées pour l’export ; l’affichage temporaire réduit peut être moins détaillé à fort zoom pour une source supérieure à 2048 pixels. La texture d’écran et les buffers de scène sont réutilisés. L’export partage le moteur GPU existant. Les variantes anciennes de traits sont supprimées et le cache de géométrie est plafonné à environ 4 Mio. L’historique garde jusqu’à 50 états, avec un budget de charges clonées de 16 Mio par canvas (au moins le dernier état Undo/Redo conservé, même s’il dépasse ce budget). Le passage entre canvas déplace le document plutôt que de cloner son historique.
 
 Ces budgets concernent des composants, pas toute la RAM du navigateur. Le seuil global de 200 Mo n’est pas confirmé. Lire docs/MEMORY_0.11.md pour les mesures et limites.
+
+## Nouveautés 0.12.0
+
+Flèche seule : déplacement fin d’un pixel de rendu ; Shift+flèche : pas historique de 20 unités, avec répétition tant que la touche est maintenue. Ctrl+haut/bas applique un style exposant/indice aux caractères originaux, sans alphabet Unicode limité. La famille de police choisie pour Text fournit aussi les lettres/chiffres des formules ; la police math reste le secours pour les symboles structurés.
+
+Ctrl+S enregistre un PNG complet du canvas (même pendant Text/Math) ; Ctrl+Shift+S conserve le JSON. La sauvegarde régulière garde sa récupération navigateur et écrit aussi le PNG dans le dossier d’export autorisé, seulement après modification. Sans permission, pas de rafale de téléchargements : réautoriser le dossier dans Settings. Le PNG contient les données éditables du document. Le statut de sauvegarde est visible.
+
+Zoom au pavé tactile : vitesse 2× par défaut, réglable de 0,25× à 8× dans Settings ; 1× retrouve l’ancien comportement. Pan deux doigts conservé. Panneau Stroke resserré.

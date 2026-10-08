@@ -86,6 +86,7 @@ pub struct VelloRenderer {
     math_primary_font: Option<std::sync::Arc<Vec<u8>>>,
     font_aliases: std::collections::HashMap<String, String>,
     registered_fonts: std::collections::HashMap<String, String>,
+    registered_font_data: std::collections::HashMap<String, std::sync::Arc<Vec<u8>>>,
     #[cfg(test)]
     math_layout_builds: usize,
 }
@@ -139,6 +140,7 @@ fn decode_image_preview(
 struct CachedMath {
     source: String,
     font_size: u64,
+    primary_font_id: usize,
     color: [u8; 4],
     scene: Scene,
     size: (f64, f64, f64),
@@ -438,6 +440,7 @@ impl VelloRenderer {
             math_cache: std::collections::HashMap::new(),
             math_primary_font: None,
             registered_fonts: Default::default(),
+            registered_font_data: Default::default(),
             font_aliases: Default::default(),
             #[cfg(test)]
             math_layout_builds: 0,
@@ -580,6 +583,12 @@ impl VelloRenderer {
         if postscript.to_lowercase().replace('-', "") == "googlesansmedium" {
             self.math_primary_font = Some(bytes.clone());
         }
+        self.registered_font_data
+            .insert(postscript.to_string(), bytes.clone());
+        self.registered_font_data
+            .insert(family.to_string(), bytes.clone());
+        self.registered_font_data
+            .insert(canonical.clone(), bytes.clone());
         self.font_cx
             .collection
             .register_fonts(vello::peniko::Blob::new(bytes), None);
@@ -1016,6 +1025,7 @@ impl VelloRenderer {
 
     fn draw_underlines(
         &mut self,
+        text: &drafftink_core::shapes::Text,
         layout: &parley::Layout<Brush>,
         transform: Affine,
         font_size: f32,
@@ -1028,6 +1038,7 @@ impl VelloRenderer {
                             .size
                             .unwrap_or((run.run().font_size() / 16.0).max(1.0));
                         let y = run.baseline()
+                            + text_script_offset(text, run.run().text_range().start)
                             - crate::text_editor::inline_baseline_shift(&line, font_size)
                             + decoration.offset.unwrap_or(run.run().font_size() / 10.0);
                         let width: f32 = run.glyphs().map(|g| g.advance).sum();
@@ -1098,12 +1109,37 @@ impl VelloRenderer {
         &mut self,
         text: &drafftink_core::shapes::Text,
     ) -> Vec<(u64, usize, f32, f32)> {
+        let local = text
+            .custom_font_postscript
+            .as_ref()
+            .and_then(|key| self.registered_font_data.get(key))
+            .or_else(|| {
+                text.custom_font
+                    .as_ref()
+                    .and_then(|key| self.registered_font_data.get(key))
+            })
+            .cloned();
+        use drafftink_core::shapes::{FontFamily, FontWeight};
+        let embedded: &[u8] = match (text.font_family, text.font_weight) {
+            (FontFamily::NotoSans, FontWeight::Heavy) => NOTO_SANS_BOLD,
+            (FontFamily::NotoSans, FontWeight::Light) => NOTO_SANS_ITALIC,
+            (FontFamily::GelPen, FontWeight::Light) => GELPEN_LIGHT,
+            (FontFamily::GelPen, FontWeight::Heavy) => GELPEN_HEAVY,
+            (FontFamily::GelPen, _) => GELPEN_REGULAR,
+            (FontFamily::GelPenSerif, FontWeight::Light) => GELPEN_SERIF_LIGHT,
+            (FontFamily::GelPenSerif, FontWeight::Heavy) => GELPEN_SERIF_HEAVY,
+            (FontFamily::GelPenSerif, _) => GELPEN_SERIF_MEDIUM,
+            (FontFamily::VanillaExtract, _) => VANILLA_EXTRACT,
+            (FontFamily::XitsMath, _) => XITS_MATH,
+            _ => NOTO_SANS,
+        };
+        let primary = local.as_deref().map(|v| v.as_slice()).unwrap_or(embedded);
         let mut boxes = Vec::new();
         for (index, formula) in text.formulas.iter().enumerate() {
             let mut math = formula.math.clone();
             math.font_size = text.font_size;
             math.style = text.style.clone();
-            if self.prepare_math(&math) {
+            if self.prepare_math_with_primary(&math, primary) {
                 if let Some((width, height, depth)) = math.cached_size() {
                     if let Some((byte, '\u{fffc}')) = text.content.char_indices().nth(formula.at) {
                         boxes.push((
@@ -1204,6 +1240,7 @@ impl VelloRenderer {
         text.content.hash(&mut hasher);
         (text.font_family as u8).hash(&mut hasher);
         text.custom_font.hash(&mut hasher);
+        text.custom_font_postscript.hash(&mut hasher);
         (text.font_weight as u8).hash(&mut hasher);
         text.font_size.to_bits().hash(&mut hasher);
         for formula in &text.formulas {
@@ -1309,6 +1346,11 @@ impl VelloRenderer {
             );
         }
         builder.push_default(StyleProperty::FontSize(font_size));
+        if text.char_styles.iter().any(|s| s.script != 0) {
+            builder.push_default(StyleProperty::LineHeight(parley::LineHeight::Absolute(
+                font_size * 1.8,
+            )));
+        }
         builder.push_default(StyleProperty::Brush(brush.clone()));
         builder.push_default(StyleProperty::FontWeight(parley_weight));
         if is_italic {
@@ -1329,6 +1371,14 @@ impl VelloRenderer {
             }
             if let Some(style) = text.char_styles.get(char_idx) {
                 let range = byte_offset..byte_offset + ch.len_utf8();
+                if style.script != 0 {
+                    builder.push(
+                        parley::StyleProperty::FontSize(
+                            text.font_size as f32 * if style.script > 0 { 0.65 } else { 0.64 },
+                        ),
+                        range.clone(),
+                    );
+                }
                 if style.bold {
                     builder.push(
                         parley::StyleProperty::FontWeight(parley::FontWeight::BOLD),
@@ -1361,7 +1411,7 @@ impl VelloRenderer {
         text.set_cached_size(layout_width, layout_height);
         let previous_scene = std::mem::take(&mut self.scene);
         let text_transform = Affine::IDENTITY;
-        self.draw_underlines(&layout, text_transform, text.font_size as f32);
+        self.draw_underlines(text, &layout, text_transform, text.font_size as f32);
         self.append_inline_formulas(text, &layout, text_transform);
         let mut glyph_count = 0;
 
@@ -1372,6 +1422,7 @@ impl VelloRenderer {
                 };
                 let mut x = glyph_run.offset();
                 let y = glyph_run.baseline()
+                    + text_script_offset(text, glyph_run.run().text_range().start)
                     - crate::text_editor::inline_baseline_shift(&line, text.font_size as f32);
                 let run = glyph_run.run();
                 let font = run.font();
@@ -1580,6 +1631,15 @@ impl VelloRenderer {
     }
 
     fn prepare_math(&mut self, math: &drafftink_core::shapes::Math) -> bool {
+        let local = self.math_primary_font.clone();
+        let bytes = local.as_deref().map(|v| v.as_slice()).unwrap_or(NOTO_SANS);
+        self.prepare_math_with_primary(math, bytes)
+    }
+    fn prepare_math_with_primary(
+        &mut self,
+        math: &drafftink_core::shapes::Math,
+        primary_bytes: &[u8],
+    ) -> bool {
         use crate::rex_backend::VelloBackend;
         use rex::font::backend::ttf_parser::TtfMathFont;
         use rex::layout::engine::LayoutBuilder;
@@ -1593,6 +1653,7 @@ impl VelloRenderer {
             if cached.source == math.latex
                 && cached.font_size == math.font_size.to_bits()
                 && cached.color == color
+                && cached.primary_font_id == primary_bytes.as_ptr() as usize
             {
                 math.set_cached_size(cached.size.0, cached.size.1, cached.size.2);
                 return true;
@@ -1604,13 +1665,7 @@ impl VelloRenderer {
         let Ok(math_font) = TtfMathFont::new(math_face) else {
             return false;
         };
-        // Google Sans Medium supplies ordinary glyphs. XITS retains MATH metrics
-        // and symbols not available in Google Sans, including extensible operators.
-        let primary_bytes: &[u8] = self
-            .math_primary_font
-            .as_deref()
-            .map(|v| v.as_slice())
-            .unwrap_or(NOTO_SANS);
+        // Ordinary letters/digits use their parent Text font; MATH supplies structural metrics.
         let primary_face = ttf_parser::Face::parse(primary_bytes, 0).ok();
         let Ok(nodes) = rex::parser::parse(&math.latex) else {
             return false;
@@ -1637,6 +1692,7 @@ impl VelloRenderer {
             CachedMath {
                 source: math.latex.clone(),
                 font_size: math.font_size.to_bits(),
+                primary_font_id: primary_bytes.as_ptr() as usize,
                 color,
                 scene,
                 size: (size.width, size.height, size.depth),
@@ -1801,6 +1857,11 @@ impl VelloRenderer {
             );
         }
         builder.push_default(parley::StyleProperty::FontSize(text.font_size as f32));
+        if text.char_styles.iter().any(|s| s.script != 0) {
+            builder.push_default(parley::StyleProperty::LineHeight(
+                parley::LineHeight::Absolute(text.font_size as f32 * 1.8),
+            ));
+        }
         builder.push_default(parley::StyleProperty::Brush(brush.clone()));
         builder.push_default(parley::StyleProperty::FontWeight(parley_weight));
         builder.push_default(parley::StyleProperty::FontStack(text_font_stack(font_name)));
@@ -1819,6 +1880,14 @@ impl VelloRenderer {
             }
             if let Some(style) = text.char_styles.get(char_idx) {
                 let range = byte_offset..byte_offset + ch.len_utf8();
+                if style.script != 0 {
+                    builder.push(
+                        parley::StyleProperty::FontSize(
+                            text.font_size as f32 * if style.script > 0 { 0.65 } else { 0.64 },
+                        ),
+                        range.clone(),
+                    );
+                }
                 if style.bold {
                     builder.push(
                         parley::StyleProperty::FontWeight(parley::FontWeight::BOLD),
@@ -1896,7 +1965,7 @@ impl VelloRenderer {
             * Affine::scale_non_uniform(text.display_scale[0], text.display_scale[1]);
 
         self.append_inline_formulas(text, &styled_layout, text_transform);
-        self.draw_underlines(&styled_layout, text_transform, text.font_size as f32);
+        self.draw_underlines(text, &styled_layout, text_transform, text.font_size as f32);
         // Render glyphs first (text content) - use styled_layout which has color spans
         for line in styled_layout.lines() {
             for item in line.items() {
@@ -1906,6 +1975,7 @@ impl VelloRenderer {
                 let glyph_style = glyph_run.style();
                 let mut x = glyph_run.offset();
                 let y = glyph_run.baseline()
+                    + text_script_offset(text, glyph_run.run().text_range().start)
                     - crate::text_editor::inline_baseline_shift(&line, text.font_size as f32);
                 let run = glyph_run.run();
                 let font = run.font();
@@ -3210,7 +3280,8 @@ mod inline_formula_render_tests {
             CharacterStyle {
                 bold: true,
                 italic: true,
-                underline: true
+                underline: true,
+                script: 0,
             };
             text.content.chars().count()
         ];
@@ -3458,5 +3529,51 @@ mod path_cache_memory_tests {
         let empty = drafftink_core::canvas::CanvasDocument::new();
         renderer.retain_open_document_caches(std::iter::once(&empty));
         assert_eq!(renderer.path_cache_bytes(), 0);
+    }
+}
+
+fn text_script_offset(text: &drafftink_core::shapes::Text, byte: usize) -> f32 {
+    let index = text
+        .content
+        .get(..byte)
+        .map(|s| s.chars().count())
+        .unwrap_or(0);
+    match text.char_styles.get(index).map(|s| s.script).unwrap_or(0) {
+        1 => -text.font_size as f32 * 0.4,
+        -1 => text.font_size as f32 * 0.2,
+        _ => 0.0,
+    }
+}
+
+#[cfg(test)]
+mod parent_font_and_script_tests {
+    use super::*;
+    use drafftink_core::shapes::{FontFamily, InlineFormula, Math, Text};
+    #[test]
+    fn inline_math_changes_font_with_parent_and_invalidates_cached_scene() {
+        let mut renderer = VelloRenderer::new();
+        let mut text = Text::new(Point::ZERO, "= \u{fffc}".into());
+        text.formulas.push(InlineFormula {
+            at: 2,
+            math: Math::new(Point::ZERO, "x+123".into()),
+            kind: "Code".into(),
+            parts: Default::default(),
+        });
+        renderer.render_text(&text, Affine::IDENTITY);
+        let id = text.formulas[0].math.id();
+        let before = renderer.math_cache[&id].primary_font_id;
+        text.font_family = FontFamily::GelPen;
+        renderer.render_text(&text, Affine::IDENTITY);
+        assert_ne!(before, renderer.math_cache[&id].primary_font_id);
+        assert_eq!(
+            renderer.math_cache[&id].primary_font_id,
+            GELPEN_REGULAR.as_ptr() as usize
+        );
+        text.content = "AbXYα≤@".into();
+        text.formulas.clear();
+        text.toggle_script(0..text.content.len(), 1);
+        renderer.render_text(&text, Affine::IDENTITY);
+        assert_eq!(text.content, "AbXYα≤@");
+        assert!(text.bounds().height() > 0.0);
     }
 }
