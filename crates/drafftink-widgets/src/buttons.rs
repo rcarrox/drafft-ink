@@ -143,7 +143,14 @@ impl<'a> IconButton<'a> {
         self.show_response(ui).clicked()
     }
 
-    pub fn show_response(self, ui: &mut Ui) -> egui::Response {
+    pub fn show_response(mut self, ui: &mut Ui) -> egui::Response {
+        // Follow the application accent while preserving explicit custom styles.
+        if self.style.selected_color == theme::ACCENT {
+            self.style.selected_color = ui.visuals().selection.bg_fill;
+        }
+        if self.style.selected_icon_tint == Some(theme::ACCENT) {
+            self.style.selected_icon_tint = Some(ui.visuals().selection.bg_fill);
+        }
         let (rect, response) = ui.allocate_exact_size(self.style.size, Sense::click());
 
         if ui.is_rect_visible(rect) {
@@ -256,7 +263,7 @@ impl<'a> ToggleButton<'a> {
 
         if ui.is_rect_visible(rect) {
             let bg_color = if self.selected {
-                theme::ACCENT
+                ui.visuals().selection.bg_fill
             } else if response.hovered() {
                 Color32::from_gray(235)
             } else {
@@ -468,7 +475,7 @@ impl<'a> StrokeWidthButton<'a> {
 
         if ui.is_rect_visible(rect) {
             let bg_color = if self.selected {
-                theme::ACCENT
+                ui.visuals().selection.bg_fill
             } else if response.hovered() {
                 Color32::from_gray(235)
             } else {
@@ -539,7 +546,7 @@ impl<'a> FontSizeButton<'a> {
 
         if ui.is_rect_visible(rect) {
             let bg_color = if self.selected {
-                theme::ACCENT
+                ui.visuals().selection.bg_fill
             } else if response.hovered() {
                 Color32::from_gray(230)
             } else {

@@ -32,6 +32,7 @@ pub struct UserSettings {
     pub default_font_postscript: String,
     pub last_text_font: Option<drafftink_core::shapes::TextFont>,
     pub last_text_postscript: Option<String>,
+    pub accent_color: [u8; 3],
     pub cursor_outline: [u8; 3],
     pub laser_color: [u8; 3],
     pub panel_positions: std::collections::BTreeMap<String, [f32; 2]>,
@@ -66,6 +67,7 @@ impl Default for UserSettings {
             default_font_postscript: "GoogleSans-Medium".into(),
             last_text_font: None,
             last_text_postscript: None,
+            accent_color: [59, 130, 246],
             cursor_outline: [0, 0, 0],
             laser_color: [255, 0, 0],
             panel_positions: Default::default(),
@@ -238,6 +240,7 @@ mod font_settings_regressions {
             serde_json::from_str(r#"{"shortcut_pan":"h","autosave_interval_secs":15}"#).unwrap();
         assert_eq!(settings.default_font, "Google Sans");
         assert_eq!(settings.default_font_postscript, "GoogleSans-Medium");
+        assert_eq!(settings.accent_color, [59, 130, 246]);
         assert_eq!(settings.cursor_outline, [0, 0, 0]);
         assert_eq!(settings.autosave_interval_secs, 15);
     }
@@ -247,6 +250,7 @@ mod font_settings_regressions {
         settings.last_text_font =
             Some(drafftink_core::shapes::TextFont::from_name("Noto Sans", ""));
         settings.last_text_postscript = Some(String::new());
+        settings.accent_color = [180, 35, 100];
         settings.laser_color = [4, 100, 220];
         settings
             .panel_positions
@@ -254,6 +258,7 @@ mod font_settings_regressions {
         let restored: UserSettings =
             serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
         assert_eq!(restored.last_text_font, settings.last_text_font);
+        assert_eq!(restored.accent_color, settings.accent_color);
         assert_eq!(restored.laser_color, settings.laser_color);
         assert_eq!(restored.panel_positions, settings.panel_positions);
     }

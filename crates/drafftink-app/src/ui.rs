@@ -780,6 +780,15 @@ pub fn render_ui(
     ui_state: &mut UiState,
     selected_props: &SelectedShapeProps,
 ) -> Option<UiAction> {
+    let [r, g, b] = ui_state.settings.accent_color;
+    let accent = Color32::from_rgb(r, g, b);
+    ctx.style_mut(|style| {
+        style.visuals.selection.bg_fill = accent;
+        style.visuals.widgets.active.bg_fill = accent;
+        style.visuals.widgets.active.bg_stroke.color = accent;
+        style.visuals.widgets.hovered.bg_stroke.color = accent;
+        style.visuals.hyperlink_color = accent;
+    });
     ui_state.test_controls.clear();
     if ctx.input(|i| i.pointer.primary_pressed())
         && !egui::Popup::is_any_open(ctx)
@@ -889,7 +898,7 @@ fn render_tab_bar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                             });
                             let btn = egui::Button::new(label)
                                 .fill(if selected {
-                                    Color32::from_rgb(59, 130, 246)
+                                    ui.visuals().selection.bg_fill
                                 } else {
                                     Color32::TRANSPARENT
                                 })
@@ -1025,7 +1034,7 @@ fn panel_grip(ui: &mut egui::Ui) {
 fn stroke_pattern_button(ui: &mut egui::Ui, pattern: StrokeStyle, selected: bool) -> bool {
     let (rect, response) = ui.allocate_exact_size(Vec2::new(28.0, 24.0), egui::Sense::click());
     let bg = if selected {
-        Color32::from_rgb(59, 130, 246)
+        ui.visuals().selection.bg_fill
     } else {
         Color32::WHITE
     };
@@ -2528,7 +2537,7 @@ fn render_file_menu(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                                     }),
                                 )
                                 .fill(if selected {
-                                    Color32::from_rgb(59, 130, 246)
+                                    ui.visuals().selection.bg_fill
                                 } else {
                                     Color32::TRANSPARENT
                                 })
@@ -2606,7 +2615,7 @@ fn hamburger_button(ui: &mut egui::Ui, is_open: bool) -> bool {
 
     if ui.is_rect_visible(rect) {
         let bg_color = if is_open {
-            Color32::from_rgb(59, 130, 246)
+            ui.visuals().selection.bg_fill
         } else if response.hovered() {
             Color32::from_gray(235)
         } else {
@@ -2651,7 +2660,7 @@ fn collab_button(ui: &mut egui::Ui, connection_state: ConnectionState, is_open: 
     if ui.is_rect_visible(rect) {
         // Background
         let bg_color = if is_open {
-            Color32::from_rgb(59, 130, 246)
+            ui.visuals().selection.bg_fill
         } else if response.hovered() {
             Color32::from_gray(235)
         } else {
@@ -2757,13 +2766,13 @@ fn render_collaboration_modal(ctx: &Context, ui_state: &mut UiState) -> Option<U
                         Stroke::new(1.0, Color32::from_gray(180));
                     ui.visuals_mut().widgets.active.bg_fill = Color32::from_gray(225);
                     ui.visuals_mut().widgets.active.bg_stroke =
-                        Stroke::new(1.0, Color32::from_rgb(59, 130, 246));
+                        Stroke::new(1.0, ui.visuals().selection.bg_fill);
                     ui.visuals_mut().extreme_bg_color = Color32::WHITE;
                     ui.visuals_mut().override_text_color = Some(Color32::from_gray(30));
                     ui.visuals_mut().selection.bg_fill =
-                        Color32::from_rgb(59, 130, 246).gamma_multiply(0.3);
+                        ui.visuals().selection.bg_fill.gamma_multiply(0.3);
                     ui.visuals_mut().selection.stroke =
-                        Stroke::new(1.0, Color32::from_rgb(59, 130, 246));
+                        Stroke::new(1.0, ui.visuals().selection.bg_fill);
 
                     ui.set_width(modal_width);
 
@@ -3445,7 +3454,7 @@ fn render_open_recent_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<Ui
                                 ui.visuals_mut().widgets.hovered.bg_stroke =
                                     Stroke::new(1.0, Color32::from_gray(180));
                                 ui.visuals_mut().widgets.active.bg_stroke =
-                                    Stroke::new(1.0, Color32::from_rgb(59, 130, 246));
+                                    Stroke::new(1.0, ui.visuals().selection.bg_fill);
                                 ui.visuals_mut().widgets.inactive.weak_bg_fill = Color32::WHITE;
                                 ui.visuals_mut().widgets.hovered.weak_bg_fill = Color32::WHITE;
 
@@ -3567,6 +3576,11 @@ fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAct
                             ui.label(egui::RichText::new(&ui_state.font_error).size(11.0).color(Color32::from_rgb(160,65,25)));
                         }
                         ui.add_space(12.0);
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("Couleur des boutons et sélections").color(Color32::BLACK));
+                            let response = ui.color_edit_button_srgb(&mut ui_state.settings.accent_color);
+                            ui_state.test_controls.insert("accent_color".into(), [response.rect.min.x, response.rect.min.y, response.rect.max.x, response.rect.max.y]);
+                        });
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new("Contour du curseur souris").color(Color32::BLACK));
                             ui.color_edit_button_srgb(&mut ui_state.settings.cursor_outline);

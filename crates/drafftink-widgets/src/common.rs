@@ -6,7 +6,7 @@ use egui::{Color32, CornerRadius, Stroke, TextEdit, Ui, Vec2};
 pub fn primary_btn(ui: &mut Ui, text: &str) -> bool {
     ui.add(
         egui::Button::new(egui::RichText::new(text).color(Color32::WHITE))
-            .fill(Color32::from_rgb(59, 130, 246))
+            .fill(ui.visuals().selection.bg_fill)
             .min_size(Vec2::new(80.0, 32.0))
             .corner_radius(CornerRadius::same(6)),
     )
@@ -43,7 +43,7 @@ pub fn input_text(ui: &mut Ui, text: &mut String, width: f32, hint: &str) -> egu
         ui.visuals_mut().widgets.inactive.bg_stroke = Stroke::new(1.0, Color32::from_gray(220));
         ui.visuals_mut().widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::from_gray(180));
         ui.visuals_mut().widgets.active.bg_stroke =
-            Stroke::new(1.0, Color32::from_rgb(59, 130, 246));
+            Stroke::new(1.0, ui.visuals().selection.bg_fill);
 
         ui.add(
             TextEdit::singleline(text)

@@ -1,4 +1,4 @@
-# Qraphtinc 0.16.0
+# Qraphtinc 0.17.0
 
 Version personnelle du tableau DrafftInk, sans collaboration reseau.
 
@@ -19,14 +19,14 @@ Le serveur local ecoute seulement sur `127.0.0.1:8765` et sert les fichiers stat
 ## Compilation
 
 La compilation est faite par GitHub Actions, sur Ubuntu, avec Rust 1.91.1 et la cible
-`wasm32-unknown-unknown`. Le workflow telecharge le binaire officiel wasm-pack 0.16.0
+`wasm32-unknown-unknown`. Le workflow telecharge le binaire officiel wasm-pack 0.15.0
 et verifie son SHA-256 avant utilisation.
 
 Workflow : `.github/workflows/build-portable.yml`.
 
 A chaque push sur `main`, deux artefacts sont produits :
 
-- `DrafftInk-Windows-Portable-0.16.0` : version locale Windows precompilee ;
+- `DrafftInk-Windows-Portable-0.17.0` : version locale Windows precompilee ;
 - `DrafftInk-Web-0.9.0` : fichiers statiques a deposer sur un serveur web.
 
 ## Modifications de cette branche
@@ -154,3 +154,8 @@ Zoom au pavé tactile : vitesse 2× par défaut, réglable de 0,25× à 8× dans
 - `bin(n,k)` dans Text, y compris arguments imbriqués et aperçu pendant la saisie.
 - Bornes infinies Unicode dans le code LaTeX et correction des touches AltGr françaises.
 - Math : icône TeX fournie, GelPen, champ plus aéré, copier/coller au curseur avec sélection.
+
+## Nouveautés 0.17.0
+
+- Settings : couleur des boutons actifs, styles de trait sélectionnés et poignées/cadre de sélection, enregistrée avec les préférences.
+- Le rectangle de sélection continue sur les panneaux et menus jusqu’au relâchement, sans activer leurs boutons.

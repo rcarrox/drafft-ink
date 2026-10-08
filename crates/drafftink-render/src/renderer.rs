@@ -141,6 +141,12 @@ impl<'a> RenderContext<'a> {
         }
     }
 
+    /// Set the selection accent independently of document stroke colors.
+    pub fn with_selection_color(mut self, color: Color) -> Self {
+        self.selection_color = color;
+        self
+    }
+
     /// Set the scale factor for HiDPI.
     pub fn with_scale_factor(mut self, scale_factor: f64) -> Self {
         self.scale_factor = scale_factor;
