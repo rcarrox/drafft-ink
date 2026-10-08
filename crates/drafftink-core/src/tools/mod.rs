@@ -368,7 +368,7 @@ impl ToolManager {
             ToolKind::Math => {
                 // Math is created at the click position with placeholder LaTeX
                 use crate::shapes::Math;
-                Some(Shape::Math(Math::new(start, r"x^2".to_string())))
+                Some(Shape::Math(Math::new(start, String::new())))
             }
             ToolKind::Select | ToolKind::Pan | ToolKind::Eraser | ToolKind::LaserPointer => None,
         };

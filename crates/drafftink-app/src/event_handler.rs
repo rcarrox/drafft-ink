@@ -150,6 +150,157 @@ fn split_freehand_by_eraser(
     Some(remaining)
 }
 
+/// Turn only a touched geometric contour into editable vector fragments.
+/// Subdivide long straight edges too: erasing their middle must not delete the whole edge.
+fn split_contour_by_eraser(shape: &Shape, a: Point, b: Point, radius: f64) -> Option<Vec<Shape>> {
+    if !matches!(
+        shape,
+        Shape::Line(_) | Shape::Arrow(_) | Shape::Rectangle(_) | Shape::Ellipse(_)
+    ) && !matches!(shape, Shape::Freehand(f) if f.closed)
+    {
+        return None;
+    }
+    let eraser_bounds = Rect::from_points(a, b).inflate(
+        radius + shape.style().stroke_width,
+        radius + shape.style().stroke_width,
+    );
+    let bounds = shape.bounds();
+    let diagonal = bounds.width().hypot(bounds.height()) / 2.0;
+    if bounds
+        .inflate(diagonal, diagonal)
+        .intersect(eraser_bounds)
+        .area()
+        <= 0.0
+    {
+        return None;
+    }
+    let center = shape.bounds().center().to_vec2();
+    let transform = kurbo::Affine::translate(center)
+        * kurbo::Affine::rotate(shape.rotation())
+        * kurbo::Affine::translate(-center);
+    let path = transform * shape.to_path();
+    let mut contours: Vec<Vec<Point>> = Vec::new();
+    let mut points = Vec::new();
+    let mut start = Point::ZERO;
+    kurbo::flatten(path.iter(), 0.2, |element| {
+        let endpoint = match element {
+            kurbo::PathEl::MoveTo(p) => {
+                if points.len() > 1 {
+                    contours.push(std::mem::take(&mut points));
+                } else {
+                    points.clear();
+                }
+                start = p;
+                points.push(p);
+                return;
+            }
+            kurbo::PathEl::LineTo(p) => p,
+            kurbo::PathEl::ClosePath => start,
+            _ => return,
+        };
+        if let Some(&previous) = points.last() {
+            let steps = ((endpoint - previous).hypot() / (radius * 0.2).clamp(0.5, 2.0))
+                .ceil()
+                .max(1.0) as usize;
+            for i in 1..=steps {
+                points.push(previous + (endpoint - previous) * (i as f64 / steps as f64));
+            }
+        }
+    });
+    if points.len() > 1 {
+        contours.push(points);
+    }
+    let mut changed = false;
+    let mut result = Vec::new();
+    for points in contours {
+        if shape.style().fill_color.is_some()
+            && (matches!(shape, Shape::Rectangle(_) | Shape::Ellipse(_))
+                || matches!(shape, Shape::Freehand(f) if f.closed))
+        {
+            let (cut, polygons) = subtract_eraser_capsule(&points, a, b, radius);
+            changed |= cut;
+            for polygon in polygons {
+                let mut fill = Freehand::from_points(polygon);
+                fill.closed = true;
+                fill.style = shape.style().clone();
+                fill.style.stroke_width = 0.0;
+                fill.style.stroke_color.a = 0;
+                result.push(Shape::Freehand(fill));
+            }
+        }
+        let mut contour = Freehand::from_points(points);
+        contour.style = shape.style().clone();
+        contour.style.fill_color = None;
+        if let Some(parts) = split_freehand_by_eraser(&contour, a, b, radius) {
+            changed = true;
+            result.extend(parts);
+        } else {
+            result.push(Shape::Freehand(contour));
+        }
+    }
+    changed.then_some(result)
+}
+
+/// Subtract a convex capsule from a filled convex geometric contour. Keep the
+/// remaining fill as closed vector pieces, without inventing strokes along cuts.
+fn subtract_eraser_capsule(
+    points: &[Point],
+    a: Point,
+    b: Point,
+    radius: f64,
+) -> (bool, Vec<Vec<Point>>) {
+    fn half_plane(points: &[Point], a: Point, b: Point, inside: bool) -> Vec<Point> {
+        let mut out = Vec::new();
+        let Some(&mut_previous) = points.last() else {
+            return out;
+        };
+        let mut previous = mut_previous;
+        for &current in points {
+            let dp = orientation(a, b, previous);
+            let dc = orientation(a, b, current);
+            let kp = if inside { dp >= 0.0 } else { dp <= 0.0 };
+            let kc = if inside { dc >= 0.0 } else { dc <= 0.0 };
+            if kp != kc && (dp - dc).abs() > 1e-10 {
+                out.push(previous + (current - previous) * (dp / (dp - dc)));
+            }
+            if kc {
+                out.push(current);
+            }
+            previous = current;
+        }
+        out
+    }
+    let angle = (b.y - a.y).atan2(b.x - a.x);
+    let mut capsule = Vec::new();
+    for (center, start) in [
+        (b, angle - std::f64::consts::FRAC_PI_2),
+        (a, angle + std::f64::consts::FRAC_PI_2),
+    ] {
+        for i in 0..=16 {
+            let angle = start + std::f64::consts::PI * i as f64 / 16.0;
+            capsule.push(center + kurbo::Vec2::new(angle.cos(), angle.sin()) * radius);
+        }
+    }
+    let mut pending = points.to_vec();
+    let mut remaining = Vec::new();
+    for i in 0..capsule.len() {
+        let x = capsule[i];
+        let y = capsule[(i + 1) % capsule.len()];
+        if (y - x).hypot() < 1e-8 {
+            continue;
+        }
+        let outside = half_plane(&pending, x, y, false);
+        if outside.len() >= 3 {
+            remaining.push(outside);
+        }
+        pending = half_plane(&pending, x, y, true);
+        if pending.len() < 3 {
+            return (false, vec![points.to_vec()]);
+        }
+    }
+    (true, remaining)
+}
+
 /// Get snap points from a line/arrow's own endpoints, excluding the one being dragged.
 fn self_snap_rects(shape: &Shape, handle: Option<HandleKind>) -> Vec<Rect> {
     let points = shape.snap_points();
@@ -506,6 +657,34 @@ impl EventHandler {
         input: &InputState,
         grid_snap_enabled: bool,
     ) {
+        let tool = canvas.tool_manager.current_tool;
+        if matches!(
+            tool,
+            ToolKind::Freehand
+                | ToolKind::Highlighter
+                | ToolKind::Rectangle
+                | ToolKind::Ellipse
+                | ToolKind::Line
+                | ToolKind::Arrow
+        ) {
+            let selected_hit = canvas.selection.iter().any(|id| {
+                canvas.document.get_shape(*id).is_some_and(|shape| {
+                    hit_test_handles(
+                        shape,
+                        world_point,
+                        HANDLE_HIT_TOLERANCE / canvas.camera.zoom,
+                    )
+                    .is_some()
+                        || shape.hit_test(world_point, 3.0 / canvas.camera.zoom)
+                })
+            });
+            if selected_hit {
+                canvas.tool_manager.current_tool = ToolKind::Select;
+                self.handle_press(canvas, world_point, input, grid_snap_enabled);
+                canvas.tool_manager.current_tool = tool;
+                return;
+            }
+        }
         // If we're editing text and click elsewhere, stop editing
         if self.editing_text.is_some() {
             let hits = canvas
@@ -896,7 +1075,9 @@ impl EventHandler {
                     freehand.simplify(2.0); // Simplify the path
                     freehand.style = current_style.clone(); // Apply current style
                     canvas.document.push_undo();
+                    let id = freehand.id();
                     canvas.document.add_shape(Shape::Freehand(freehand));
+                    canvas.select(id);
                 }
                 canvas.tool_manager.cancel();
             }
@@ -913,7 +1094,9 @@ impl EventHandler {
                     freehand.style.stroke_width = current_style.stroke_width.max(12.0);
                     freehand.style.stroke_color.a = 128; // 50% opacity
                     canvas.document.push_undo();
+                    let id = freehand.id();
                     canvas.document.add_shape(Shape::Freehand(freehand));
+                    canvas.select(id);
                 }
                 canvas.tool_manager.cancel();
             }
@@ -995,7 +1178,9 @@ impl EventHandler {
                         *shape.style_mut() = current_style.clone();
                         shape.style_mut().sloppiness = Sloppiness::Architect;
                         canvas.document.push_undo();
+                        let id = shape.id();
                         canvas.document.add_shape(shape);
+                        canvas.select(id);
                     }
                 }
             }
@@ -1026,7 +1211,9 @@ impl EventHandler {
                             shape.style_mut().sloppiness = Sloppiness::Architect;
                         }
                         canvas.document.push_undo();
+                        let id = shape.id();
                         canvas.document.add_shape(shape);
+                        canvas.select(id);
                     }
                 }
             }
@@ -1533,11 +1720,12 @@ impl EventHandler {
                     .document
                     .shapes_ordered()
                     .filter_map(|shape| match shape {
-                        Shape::Freehand(freehand) => {
+                        Shape::Freehand(freehand) if !freehand.closed => {
                             split_freehand_by_eraser(freehand, erase_start, erase_end, radius)
                                 .map(|parts| (shape.id(), parts))
                         }
-                        _ => None,
+                        _ => split_contour_by_eraser(shape, erase_start, erase_end, radius)
+                            .map(|parts| (shape.id(), parts)),
                     })
                     .collect();
 
@@ -1574,6 +1762,104 @@ impl EventHandler {
 impl Default for EventHandler {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod contour_eraser_regressions {
+    use super::*;
+    use drafftink_core::shapes::{Line, Rectangle, SerializableColor};
+
+    #[test]
+    fn erasing_a_long_line_keeps_both_sides_and_style() {
+        let mut line = Line::new(Point::ZERO, Point::new(200.0, 0.0));
+        line.style.stroke_width = 3.0;
+        let shape = Shape::Line(line);
+        let parts = split_contour_by_eraser(
+            &shape,
+            Point::new(100.0, -10.0),
+            Point::new(100.0, 10.0),
+            5.0,
+        )
+        .unwrap();
+        assert_eq!(parts.len(), 2);
+        assert!(parts[0].bounds().x1 < 100.0 && parts[1].bounds().x0 > 100.0);
+        assert!(parts.iter().all(|s| s.style().stroke_width == 3.0));
+        assert!(
+            split_contour_by_eraser(&shape, Point::new(300.0, 0.0), Point::new(310.0, 0.0), 5.0)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn filled_rotated_rectangle_keeps_fill_outside_cut_and_roundtrips() {
+        let mut rectangle = Rectangle::new(Point::ZERO, 100.0, 100.0);
+        rectangle.rotation = 0.4;
+        rectangle.style.fill_color = Some(SerializableColor::black());
+        let parts = split_contour_by_eraser(
+            &Shape::Rectangle(rectangle),
+            Point::new(50.0, 45.0),
+            Point::new(50.0, 55.0),
+            7.0,
+        )
+        .unwrap();
+        assert!(parts.iter().any(|s| s.style().fill_color.is_some()));
+        assert!(
+            !parts
+                .iter()
+                .any(|s| s.hit_test(Point::new(50.0, 50.0), 0.0))
+        );
+        assert!(
+            parts
+                .iter()
+                .any(|s| s.hit_test(Point::new(30.0, 30.0), 0.0))
+        );
+        let json = serde_json::to_string(&parts).unwrap();
+        let restored: Vec<Shape> = serde_json::from_str(&json).unwrap();
+        assert_eq!(parts.len(), restored.len());
+    }
+
+    #[test]
+    fn newly_drawn_shape_is_selected_and_can_be_manipulated_with_drawing_tool() {
+        let mut canvas = Canvas::new();
+        let mut handler = EventHandler::new();
+        let input = InputState::new();
+        canvas.tool_manager.current_tool = ToolKind::Rectangle;
+        handler.handle_press(&mut canvas, Point::ZERO, &input, false);
+        handler.handle_release(
+            &mut canvas,
+            Point::new(100.0, 80.0),
+            &input,
+            &ShapeStyle::default(),
+            false,
+            false,
+        );
+        assert_eq!(canvas.selection.len(), 1);
+        handler.handle_press(&mut canvas, Point::new(100.0, 80.0), &input, false);
+        assert!(handler.manipulation.is_some());
+        assert_eq!(canvas.tool_manager.current_tool, ToolKind::Rectangle);
+    }
+
+    #[test]
+    fn manual_eraser_fragments_form_one_undo_group() {
+        let mut canvas = Canvas::new();
+        canvas
+            .document
+            .add_shape(Shape::Line(Line::new(Point::ZERO, Point::new(200.0, 0.0))));
+        let mut handler = EventHandler::new();
+        handler.eraser_mode = EraserMode::Manual;
+        handler.eraser_radius = 5.0;
+        handler.eraser_points = vec![Point::new(100.0, -10.0), Point::new(100.0, 10.0)];
+        handler.apply_eraser(&mut canvas);
+        assert_eq!(canvas.document.len(), 2);
+        canvas.document.undo();
+        assert_eq!(canvas.document.len(), 1);
+        assert!(matches!(
+            canvas.document.shapes_ordered().next(),
+            Some(Shape::Line(_))
+        ));
+        canvas.document.redo();
+        assert_eq!(canvas.document.len(), 2);
     }
 }
 

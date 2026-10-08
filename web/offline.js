@@ -22,6 +22,18 @@
         button.onclick = () => notice.remove();
         notice.appendChild(button);
     };
+    const unavailable = detail => {
+        show('Cache hors connexion indisponible. Envoyez tout le dossier web, puis sw.js en dernier.' + (detail ? ' ' + detail : ''));
+        const retry = document.createElement('button');
+        retry.textContent = 'Réessayer';
+        retry.style.cssText = 'margin:6px;padding:5px 8px;cursor:pointer';
+        retry.onclick = () => { started = false; start(); };
+        notice.appendChild(retry);
+        dismiss();
+    };
+    navigator.serviceWorker.addEventListener('message', event => {
+        if (event.data?.type === 'Q_CACHE_ERROR') unavailable(event.data.detail);
+    });
     const ready = () => {
         if (registration?.waiting) return offerUpdate();
         show(navigator.onLine ? 'Disponible hors connexion' : 'Mode hors connexion');
@@ -61,12 +73,17 @@
         try {
             show('Préparation du mode hors connexion…');
             registration = await navigator.serviceWorker.register('./sw.js', {scope: './', updateViaCache: 'none'});
-            const watch = worker => worker?.addEventListener('statechange', () => {
+            const watch = worker => {
+                if (!worker) return;
+                let installed = worker.state === 'installed' || worker.state === 'activated';
+                worker.addEventListener('statechange', () => {
                 if (worker.state === 'installed') {
+                    installed = true;
                     if (registration.waiting && navigator.serviceWorker.controller) offerUpdate();
                 }
-                if (worker.state === 'redundant') { show('Cache hors connexion indisponible. Réessayez après le chargement complet des fichiers.'); dismiss(); }
-            });
+                if (worker.state === 'redundant' && !installed) unavailable();
+                });
+            };
             watch(registration.installing);
             registration.addEventListener('updatefound', () => watch(registration.installing));
             if (registration.waiting) offerUpdate();
@@ -74,8 +91,7 @@
             registration.update().catch(() => {});
         } catch (error) {
             console.warn('Offline cache unavailable:', error);
-            show('Cache hors connexion indisponible sur cet hébergement.');
-            dismiss();
+            unavailable(error.message);
         }
     }
     // Avoid a second WASM download while the application's first load is running.

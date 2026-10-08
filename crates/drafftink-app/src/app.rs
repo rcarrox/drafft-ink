@@ -7825,6 +7825,7 @@ fn browser_cursor_kind(state: &AppState) -> (u8, bool) {
     match state.canvas.tool_manager.current_tool {
         ToolKind::Text => (1, false),
         ToolKind::Math => (2, false),
+        ToolKind::Eraser => (3, false),
         _ => {
             let point = state
                 .canvas

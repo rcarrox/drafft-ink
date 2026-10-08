@@ -112,7 +112,7 @@ function inspectCapture(file) {
     page = await geometryContext.newPage();
     await page.goto(process.env.DRAFFTINK_TEST_URL || 'http://127.0.0.1:8888/?drafftink-test=1');
     await wait(s=>s.shapes.length===0&&!s.properties_visible);
-    assert.equal(await page.title(),'Qursor🌿');
+    assert.equal(await page.title(),'Qurso🌿');
     await page.mouse.move(400,300);await page.waitForTimeout(100);
     await page.keyboard.press('o');await wait(s=>s.tool==='Ellipse'&&s.geometry==='Ellipse');
     await page.keyboard.press('o');await wait(s=>s.geometry==='Triangle');
@@ -177,10 +177,18 @@ function inspectCapture(file) {
     await page.mouse.move(300,300);await page.waitForTimeout(100);await page.keyboard.press('r');await wait(s=>s.tool==='Rectangle');
     await page.mouse.move(300,300);await page.mouse.down();await page.mouse.move(470,410,{steps:6});await page.mouse.up();await wait(s=>s.shapes.length===1);
     const originalRect=(await state()).shapes[0].shape.Rectangle.position.x;
-    await page.keyboard.press('s');await page.mouse.move(303,350);await page.waitForTimeout(100);await page.mouse.down();await page.mouse.move(1278,350,{steps:12});
+    await page.keyboard.press('s');await page.mouse.move(303,320);await page.waitForTimeout(100);await page.mouse.down();await page.mouse.move(1278,320,{steps:12});
     await wait(s=>s.camera_offset[0]< -30);const edge=(await state()).shapes[0];assert(Math.abs(edge.bounds[0]-1275)<5);
-    await page.mouse.move(900,350,{steps:6});await page.waitForTimeout(100);const stopped=(await state()).camera_offset[0];await page.waitForTimeout(250);assert(Math.abs((await state()).camera_offset[0]-stopped)<1);
+    await page.mouse.move(900,320,{steps:6});await page.waitForTimeout(100);const stopped=(await state()).camera_offset[0];await page.waitForTimeout(250);assert(Math.abs((await state()).camera_offset[0]-stopped)<1);
     await page.mouse.up();await page.keyboard.press('Control+z');await wait(s=>Math.abs(s.shapes[0].shape.Rectangle.position.x-originalRect)<1e-7);
+    await control('New canvas');await wait(s=>s.shapes.length===0);
+
+    // A completed shape remains selected and can resize with its drawing tool still active.
+    await page.keyboard.press('r');await wait(s=>s.tool==='Rectangle');
+    await page.mouse.move(320,260);await page.mouse.down();await page.mouse.move(440,350,{steps:6});await page.mouse.up();
+    await wait(s=>s.shapes.length===1&&s.selected_count===1);
+    await page.mouse.move(440,350);await page.waitForTimeout(100);await page.mouse.down();await page.mouse.move(510,390,{steps:6});await page.mouse.up();
+    await wait(s=>s.shapes.length===1&&s.shapes[0].bounds[2]-s.shapes[0].bounds[0]>170&&s.tool==='Rectangle');
     await control('New canvas');await wait(s=>s.shapes.length===0);
 
     await page.mouse.click(370,270);
@@ -296,7 +304,7 @@ function inspectCapture(file) {
     await page.keyboard.press('Control+a');await keys('x\\neq y\\in A + x_{i} y_{j}');await wait(s=>mathText(s)?.source==='x\\neq y\\in A + x_{i} y_{j}'&&mathText(s)?.latex===mathText(s)?.source);
     await page.keyboard.press('Control+a');
     const fieldRect=(await state()).math_form_rect;await page.mouse.move(fieldRect[0]+20,fieldRect[1]+20);await wait(s=>s.cursor_mode===2);
-    assert(decodeURIComponent(await page.evaluate(()=>document.querySelector('canvas').style.cursor)).includes('>X</text>'));
+    assert(decodeURIComponent(await page.evaluate(()=>document.querySelector('canvas').style.cursor)).includes('M60 26l12 12'));
     const mathButton=(await state()).controls.tool_Math;await page.mouse.move((mathButton[0]+mathButton[2])/2,(mathButton[1]+mathButton[3])/2);await wait(s=>s.cursor_mode===0);
     await page.mouse.move(fieldRect[0]+20,fieldRect[1]+20);await wait(s=>s.cursor_mode===2);
     await keys('123456');await wait(s=>mathText(s)?.source==='123456');

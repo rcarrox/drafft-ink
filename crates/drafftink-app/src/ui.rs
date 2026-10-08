@@ -346,6 +346,7 @@ pub struct UiState {
     pub shortcuts_modal_open: bool,
     /// Whether the settings dialog is open.
     pub settings_open: bool,
+    settings_before_edit: Option<UserSettings>,
     /// Persistent user settings.
     pub settings: UserSettings,
     /// Whether the save dialog is open.
@@ -449,6 +450,7 @@ impl Default for UiState {
             collab_modal_open: false,
             shortcuts_modal_open: false,
             settings_open: false,
+            settings_before_edit: None,
             settings,
             save_dialog_open: false,
             open_dialog_open: false,
@@ -1151,7 +1153,6 @@ fn render_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                     }
                     if tool.kind == ToolKind::Ellipse {
                         response.context_menu(|ui| {
-                            ui.label("Forme — raccourci répété pour changer");
                             for kind in drafftink_core::shapes::GeometryKind::ALL {
                                 let option =
                                     ui.selectable_label(ui_state.geometry == kind, kind.label());
@@ -1838,15 +1839,6 @@ fn render_right_panel(
                     ui.spacing_mut().item_spacing = Vec2::new(0.0, 8.0);
 
                     panel_grip(ui);
-                    // Panel title
-                    ui.label(
-                        egui::RichText::new("Properties")
-                            .size(14.0)
-                            .strong()
-                            .color(Color32::from_gray(60)),
-                    );
-                    ui.add_space(4.0);
-
                     // Text-specific properties
                     if props.is_text {
                         let visuals = ui.visuals_mut();
@@ -3493,9 +3485,17 @@ fn render_open_recent_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<Ui
 /// Render persistent application settings.
 fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
     if !ui_state.settings_open {
+        if let Some(previous) = ui_state.settings_before_edit.take() {
+            ui_state.settings = previous;
+        }
         return None;
     }
 
+    if ui_state.settings_before_edit.is_none() {
+        ui_state.settings_before_edit = Some(ui_state.settings.clone());
+    }
+    let cancel_key = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+    let save_key = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
     let mut action = None;
     let mut close = false;
 
@@ -3518,6 +3518,7 @@ fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAct
                 .stroke(Stroke::new(1.0, Color32::from_gray(205)))
                 .inner_margin(Margin::same(18))
                 .show(ui, |ui| {
+                    ui.visuals_mut().override_text_color = Some(Color32::from_gray(30));
                     ui.set_width(520.0);
                     ui.set_max_height(650.0);
                     ui.horizontal(|ui| {
@@ -3746,7 +3747,19 @@ fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAct
                 });
         });
 
+    if save_key && !cancel_key {
+        ui_state.settings.sanitize();
+        action = Some(UiAction::SaveSettings);
+        close = true;
+    }
+    close |= cancel_key;
     if close {
+        if !matches!(action, Some(UiAction::SaveSettings)) {
+            if let Some(previous) = ui_state.settings_before_edit.take() {
+                ui_state.settings = previous;
+            }
+        }
+        ui_state.settings_before_edit = None;
         ui_state.settings_open = false;
     }
 
@@ -3850,6 +3863,57 @@ fn render_math_editor(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction>
     }
 
     action
+}
+
+#[cfg(test)]
+mod settings_keyboard_regressions {
+    use super::*;
+    fn frame(ctx: &Context, state: &mut UiState, key: Option<egui::Key>) -> Option<UiAction> {
+        let events = key
+            .into_iter()
+            .map(|key| egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            })
+            .collect();
+        let mut action = None;
+        let _ = ctx.run(
+            egui::RawInput {
+                events,
+                focused: true,
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 900.0))),
+                ..Default::default()
+            },
+            |ctx| {
+                action = render_settings_dialog(ctx, state);
+            },
+        );
+        action
+    }
+    #[test]
+    fn escape_restores_and_enter_saves_settings() {
+        let ctx = Context::default();
+        let mut state = UiState::default();
+        let original = state.settings.accent_color;
+        state.settings_open = true;
+        frame(&ctx, &mut state, None);
+        state.settings.accent_color = [14, 80, 130];
+        frame(&ctx, &mut state, Some(egui::Key::Escape));
+        assert!(!state.settings_open);
+        assert_eq!(state.settings.accent_color, original);
+        state.settings_open = true;
+        frame(&ctx, &mut state, None);
+        state.settings.accent_color = [14, 80, 130];
+        assert!(matches!(
+            frame(&ctx, &mut state, Some(egui::Key::Enter)),
+            Some(UiAction::SaveSettings)
+        ));
+        assert!(!state.settings_open);
+        assert_eq!(state.settings.accent_color, [14, 80, 130]);
+    }
 }
 
 #[cfg(test)]

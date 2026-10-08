@@ -228,6 +228,12 @@ impl ShapeTrait for Freehand {
     }
 
     fn hit_test(&self, point: Point, tolerance: f64) -> bool {
+        if self.closed && self.style.fill_color.is_some() {
+            use kurbo::Shape as _;
+            if self.to_path().winding(point) != 0 {
+                return true;
+            }
+        }
         if self.points.len() < 2 {
             if let Some(p) = self.points.first() {
                 let dx = point.x - p.x;

@@ -28,7 +28,7 @@ if not exist ".drafftink-server.pid" (
 :menu
 cls
 echo ======================================
-echo           Qursor 0.19.0
+echo           Qurso 0.20.0
 echo ======================================
 echo.
 echo   1 - Google Chrome

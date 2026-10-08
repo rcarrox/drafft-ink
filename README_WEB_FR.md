@@ -1,4 +1,4 @@
-# Qursor🌿 0.19.0 — site et cache hors connexion
+# Qurso🌿 0.20.0 — site et cache hors connexion
 
 Dans le ZIP Local et FTP, ouvrir le dossier `web` et envoyer **son contenu** (ou le contenu du ZIP Web séparé) dans `public_html/qrapht/web/`.
 `index.html`, `offline.js`, `sw.js`, les SVG et le dossier `pkg` doivent être directement dans ce dossier.
