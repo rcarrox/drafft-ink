@@ -54,12 +54,22 @@ const server=http.createServer((request,response)=>{
     assert.equal(await page.title(),'Qraphtinc');
     assert.equal(await page.evaluate(async()=>new Uint8Array(await (await fetch('./pkg/drafftink_app_bg.wasm')).arrayBuffer())[1]),97);
     // A worker from a partial FTP upload must fail without replacing the good cache.
-    await context.setOffline(false);
     const indexFile=path.join(root,'index.html'),original=fs.readFileSync(indexFile,'utf8');
     const newer=original.replace('<title>Qraphtinc</title>','<title>Qraphtinc update test</title>');
     fs.writeFileSync(indexFile,newer);build();fs.writeFileSync(indexFile,original);
+    // Prepare the partial upload before reconnecting; the online event also
+    // checks for updates, and must not race a still-old server response.
+    await page.evaluate(async()=>{
+      window.__offlineRejectedBuild=false;
+      const r=await navigator.serviceWorker.getRegistration();
+      r.addEventListener('updatefound',()=>{
+        const candidate=r.installing;
+        candidate?.addEventListener('statechange',()=>{if(candidate.state==='redundant')window.__offlineRejectedBuild=true;});
+      });
+    });
+    await context.setOffline(false);
     await page.evaluate(async()=>{const r=await navigator.serviceWorker.getRegistration();await r.update();});
-    await page.waitForFunction(()=>document.getElementById('qraphtinc-offline')?.textContent.includes('Cache hors connexion indisponible'),null,{timeout:60000});
+    await page.waitForFunction(()=>window.__offlineRejectedBuild===true,null,{timeout:60000});
     await context.setOffline(true);await page.reload();await loaded();assert.equal(await page.title(),'Qraphtinc');
     // Finish upload; the new release waits and leaves this sheet running.
     fs.writeFileSync(indexFile,newer);await context.setOffline(false);
@@ -82,6 +92,11 @@ const server=http.createServer((request,response)=>{
     const evidence=path.resolve('work/e2e/evidence');fs.mkdirSync(evidence,{recursive:true});
     fs.writeFileSync(path.join(evidence,'offline-result.json'),JSON.stringify({passed:true,scope:prefix,offline_reload:true,wasm_cached:true,incomplete_upload_rejected:true,update_requires_click:true,offline_updated_release:true,preferences_and_documents_preserved:true,unrelated_site_cache_preserved:true},null,2));
     console.log('Offline cache browser checks passed: nested scope, offline reload/WASM, partial upload integrity, explicit update, preserved user storage and unrelated caches.');
+  }catch(error){
+    fs.mkdirSync('work/e2e/evidence',{recursive:true});
+    const debug=await page.evaluate(async()=>({title:document.title,notice:document.getElementById('qraphtinc-offline')?.textContent,readySeen:window.__offlineNoticeSeen,rejectedBuild:window.__offlineRejectedBuild,caches:await caches.keys()})).catch(()=>null);
+    fs.writeFileSync('work/e2e/evidence/offline-failure.json',JSON.stringify(debug,null,2));
+    throw error;
   }finally{
     fs.mkdirSync('work/e2e/evidence',{recursive:true});fs.writeFileSync('work/e2e/evidence/offline-browser.log',logs.join('\n'));
     await browser.close();await new Promise(resolve=>server.close(resolve));

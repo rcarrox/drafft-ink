@@ -3,7 +3,7 @@
     if (!('serviceWorker' in navigator) || !window.isSecureContext) return;
     // Existing canvas diagnostic tests deliberately bypass caching; dedicated offline tests exercise it.
     if (new URLSearchParams(location.search).has('drafftink-test') && !new URLSearchParams(location.search).has('offline-test')) return;
-    let registration, updateRequested = false, started = false;
+    let registration, noticeTimer, updateRequested = false, started = false;
     let hadController = !!navigator.serviceWorker.controller;
     const notice = document.createElement('div');
     notice.id = 'qraphtinc-offline';
@@ -14,7 +14,7 @@
             notice.hidden = !notice.hidden;
         }
     });
-    const show = text => { notice.textContent = text; if (!notice.isConnected) document.body.appendChild(notice); };
+    const show = text => { clearTimeout(noticeTimer); notice.textContent = text; if (!notice.isConnected) document.body.appendChild(notice); };
     const dismiss = () => {
         const button = document.createElement('button');
         button.textContent = 'Fermer';
@@ -27,7 +27,7 @@
         show(navigator.onLine ? 'Disponible hors connexion' : 'Mode hors connexion');
         dismiss();
         // No permanent overlay over canvas/panels once readiness was announced.
-        setTimeout(() => { if (!registration?.waiting) notice.remove(); }, 6000);
+        noticeTimer = setTimeout(() => { if (!registration?.waiting) notice.remove(); }, 6000);
     };
     const offerUpdate = () => {
         show('Nouvelle version disponible.');
