@@ -175,11 +175,12 @@ function inspectCapture(file) {
 
     // One physical render pixel for a normal arrow, historical GRID_SIZE for Shift.
     const nudgeBefore=(await state()).shapes.find(item=>item.id===commandId);
+    await page.mouse.click(nudgeBefore.bounds[0]+10,(nudgeBefore.bounds[1]+nudgeBefore.bounds[3])/2);
     await page.keyboard.press('ArrowRight');await wait(s=>Math.abs(s.shapes.find(item=>item.id===commandId).bounds[0]-nudgeBefore.bounds[0]-1)<0.01);
     const nudgeFine=(await state()).shapes.find(item=>item.id===commandId);
     await page.keyboard.press('Shift+ArrowRight');await wait(s=>Math.abs(s.shapes.find(item=>item.id===commandId).bounds[0]-nudgeFine.bounds[0]-20*s.zoom)<0.01);
     // Original characters and font-dependent scripts, including symbols without Unicode script glyphs.
-    await page.keyboard.press('t');await page.mouse.click(700,420);await wait(s=>!!s.editing_text);
+    await page.keyboard.press('t');await page.mouse.click(820,420);await wait(s=>!!s.editing_text);
     await keys('Base ');await page.keyboard.press('Control+ArrowUp');await keys('AZ09α≤@');await page.keyboard.press('Control+ArrowUp');await keys(' fin');
     const scriptText=s=>s.shapes.find(item=>item.id===s.editing_text)?.shape.Text;
     await wait(s=>scriptText(s)?.content==='Base AZ09α≤@ fin');

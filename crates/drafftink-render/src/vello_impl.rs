@@ -3553,6 +3553,7 @@ mod parent_font_and_script_tests {
     fn inline_math_changes_font_with_parent_and_invalidates_cached_scene() {
         let mut renderer = VelloRenderer::new();
         let mut text = Text::new(Point::ZERO, "= \u{fffc}".into());
+        text.font_family = FontFamily::NotoSans;
         text.formulas.push(InlineFormula {
             at: 2,
             math: Math::new(Point::ZERO, "x+123".into()),
