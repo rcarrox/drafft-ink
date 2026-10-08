@@ -3696,3 +3696,21 @@ mod cursor_and_math_font_tests {
         assert_ne!(r.math_cache[&m.id()].primary_font_id, id);
     }
 }
+
+#[cfg(test)]
+mod raw_latex_tests {
+    use super::*;
+    #[test]
+    fn relations_and_successive_indices_render() {
+        let mut renderer = VelloRenderer::new();
+        for text in [
+            r"x \neq y \in A",
+            r"x_{i} y_{j}",
+            r"x_{i_j}",
+            r"\frac{a}{b}",
+            r"\sqrt[n]{x}",
+        ] {
+            assert!(renderer.formula_is_valid(text), "{text}");
+        }
+    }
+}

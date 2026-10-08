@@ -740,7 +740,18 @@ pub mod file_ops {
             .and_then(|v| v.as_string())
             .unwrap_or_default()
     }
-    pub fn export_png_automatic(bytes: &[u8], name: &str) {
+    pub fn snapshot_filename(name: &str, extension: &str) -> String {
+        web_sys::window()
+            .and_then(|window| {
+                js_sys::Reflect::get(&window, &"drafftinkSnapshotFilename".into())
+                    .ok()
+                    .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+                    .and_then(|f| f.call2(&window, &name.into(), &extension.into()).ok())
+                    .and_then(|v| v.as_string())
+            })
+            .unwrap_or_else(|| format!("{}.{}", name, extension))
+    }
+    pub fn export_png_automatic(bytes: &[u8], name: &str, json: Option<&str>) {
         let data = js_sys::Uint8Array::from(bytes);
         let parts = js_sys::Array::new();
         parts.push(&data);
@@ -751,18 +762,17 @@ pub mod file_ops {
             return;
         };
         let name = name.to_string();
+        let json = json.unwrap_or_default().to_string();
         wasm_bindgen_futures::spawn_local(async move {
             let Some(window) = web_sys::window() else {
                 return;
             };
-            if let Ok(value) =
-                js_sys::Reflect::get(&window, &"drafftinkSaveBlobToExportDirectory".into())
-            {
+            if let Ok(value) = js_sys::Reflect::get(&window, &"drafftinkSaveSnapshotPair".into()) {
                 if let Ok(function) = value.dyn_into::<js_sys::Function>() {
                     let args = js_sys::Array::new();
                     args.push(&name.into());
                     args.push(&blob);
-                    args.push(&JsValue::TRUE);
+                    args.push(&JsValue::from_str(&json));
                     if let Ok(promise) = function
                         .apply(&window, &args)
                         .and_then(|v| v.dyn_into::<js_sys::Promise>())
@@ -1771,7 +1781,7 @@ fn spawn_png_export_async_mode(
         if is_copy {
             file_ops::copy_png_to_clipboard(png_data);
         } else if automatic {
-            file_ops::export_png_automatic(&png_data, &filename);
+            file_ops::export_png_automatic(&png_data, &filename, scene_json.as_deref());
         } else {
             file_ops::export_png(&png_data, &filename.trim_end_matches(".png"));
             log::info!("PNG export complete: {} bytes", png_data.len());
@@ -1919,16 +1929,14 @@ fn apply_browser_cursor(state: &AppState) {
             js_sys::Reflect::get(browser.as_ref(), &JsValue::from_str("drafftinkSetCursor"))
                 .and_then(|v| v.dyn_into::<js_sys::Function>())
         {
-            let text = matches!(
-                state.canvas.tool_manager.current_tool,
-                ToolKind::Text | ToolKind::Math
-            );
+            let (kind, over_ui) = browser_cursor_kind(state);
             let c = state.ui_state.settings.cursor_outline;
             let color = format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2]);
-            let _ = function.call2(
+            let _ = function.call3(
                 browser.as_ref(),
-                &JsValue::from_bool(text),
+                &JsValue::from_f64(kind as f64),
                 &JsValue::from_str(&color),
+                &JsValue::from_bool(over_ui),
             );
         }
     }
@@ -2965,6 +2973,7 @@ impl ApplicationHandler for App {
                 // Update laser trail (fade out)
                 let elapsed = state.last_redraw.elapsed().as_secs_f64();
                 state.last_redraw = FrameInstant::now();
+                let edge_panning = auto_pan_drag(state, elapsed.min(0.05));
                 state.event_handler.update_laser_trail(elapsed);
 
                 // Check for pending document from async file load
@@ -5288,7 +5297,7 @@ impl ApplicationHandler for App {
                             serde_json::json!({"id":shape.id(),"shape":shape,"bounds":[top_left.x,top_left.y,bottom_right.x,bottom_right.y],"handles":handles})
                         }).collect();
 
-                        let status = serde_json::json!({"shapes":shapes,"presentation":state.ui_state.presentation_mode,"tool":format!("{:?}",state.ui_state.current_tool),"editing_text":state.event_handler.editing_text,"inline_dialog":state.ui_state.inline_formula_draft.is_some(),"inline_error":state.ui_state.inline_formula_error,"zoom":state.canvas.camera.zoom,"png_save_requests":state.png_save_requests,"active_tab":state.active_tab,"tabs":state.tabs.len(),"memory":{"parked_shapes_total":state.tabs.iter().map(|tab|tab.document.len()).sum::<usize>(),"image_cache_bytes":state.shape_renderer.image_cache_bytes(),"image_cache_budget_bytes":32*1024*1024,"path_cache_payload_bytes":state.shape_renderer.path_cache_bytes(),"history_payload_bytes":state.canvas.document.history_memory_bytes(),"render_target_allocations":state.render_target_allocations,"render_target_bytes":state.surface.config.width as u64*state.surface.config.height as u64*4},"geometry":format!("{:?}",state.ui_state.geometry),"context_properties":state.ui_state.context_properties,"properties_visible":!state.ui_state.context_rects.is_empty(),"selected_text":state.text_edit_state.as_ref().and_then(|e|e.editor().selected_text()).map(|s|s.to_string()),"insertion_script":state.text_edit_state.as_ref().map(|e|e.script_value()),"text_caret":state.text_edit_state.as_ref().and_then(|e|e.cursor_geometry(1.5)).map(|r|[r.x0,r.y0,r.x1,r.y1]),"editing_math":state.ui_state.math_editor.as_ref().map(|e| e.shape_id),"math_form_rect":state.ui_state.math_editor_rect.map(|r|[r.min.x,r.min.y,r.max.x,r.max.y]),"math_input_focused":state.ui_state.math_editor.as_ref().is_some_and(|e|state.egui_ctx.memory(|m|m.focused()==Some(egui::Id::new(("math_source",e.shape_id))))),"command_editor":state.ui_state.text_command_editor.as_ref().map(|e| &e.source),"controls":state.ui_state.test_controls});
+                        let status = serde_json::json!({"shapes":shapes,"presentation":state.ui_state.presentation_mode,"tool":format!("{:?}",state.ui_state.current_tool),"editing_text":state.event_handler.editing_text,"inline_dialog":state.ui_state.inline_formula_draft.is_some(),"inline_error":state.ui_state.inline_formula_error,"zoom":state.canvas.camera.zoom,"camera_offset":[state.canvas.camera.offset.x,state.canvas.camera.offset.y],"cursor_mode":browser_cursor_kind(state).0,"png_save_requests":state.png_save_requests,"active_tab":state.active_tab,"tabs":state.tabs.len(),"memory":{"parked_shapes_total":state.tabs.iter().map(|tab|tab.document.len()).sum::<usize>(),"image_cache_bytes":state.shape_renderer.image_cache_bytes(),"image_cache_budget_bytes":32*1024*1024,"path_cache_payload_bytes":state.shape_renderer.path_cache_bytes(),"history_payload_bytes":state.canvas.document.history_memory_bytes(),"render_target_allocations":state.render_target_allocations,"render_target_bytes":state.surface.config.width as u64*state.surface.config.height as u64*4},"geometry":format!("{:?}",state.ui_state.geometry),"context_properties":state.ui_state.context_properties,"properties_visible":!state.ui_state.context_rects.is_empty(),"selected_text":state.text_edit_state.as_ref().and_then(|e|e.editor().selected_text()).map(|s|s.to_string()),"insertion_script":state.text_edit_state.as_ref().map(|e|e.script_value()),"text_caret":state.text_edit_state.as_ref().and_then(|e|e.cursor_geometry(1.5)).map(|r|[r.x0,r.y0,r.x1,r.y1]),"editing_math":state.ui_state.math_editor.as_ref().map(|e| e.shape_id),"math_form_rect":state.ui_state.math_editor_rect.map(|r|[r.min.x,r.min.y,r.max.x,r.max.y]),"math_input_focused":state.ui_state.math_editor.as_ref().is_some_and(|e|state.egui_ctx.memory(|m|m.focused()==Some(egui::Id::new(("math_source",e.shape_id))))),"command_editor":state.ui_state.text_command_editor.as_ref().map(|e| &e.source),"controls":state.ui_state.test_controls});
                         let _ = js_sys::Reflect::set(
                             window.as_ref(),
                             &JsValue::from_str("__drafftinkTestState"),
@@ -5522,6 +5531,11 @@ impl ApplicationHandler for App {
                     state
                         .egui_ctx
                         .request_repaint_after(std::time::Duration::from_millis(500));
+                }
+                if edge_panning {
+                    state
+                        .egui_ctx
+                        .request_repaint_after(std::time::Duration::from_millis(16));
                 }
                 if !state.event_handler.laser_trail.is_empty() {
                     state
@@ -5907,7 +5921,7 @@ impl ApplicationHandler for App {
                                         state.ui_state.math_editor = Some(MathEditorState {
                                             shape_id: math_id,
                                             input: math.edit_source().to_string(),
-                                            original_source: math.edit_source().to_string(),
+                                            original_source: math.source.clone(),
                                             original_latex: math.latex.clone(),
                                             is_new: false,
                                         });
@@ -7610,6 +7624,9 @@ fn save_canvas_png(state: &mut AppState, render_cx: &vello::util::RenderContext,
     let width = bounds.width().ceil() as u32;
     let height = bounds.height().ceil() as u32;
     let handle = &render_cx.devices[state.surface.dev_id];
+    #[cfg(target_arch = "wasm32")]
+    let filename = file_ops::snapshot_filename(&state.canvas.document.name, "png");
+    #[cfg(not(target_arch = "wasm32"))]
     let filename = format!("{}.png", state.canvas.document.name);
     #[cfg(target_arch = "wasm32")]
     spawn_png_export_async_mode(
@@ -7643,10 +7660,7 @@ fn save_canvas_png(state: &mut AppState, render_cx: &vello::util::RenderContext,
 fn finish_math_editor(state: &mut AppState) {
     if let Some(editor) = state.ui_state.math_editor.take() {
         if let Some(Shape::Math(math)) = state.canvas.document.get_shape_mut(editor.shape_id) {
-            math.set_formula(
-                editor.input.clone(),
-                crate::math_input::friendly_math_to_latex(&editor.input),
-            );
+            math.set_formula(editor.input.clone(), editor.input.clone());
         }
         if editor.input.trim().is_empty() {
             state.canvas.remove_shape(editor.shape_id);
@@ -7659,10 +7673,7 @@ fn finish_math_editor(state: &mut AppState) {
             }
             state.canvas.document.push_undo();
             if let Some(Shape::Math(math)) = state.canvas.document.get_shape_mut(editor.shape_id) {
-                math.set_formula(
-                    editor.input.clone(),
-                    crate::math_input::friendly_math_to_latex(&editor.input),
-                );
+                math.set_formula(editor.input.clone(), editor.input.clone());
             }
         }
     }
@@ -7715,6 +7726,83 @@ fn select_text_word_at(state: &mut AppState, point: kurbo::Point) {
                 let (fonts, layouts) = state.shape_renderer.contexts_mut();
                 editor.handle_double_click(p.x as f32, p.y as f32, fonts, layouts);
             }
+        }
+    }
+}
+
+fn auto_pan_drag(state: &mut AppState, seconds: f64) -> bool {
+    if !state.input.is_button_pressed(MouseButton::Left)
+        || !state.event_handler.is_moving_shapes()
+        || state.event_handler.editing_text.is_some()
+    {
+        return false;
+    }
+    let point = state.input.mouse_position();
+    let size = kurbo::Size::new(
+        state.window.inner_size().width as f64,
+        state.window.inner_size().height as f64,
+    );
+    let velocity =
+        crate::event_handler::edge_pan_velocity(point, size, 48.0 * state.window.scale_factor());
+    if velocity.hypot2() == 0.0 {
+        return false;
+    }
+    state.canvas.camera.pan(-velocity * seconds);
+    let world = state.canvas.camera.screen_to_world(point);
+    state.event_handler.handle_drag(
+        &mut state.canvas,
+        world,
+        &state.input,
+        state.ui_state.grid_snap_enabled,
+        state.ui_state.smart_snap_enabled,
+        state.ui_state.angle_snap_enabled,
+    );
+    true
+}
+
+fn browser_cursor_kind(state: &AppState) -> (u8, bool) {
+    let pointer = state.egui_ctx.input(|i| i.pointer.hover_pos());
+    let over_ui = state.egui_ctx.is_pointer_over_area();
+    if over_ui {
+        if egui::Popup::is_any_open(&state.egui_ctx) {
+            return (0, true);
+        }
+        if state.ui_state.math_editor.is_some()
+            && pointer.is_some_and(|p| {
+                state
+                    .ui_state
+                    .math_editor_rect
+                    .is_some_and(|r| r.contains(p))
+            })
+        {
+            return (2, true);
+        }
+        if state.ui_state.text_command_editor.is_some()
+            && pointer.is_some_and(|p| {
+                state
+                    .ui_state
+                    .text_command_rect
+                    .is_some_and(|r| r.contains(p))
+            })
+        {
+            return (1, true);
+        }
+        return (0, true);
+    }
+    match state.canvas.tool_manager.current_tool {
+        ToolKind::Text => (1, false),
+        ToolKind::Math => (2, false),
+        _ => {
+            let point = state
+                .canvas
+                .camera
+                .screen_to_world(state.input.mouse_position());
+            let text = state
+                .event_handler
+                .editing_text
+                .and_then(|id| state.canvas.document.get_shape(id))
+                .is_some_and(|s| s.hit_test(point, 0.0));
+            (if text { 1 } else { 0 }, false)
         }
     }
 }

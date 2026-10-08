@@ -71,6 +71,10 @@ pub struct TextModifiers {
 impl TextModifiers {
     /// Get the action modifier (Ctrl on Windows/Linux, Cmd on macOS).
     pub fn action_mod(&self) -> bool {
+        // AltGr on French keyboards carries Ctrl+Alt but is text input.
+        if self.alt {
+            return false;
+        }
         if cfg!(target_os = "macos") {
             self.meta
         } else {
@@ -1031,5 +1035,34 @@ mod insertion_cursor_tests {
         assert!(sup.y0 < normal.y0);
         assert!(sub.y0 > normal.y0);
         assert_eq!(sup.x0, normal.x0);
+    }
+}
+
+#[cfg(test)]
+mod altgr_text_tests {
+    use super::*;
+    #[test]
+    fn braces_are_text_with_french_altgr() {
+        let mut e = TextEditState::new("", 20.0);
+        let mut fonts = FontContext::new();
+        let mut layout = LayoutContext::new();
+        let mods = TextModifiers {
+            ctrl: true,
+            alt: true,
+            ..Default::default()
+        };
+        e.handle_key(
+            TextKey::Character("{".into()),
+            mods,
+            &mut fonts,
+            &mut layout,
+        );
+        e.handle_key(
+            TextKey::Character("}".into()),
+            mods,
+            &mut fonts,
+            &mut layout,
+        );
+        assert_eq!(e.text(), "{}");
     }
 }

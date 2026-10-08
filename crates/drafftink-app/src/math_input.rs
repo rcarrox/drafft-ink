@@ -670,3 +670,27 @@ mod live_root_tests {
         );
     }
 }
+
+pub fn command_example(source: &str) -> Option<&'static str> {
+    match source.split_once('(')?.0.trim() {
+        "frac" => Some("frac(x+1,8)"),
+        "sqrt" => Some("sqrt(x+1)"),
+        "root" => Some("root(x,3)"),
+        "sum" => Some("sum(kx,k,1,n)"),
+        "prod" => Some("prod(k,k,1,n)"),
+        "int" => Some("int(x²,x,1,2)"),
+        "lim" => Some("lim(x,x,5)"),
+        "bin" => Some("bin(n,k)"),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod example_tests {
+    #[test]
+    fn examples_match_active_command() {
+        assert_eq!(super::command_example("frac("), Some("frac(x+1,8)"));
+        assert_eq!(super::command_example("root(x,"), Some("root(x,3)"));
+        assert_eq!(super::command_example("unknown("), None);
+    }
+}

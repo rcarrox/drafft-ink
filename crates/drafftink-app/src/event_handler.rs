@@ -327,6 +327,13 @@ impl EventHandler {
     }
 
     /// Check if a manipulation is in progress.
+    pub fn is_moving_shapes(&self) -> bool {
+        self.multi_move.is_some()
+            || self
+                .manipulation
+                .as_ref()
+                .is_some_and(|m| m.handle.is_none())
+    }
     pub fn is_manipulating(&self) -> bool {
         self.manipulation.is_some() || self.multi_move.is_some()
     }
@@ -1603,5 +1610,40 @@ mod future_font_regressions {
         }
         assert_eq!(canvas.document.len(), 2);
         assert_eq!(handler.text_font, wanted);
+    }
+}
+
+/// Screen velocity grows smoothly toward the edge and is bounded outside it.
+pub(crate) fn edge_pan_velocity(point: Point, viewport: Size, margin: f64) -> kurbo::Vec2 {
+    fn axis(p: f64, length: f64, margin: f64) -> f64 {
+        let margin = margin.min(length * 0.25).max(1.0);
+        if p < margin {
+            -((margin - p) / margin).clamp(0.0, 1.0) * 600.0
+        } else if p > length - margin {
+            ((p - (length - margin)) / margin).clamp(0.0, 1.0) * 600.0
+        } else {
+            0.0
+        }
+    }
+    kurbo::Vec2::new(
+        axis(point.x, viewport.width, margin),
+        axis(point.y, viewport.height, margin),
+    )
+}
+
+#[cfg(test)]
+mod edge_pan_tests {
+    use super::*;
+    #[test]
+    fn velocity_only_near_edges_and_bounded() {
+        let size = Size::new(800.0, 600.0);
+        assert_eq!(
+            edge_pan_velocity(Point::new(400.0, 300.0), size, 48.0),
+            kurbo::Vec2::ZERO
+        );
+        assert!(edge_pan_velocity(Point::new(798.0, 300.0), size, 48.0).x > 500.0);
+        assert!(edge_pan_velocity(Point::new(2.0, 300.0), size, 48.0).x < -500.0);
+        let out = edge_pan_velocity(Point::new(900.0, 900.0), size, 48.0);
+        assert_eq!(out, kurbo::Vec2::new(600.0, 600.0));
     }
 }
