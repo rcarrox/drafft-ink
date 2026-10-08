@@ -3394,17 +3394,19 @@ impl ApplicationHandler for App {
                     .ui_state
                     .math_editor
                     .as_ref()
-                    .and_then(|editor| state.canvas.document.get_shape(editor.shape_id))
-                    .and_then(|shape| match shape {
-                        Shape::Math(math) => {
-                            let p = if state.canvas.document.is_pinned(editor.shape_id) {
-                                math.position
-                            } else {
-                                state.canvas.camera.world_to_screen(math.position)
-                            };
-                            Some(egui::Pos2::new(p.x as f32, p.y as f32))
-                        }
-                        _ => None,
+                    .and_then(|editor| {
+                        let shape_id = editor.shape_id;
+                        state.canvas.document.get_shape(shape_id).and_then(|shape| match shape {
+                            Shape::Math(math) => {
+                                let p = if state.canvas.document.is_pinned(shape_id) {
+                                    math.position
+                                } else {
+                                    state.canvas.camera.world_to_screen(math.position)
+                                };
+                                Some(egui::Pos2::new(p.x as f32, p.y as f32))
+                            }
+                            _ => None,
+                        })
                     });
 
                 // Update UI state from first selected shape's style
@@ -7778,7 +7780,10 @@ fn move_selection_by_key(state: &mut AppState, key: &str, repeat: bool, fast: bo
     }
     for id in state.canvas.selection.clone() {
         let local_delta = if state.canvas.document.is_pinned(id) {
-            delta * state.canvas.camera.zoom
+            (
+                delta.0 * state.canvas.camera.zoom,
+                delta.1 * state.canvas.camera.zoom,
+            )
         } else {
             delta
         };

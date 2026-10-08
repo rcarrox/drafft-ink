@@ -35,6 +35,10 @@ pub struct SelectedShapeProps {
     pub has_selection: bool,
     /// Number of selected shapes.
     pub selection_count: usize,
+    /// Whether all currently selected shapes are pinned to the viewport.
+    pub selection_pinned: bool,
+    /// Background color used for viewport-pinned shapes.
+    pub pin_background: Color32,
     /// Is the selected shape a text shape?
     pub is_text: bool,
     /// Is the selected shape a math shape?
