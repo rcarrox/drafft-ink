@@ -3519,6 +3519,16 @@ fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAct
                 .inner_margin(Margin::same(18))
                 .show(ui, |ui| {
                     ui.visuals_mut().override_text_color = Some(Color32::from_gray(30));
+                    // The app can use egui's dark widget palette even on this white dialog.
+                    // Keep every field/checkbox legible in both normal and hover states.
+                    let visuals = ui.visuals_mut();
+                    visuals.widgets.inactive.bg_fill = Color32::from_gray(245);
+                    visuals.widgets.inactive.weak_bg_fill = Color32::from_gray(245);
+                    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, Color32::from_gray(30));
+                    visuals.widgets.hovered = visuals.widgets.inactive;
+                    visuals.widgets.active = visuals.widgets.inactive;
+                    visuals.widgets.hovered.bg_fill = Color32::from_gray(235);
+                    visuals.widgets.hovered.weak_bg_fill = Color32::from_gray(235);
                     ui.set_width(520.0);
                     ui.set_max_height(650.0);
                     ui.horizontal(|ui| {
