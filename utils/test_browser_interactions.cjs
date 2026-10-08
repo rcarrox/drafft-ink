@@ -133,7 +133,17 @@ function inspectCapture(file) {
     await page.mouse.move(700,270);await page.waitForTimeout(100);await page.mouse.down();await page.mouse.move(850,410,{steps:8});await page.mouse.up();
     await wait(s=>s.shapes.some(i=>i.shape.Ellipse?.geometry==='Trapezoid'));
     await snapshot(page,'geometry-context.png');
-    await geometryContext.close();page=mainPage;
+    await geometryContext.close();
+    // Math form pointer bounds use egui points, even on a scaled display.
+    const dpiContext=await browser.newContext({viewport:{width:1280,height:720},deviceScaleFactor:2});
+    await dpiContext.addInitScript(()=>localStorage.setItem('drafftink.user_settings.v1',JSON.stringify({restore_last_document:false,autosave_enabled:false,default_font:'Noto Sans',default_font_postscript:''})));
+    page=await dpiContext.newPage();await page.goto(process.env.DRAFFTINK_TEST_URL || 'http://127.0.0.1:8888/?drafftink-test=1');await wait(s=>s.shapes.length===0);
+    await page.mouse.move(400,300);await page.waitForTimeout(100);await page.keyboard.press('m');await page.mouse.click(400,300,{delay:60});await wait(s=>!!s.editing_math&&s.math_input_focused&&!!s.math_form_rect);
+    await keys('x+1');await wait(s=>s.shapes[0].shape.Math?.source==='x+1');
+    const field=(await state()).math_form_rect;
+    await page.mouse.click(field[0]+25,field[1]+22,{delay:60});await wait(s=>!!s.editing_math&&s.shapes.length===1);
+    await page.mouse.move(200,600);await page.waitForTimeout(100);await page.mouse.click(200,600,{delay:60});await wait(s=>s.editing_math===null&&s.shapes.length===1);
+    await dpiContext.close();page=mainPage;
     await page.goto(process.env.DRAFFTINK_TEST_URL || 'http://127.0.0.1:8888/?drafftink-test=1');
     await wait(s => s.shapes.length === 0);
     await snapshot(page,'initial.png');
@@ -292,7 +302,7 @@ function inspectCapture(file) {
     const equation=(await state()).shapes.find(i=>i.shape.Math);
     await page.mouse.move((equation.bounds[0]+equation.bounds[2])/2,(equation.bounds[1]+equation.bounds[3])/2);await page.waitForTimeout(100);
     await page.mouse.click((equation.bounds[0]+equation.bounds[2])/2,(equation.bounds[1]+equation.bounds[3])/2,{button:'right',delay:60});
-    await control('math_object_font');await control('math_object_font:Noto Sans');await wait(s=>mathText(s)?.font.family==='NotoSans');
+    await control('math_object_font');await control('math_object_font:Noto Sans');await wait(s=>mathText(s)?.font.family==='NotoSans');await snapshot(page,'math-font.png');
     await page.keyboard.press('Control+z');await wait(s=>mathText(s)?.font.family==='GelPen');
     await page.mouse.move(650,470);await page.waitForTimeout(100);
     // A subsequent click can place a new Math; a toolbar switch closes it.
@@ -368,7 +378,7 @@ function inspectCapture(file) {
     await page.keyboard.press('F11'); await page.waitForFunction(() => !document.fullscreenElement);
 
 
-    const captures=['inline-dialog.png','text-fraction.png','text-root.png','presentation.png','image-flipped.png','image-rotated.png'].map(file=>inspectCapture(path.join(evidence,file)));
+    const captures=['math-font.png','text-fraction.png','text-root.png','presentation.png','image-flipped.png','image-rotated.png'].map(file=>inspectCapture(path.join(evidence,file)));
     fs.writeFileSync(path.join(evidence,'capture-validation.json'),JSON.stringify({screen_captures:captures,gpu_exports:[textPixels,imagePixels]},null,2));
     if(captures.some(c=>!c.valid)||!textPixels.valid||!imagePixels.valid)console.warn('CI WebGPU pixel evidence unavailable; interaction state tests passed. Local UI and native PNG metadata checks are separate evidence.');
     fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, gpu_pixels_validated: textPixels.valid&&imagePixels.valid, scenarios: ['French dead caret and accents', 'Unicode expander ^4/^>/^< replacement', 'partial selected B/I/U', 'nested inline fraction', 'indexed root', 'presentation', 'fullscreen', 'Escape preserves text', 'image mirrors, corner rotation, Undo/Redo'] }, null, 2));

@@ -5288,7 +5288,7 @@ impl ApplicationHandler for App {
                             serde_json::json!({"id":shape.id(),"shape":shape,"bounds":[top_left.x,top_left.y,bottom_right.x,bottom_right.y],"handles":handles})
                         }).collect();
 
-                        let status = serde_json::json!({"shapes":shapes,"presentation":state.ui_state.presentation_mode,"tool":format!("{:?}",state.ui_state.current_tool),"editing_text":state.event_handler.editing_text,"inline_dialog":state.ui_state.inline_formula_draft.is_some(),"inline_error":state.ui_state.inline_formula_error,"zoom":state.canvas.camera.zoom,"png_save_requests":state.png_save_requests,"active_tab":state.active_tab,"tabs":state.tabs.len(),"memory":{"parked_shapes_total":state.tabs.iter().map(|tab|tab.document.len()).sum::<usize>(),"image_cache_bytes":state.shape_renderer.image_cache_bytes(),"image_cache_budget_bytes":32*1024*1024,"path_cache_payload_bytes":state.shape_renderer.path_cache_bytes(),"history_payload_bytes":state.canvas.document.history_memory_bytes(),"render_target_allocations":state.render_target_allocations,"render_target_bytes":state.surface.config.width as u64*state.surface.config.height as u64*4},"geometry":format!("{:?}",state.ui_state.geometry),"context_properties":state.ui_state.context_properties,"properties_visible":!state.ui_state.context_rects.is_empty(),"selected_text":state.text_edit_state.as_ref().and_then(|e|e.editor().selected_text()).map(|s|s.to_string()),"insertion_script":state.text_edit_state.as_ref().map(|e|e.script_value()),"text_caret":state.text_edit_state.as_ref().and_then(|e|e.cursor_geometry(1.5)).map(|r|[r.x0,r.y0,r.x1,r.y1]),"editing_math":state.ui_state.math_editor.as_ref().map(|e| e.shape_id),"math_input_focused":state.ui_state.math_editor.as_ref().is_some_and(|e|state.egui_ctx.memory(|m|m.focused()==Some(egui::Id::new(("math_source",e.shape_id))))),"command_editor":state.ui_state.text_command_editor.as_ref().map(|e| &e.source),"controls":state.ui_state.test_controls});
+                        let status = serde_json::json!({"shapes":shapes,"presentation":state.ui_state.presentation_mode,"tool":format!("{:?}",state.ui_state.current_tool),"editing_text":state.event_handler.editing_text,"inline_dialog":state.ui_state.inline_formula_draft.is_some(),"inline_error":state.ui_state.inline_formula_error,"zoom":state.canvas.camera.zoom,"png_save_requests":state.png_save_requests,"active_tab":state.active_tab,"tabs":state.tabs.len(),"memory":{"parked_shapes_total":state.tabs.iter().map(|tab|tab.document.len()).sum::<usize>(),"image_cache_bytes":state.shape_renderer.image_cache_bytes(),"image_cache_budget_bytes":32*1024*1024,"path_cache_payload_bytes":state.shape_renderer.path_cache_bytes(),"history_payload_bytes":state.canvas.document.history_memory_bytes(),"render_target_allocations":state.render_target_allocations,"render_target_bytes":state.surface.config.width as u64*state.surface.config.height as u64*4},"geometry":format!("{:?}",state.ui_state.geometry),"context_properties":state.ui_state.context_properties,"properties_visible":!state.ui_state.context_rects.is_empty(),"selected_text":state.text_edit_state.as_ref().and_then(|e|e.editor().selected_text()).map(|s|s.to_string()),"insertion_script":state.text_edit_state.as_ref().map(|e|e.script_value()),"text_caret":state.text_edit_state.as_ref().and_then(|e|e.cursor_geometry(1.5)).map(|r|[r.x0,r.y0,r.x1,r.y1]),"editing_math":state.ui_state.math_editor.as_ref().map(|e| e.shape_id),"math_form_rect":state.ui_state.math_editor_rect.map(|r|[r.min.x,r.min.y,r.max.x,r.max.y]),"math_input_focused":state.ui_state.math_editor.as_ref().is_some_and(|e|state.egui_ctx.memory(|m|m.focused()==Some(egui::Id::new(("math_source",e.shape_id))))),"command_editor":state.ui_state.text_command_editor.as_ref().map(|e| &e.source),"controls":state.ui_state.test_controls});
                         let _ = js_sys::Reflect::set(
                             window.as_ref(),
                             &JsValue::from_str("__drafftinkTestState"),
@@ -5716,18 +5716,38 @@ impl ApplicationHandler for App {
                     && state.ui_state.math_editor.is_some()
                 {
                     let p = state.input.mouse_position();
-                    let p = egui::Pos2::new(p.x as f32, p.y as f32);
-                    if state
+                    let scale = state.egui_ctx.pixels_per_point() as f64;
+                    let p = egui::Pos2::new((p.x / scale) as f32, (p.y / scale) as f32);
+                    let p = state
+                        .egui_state
+                        .egui_input_mut()
+                        .events
+                        .iter()
+                        .rev()
+                        .find_map(|event| {
+                            if let egui::Event::PointerButton {
+                                pos, pressed: true, ..
+                            } = event
+                            {
+                                Some(*pos)
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or(p);
+                    let outside = state
                         .ui_state
                         .math_editor_rect
-                        .is_some_and(|r| !r.contains(p))
-                    {
+                        .is_none_or(|r| !r.contains(p));
+                    if outside {
                         finish_math_editor(state);
-                        state.needs_redraw = true;
-                        state.window.request_redraw();
-                        if !egui_wants_input {
-                            return;
-                        }
+                    }
+                    state.needs_redraw = true;
+                    state.window.request_redraw();
+                    // Egui already received this event; never forward a field
+                    // click to the canvas, even if hover arrived this same frame.
+                    if !egui_wants_input || !outside {
+                        return;
                     }
                 }
                 // Skip canvas processing if egui wants the pointer
@@ -5737,15 +5757,6 @@ impl ApplicationHandler for App {
                     return;
                 }
 
-                if btn_state == ElementState::Pressed
-                    && button == MouseButton::Left
-                    && state.ui_state.math_editor.is_some()
-                {
-                    finish_math_editor(state);
-                    state.needs_redraw = true;
-                    state.window.request_redraw();
-                    return;
-                }
                 if btn_state == ElementState::Pressed {
                     state.ui_state.text_command_editor = None;
                 }
