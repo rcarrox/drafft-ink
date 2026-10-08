@@ -655,3 +655,18 @@ mod binomial_and_infinity_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod live_root_tests {
+    #[test]
+    fn root_prefix_nested_preview() {
+        assert_eq!(
+            super::text_command_prefix("root(", 5),
+            Some((0, "root".into()))
+        );
+        assert_eq!(
+            super::friendly_math_to_latex("root(frac(a,b),3)"),
+            r"\sqrt[3]{\frac{a}{b}}"
+        );
+    }
+}

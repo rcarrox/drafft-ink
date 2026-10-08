@@ -1838,7 +1838,7 @@ impl VelloRenderer {
         }
 
         // Get the current text content from the editor
-        let editor_text: String = edit_state.editor().text().replace('￼', "​");
+        let editor_text: String = edit_state.editor().text().to_string().replace('￼', "​");
 
         // Build a layout with per-character colors (PlainEditor doesn't support ranged styles)
         let mut builder =

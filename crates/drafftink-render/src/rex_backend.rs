@@ -114,7 +114,7 @@ impl rex::font::MathFont for MixedMathFont<'_, '_> {
                 Unit::<FUnit>::new(face.glyph_hor_advance(id).unwrap_or(0) as f64 * ratio);
             glyph.lsb = unit(face.glyph_hor_side_bearing(id).unwrap_or(0));
             glyph.italics = Unit::new(0.0);
-            glyph.attachment = glyph.advance * 0.5;
+            glyph.attachment = Unit::new(glyph.advance.unitless(FUnit) * 0.5);
         }
         Ok(glyph)
     }
@@ -185,8 +185,8 @@ impl rex::font::MathFont for MixedMathFont<'_, '_> {
     }
 }
 
-impl FontBackend<MixedMathFont<'_, '_>> for VelloBackend<'_, '_, '_> {
-    fn symbol(&mut self, pos: Cursor, gid: GlyphId, scale: f64, font: &MixedMathFont<'_, '_>) {
+impl<'f, 'p> FontBackend<MixedMathFont<'f, 'p>> for VelloBackend<'_, 'f, 'p> {
+    fn symbol(&mut self, pos: Cursor, gid: GlyphId, scale: f64, font: &MixedMathFont<'f, 'p>) {
         <Self as FontBackend<TtfMathFont<'_>>>::symbol(self, pos, gid, scale, &font.math);
     }
 }
@@ -370,4 +370,30 @@ impl GraphicsBackend for VelloBackend<'_, '_, '_> {
 }
 
 impl<'f, 'p> Backend<TtfMathFont<'f>> for VelloBackend<'_, 'f, 'p> {}
-impl Backend<MixedMathFont<'_, '_>> for VelloBackend<'_, '_, '_> {}
+impl<'f, 'p> Backend<MixedMathFont<'f, 'p>> for VelloBackend<'_, 'f, 'p> {}
+
+#[cfg(test)]
+mod mixed_font_tests {
+    use super::*;
+    #[test]
+    fn primary_advance_matches_rendered_outline_scale() {
+        use rex::dimensions::units::FUnit;
+        let math = TtfMathFont::new(
+            ttf_parser::Face::parse(include_bytes!("../assets/rex-xits.otf"), 0).unwrap(),
+        )
+        .unwrap();
+        let primary = ttf_parser::Face::parse(include_bytes!("../assets/GelPen.ttf"), 0).unwrap();
+        let font = MixedMathFont::new(math, Some(primary));
+        for c in ['x', '1', '5', 'W', 'i'] {
+            let glyph = font.glyph(c).unwrap();
+            let p = font.primary.as_ref().unwrap();
+            let expected = p.glyph_hor_advance(p.glyph_index(c).unwrap()).unwrap() as f64
+                * 0.75
+                * font.math.font().units_per_em() as f64
+                / p.units_per_em() as f64;
+            assert!((glyph.advance.unitless(FUnit) - expected).abs() < 1e-8);
+        }
+        let root = font.math.glyph_index('√').unwrap();
+        assert!(font.primary_glyph(root).is_none());
+    }
+}

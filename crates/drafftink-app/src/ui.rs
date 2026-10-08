@@ -1129,6 +1129,15 @@ fn render_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                         .selected(is_selected)
                         .tool()
                         .show_response(ui);
+                    ui_state.test_controls.insert(
+                        format!("tool_{:?}", tool.kind),
+                        [
+                            response.rect.min.x,
+                            response.rect.min.y,
+                            response.rect.max.x,
+                            response.rect.max.y,
+                        ],
+                    );
                     if response.clicked() {
                         action = Some(UiAction::SetTool(tool.kind));
                     }
@@ -1136,10 +1145,18 @@ fn render_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                         response.context_menu(|ui| {
                             ui.label("Forme — raccourci répété pour changer");
                             for kind in drafftink_core::shapes::GeometryKind::ALL {
-                                if ui
-                                    .selectable_label(ui_state.geometry == kind, kind.label())
-                                    .clicked()
-                                {
+                                let option =
+                                    ui.selectable_label(ui_state.geometry == kind, kind.label());
+                                ui_state.test_controls.insert(
+                                    format!("geometry_{:?}", kind),
+                                    [
+                                        option.rect.min.x,
+                                        option.rect.min.y,
+                                        option.rect.max.x,
+                                        option.rect.max.y,
+                                    ],
+                                );
+                                if option.clicked() {
                                     action = Some(UiAction::SetGeometry(kind));
                                     ui.close();
                                 }
@@ -1610,6 +1627,10 @@ fn render_properties_panel(ctx: &Context, ui_state: &mut UiState) -> Option<UiAc
         ),
         _ => return action,
     };
+    ui_state.context_rects.push(Rect::from_min_size(
+        Pos2::new(rect.left() - 100.0, rect.bottom() + 8.0),
+        Vec2::new(420.0, 300.0),
+    ));
     if let Some(color) = ColorGrid::new(color, title).below().show(ctx, rect) {
         if ui_state.color_popover == ColorPopover::StrokeFull {
             ui_state.last_picked_stroke = Some(color);
