@@ -197,6 +197,20 @@ function inspectCapture(file) {
     await keys('bin(');await wait(s=>s.command_editor==='bin(');
     await keys('n,k)');await wait(s=>commandText(s)?.formulas[0].math.latex==='\\binom{n}{k}');
     await page.keyboard.press('Enter');await page.keyboard.press('Escape');await wait(s=>s.editing_text===null);
+    const binShape=(await state()).shapes.find(item=>item.shape.Text);
+    await page.keyboard.press('s');
+    const resizeBin=async free=> {
+      await page.mouse.click((binShape.bounds[0]+binShape.bounds[2])/2,(binShape.bounds[1]+binShape.bounds[3])/2);
+      const handle=(await state()).shapes.find(item=>item.id===binShape.id).handles.find(h=>h.kind==='Edge(Right)');
+      if(free)await page.keyboard.down('Shift');
+      await page.mouse.move(handle.x,handle.y);await page.mouse.down();await page.mouse.move(handle.x+45,handle.y,{steps:6});await page.mouse.up();
+      if(free)await page.keyboard.up('Shift');
+      const resized=await wait(s=>s.shapes.find(item=>item.id===binShape.id).shape.Text.display_scale[0]>1.05);
+      const scale=resized.shapes.find(item=>item.id===binShape.id).shape.Text.display_scale;
+      if(free)assert.equal(scale[1],1);else assert(Math.abs(scale[0]-scale[1])<1e-7);
+      await page.keyboard.press('Control+z');await wait(s=>s.shapes.find(item=>item.id===binShape.id).shape.Text.display_scale[0]===1);
+    };
+    await resizeBin(false);await resizeBin(true);
     // Math's browser clipboard replaces just the selection, then inserts at the caret.
     await control('New canvas');await wait(s=>s.shapes.length===0);
     await page.keyboard.press('m');await page.mouse.click(400,300);

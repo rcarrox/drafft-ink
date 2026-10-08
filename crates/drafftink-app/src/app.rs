@@ -2261,6 +2261,13 @@ impl App {
         {
             let mut fonts = egui::FontDefinitions::default();
             fonts.font_data.insert(
+                "math_symbols".into(),
+                egui::FontData::from_static(include_bytes!(
+                    "../../drafftink-render/assets/rex-xits.otf"
+                ))
+                .into(),
+            );
+            fonts.font_data.insert(
                 "math_gelpen".into(),
                 egui::FontData::from_static(include_bytes!(
                     "../../drafftink-render/assets/GelPen.ttf"
@@ -2269,7 +2276,7 @@ impl App {
             );
             fonts.families.insert(
                 egui::FontFamily::Name("math_gelpen".into()),
-                vec!["math_gelpen".into()],
+                vec!["math_gelpen".into(), "math_symbols".into()],
             );
 
             fonts.font_data.insert(
@@ -3054,6 +3061,13 @@ impl ApplicationHandler for App {
                     if postscript == "GoogleSans-Medium" && !state.ui_state.math_input_font_ready {
                         let mut fonts = egui::FontDefinitions::default();
                         fonts.font_data.insert(
+                            "math_symbols".into(),
+                            egui::FontData::from_static(include_bytes!(
+                                "../../drafftink-render/assets/rex-xits.otf"
+                            ))
+                            .into(),
+                        );
+                        fonts.font_data.insert(
                             "math_gelpen".into(),
                             egui::FontData::from_static(include_bytes!(
                                 "../../drafftink-render/assets/GelPen.ttf"
@@ -3062,7 +3076,7 @@ impl ApplicationHandler for App {
                         );
                         fonts.families.insert(
                             egui::FontFamily::Name("math_gelpen".into()),
-                            vec!["math_gelpen".into()],
+                            vec!["math_gelpen".into(), "math_symbols".into()],
                         );
 
                         fonts.font_data.insert(
