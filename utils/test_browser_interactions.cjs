@@ -214,7 +214,7 @@ function inspectCapture(file) {
     await resizeBin(false);await resizeBin(true);
     // Math's browser clipboard replaces just the selection, then inserts at the caret.
     await control('New canvas');await wait(s=>s.shapes.length===0);
-    await focusCanvasTool('m');
+    await focusCanvasTool('m');await wait(s=>!!s.editing_math&&s.math_input_focused);
     const mathText=s=>s.shapes.find(item=>item.shape.Math)?.shape.Math;
     await keys('123456');await wait(s=>mathText(s)?.source==='123456');
     await page.keyboard.press('Control+a');await page.keyboard.press('Control+c');
@@ -227,7 +227,7 @@ function inspectCapture(file) {
     await input.send('Input.dispatchKeyEvent',{type:'keyDown',key:'}',code:'Equal',text:'}',unmodifiedText:'}',modifiers:3});
     await input.send('Input.dispatchKeyEvent',{type:'keyUp',key:'}',code:'Equal',modifiers:0});
     await wait(s=>mathText(s)?.source.includes('}')&&!mathText(s)?.source.includes('_'));
-    await page.keyboard.press('Escape');
+    await page.keyboard.press('Escape');await wait(s=>s.editing_math===null);
     await page.waitForTimeout(150);
 
     // Original characters and font-dependent scripts, including symbols without Unicode script glyphs.
