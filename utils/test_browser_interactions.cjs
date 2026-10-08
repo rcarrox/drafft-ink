@@ -138,11 +138,11 @@ function inspectCapture(file) {
     const dpiContext=await browser.newContext({viewport:{width:1280,height:720},deviceScaleFactor:2});
     await dpiContext.addInitScript(()=>localStorage.setItem('drafftink.user_settings.v1',JSON.stringify({restore_last_document:false,autosave_enabled:false,default_font:'Noto Sans',default_font_postscript:''})));
     page=await dpiContext.newPage();await page.goto(process.env.DRAFFTINK_TEST_URL || 'http://127.0.0.1:8888/?drafftink-test=1');await wait(s=>s.shapes.length===0);
-    await page.mouse.move(400,300);await page.waitForTimeout(100);await page.keyboard.press('m');await page.mouse.click(400,300,{delay:60});await wait(s=>!!s.editing_math&&s.math_input_focused&&!!s.math_form_rect);
+    await page.mouse.move(400,200);await page.waitForTimeout(100);await page.keyboard.press('m');await wait(s=>s.tool==='Math');await page.waitForTimeout(100);await page.mouse.click(400,200,{delay:60});await wait(s=>!!s.editing_math&&s.math_input_focused&&!!s.math_form_rect);
     await keys('x+1');await wait(s=>s.shapes[0].shape.Math?.source==='x+1');
     const field=(await state()).math_form_rect;
     await page.mouse.click(field[0]+25,field[1]+22,{delay:60});await wait(s=>!!s.editing_math&&s.shapes.length===1);
-    await page.mouse.move(200,600);await page.waitForTimeout(100);await page.mouse.click(200,600,{delay:60});await wait(s=>s.editing_math===null&&s.shapes.length===1);
+    await page.mouse.move(150,220);await page.waitForTimeout(100);await page.mouse.click(150,220,{delay:60});await wait(s=>s.editing_math===null&&s.shapes.length===1);
     await dpiContext.close();page=mainPage;
     await page.goto(process.env.DRAFFTINK_TEST_URL || 'http://127.0.0.1:8888/?drafftink-test=1');
     await wait(s => s.shapes.length === 0);
