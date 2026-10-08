@@ -304,7 +304,7 @@ function inspectCapture(file) {
     await page.keyboard.press('Control+a');await keys('x\\neq y\\in A + x_{i} y_{j}');await wait(s=>mathText(s)?.source==='x\\neq y\\in A + x_{i} y_{j}'&&mathText(s)?.latex===mathText(s)?.source);
     await page.keyboard.press('Control+a');
     const fieldRect=(await state()).math_form_rect;await page.mouse.move(fieldRect[0]+20,fieldRect[1]+20);await wait(s=>s.cursor_mode===2);
-    assert(decodeURIComponent(await page.evaluate(()=>document.querySelector('canvas').style.cursor)).includes('>X</text>'));
+    assert(decodeURIComponent(await page.evaluate(()=>document.querySelector('canvas').style.cursor)).includes('M60 26l12 12'));
     const mathButton=(await state()).controls.tool_Math;await page.mouse.move((mathButton[0]+mathButton[2])/2,(mathButton[1]+mathButton[3])/2);await wait(s=>s.cursor_mode===0);
     await page.mouse.move(fieldRect[0]+20,fieldRect[1]+20);await wait(s=>s.cursor_mode===2);
     await keys('123456');await wait(s=>mathText(s)?.source==='123456');
