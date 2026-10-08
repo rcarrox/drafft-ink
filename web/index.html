@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Qraphtinc</title>
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <script src="offline.js" defer></script>
     <style>
         * {
             margin: 0;
@@ -375,6 +376,7 @@
                 if (loading) {
                     loading.remove();
                 }
+                window.dispatchEvent(new Event('qraphtinc-ready'));
             } catch (error) {
                 console.error('Failed to load DrafftInk:', error);
                 const loading = document.getElementById('loading');

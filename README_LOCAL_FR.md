@@ -1,4 +1,4 @@
-# Qraphtinc 0.17.0
+# Qraphtinc 0.18.0
 
 Version personnelle du tableau DrafftInk, sans collaboration reseau.
 
@@ -26,7 +26,7 @@ Workflow : `.github/workflows/build-portable.yml`.
 
 A chaque push sur `main`, deux artefacts sont produits :
 
-- `DrafftInk-Windows-Portable-0.17.0` : version locale Windows precompilee ;
+- `DrafftInk-Windows-Portable-0.18.0` : version locale Windows precompilee ;
 - `DrafftInk-Web-0.9.0` : fichiers statiques a deposer sur un serveur web.
 
 ## Modifications de cette branche
@@ -159,3 +159,7 @@ Zoom au pavé tactile : vitesse 2× par défaut, réglable de 0,25× à 8× dans
 
 - Settings : couleur des boutons actifs, styles de trait sélectionnés et poignées/cadre de sélection, enregistrée avec les préférences.
 - Le rectangle de sélection continue sur les panneaux et menus jusqu’au relâchement, sans activer leurs boutons.
+
+## Nouveautés 0.18.0
+
+Cache hors connexion des fichiers de l’application et mises à jour explicites, limitées au dossier hébergé. Pour le déploiement FTP, lire README_WEB_FR.md. Documents, préférences, polices et rendu existants conservés.

@@ -61,6 +61,9 @@ jobs:
           cd crates/drafftink-app
           wasm-pack build --target web --out-dir ../../web/pkg --release --no-default-features
 
+      - name: Generate integrity-checked offline cache
+        run: python3 utils/build_offline_cache.py
+
       - name: Verify generated files
         shell: bash
         run: |
@@ -84,7 +87,9 @@ jobs:
           cp windows/serve-local.ps1 dist/windows-portable/windows/
           cp VERSION_LOCAL.txt dist/windows-portable/
           cp README_LOCAL_FR.md dist/windows-portable/
-          (cd dist/windows-portable && zip -qr ../DrafftInk_Windows_Portable_0.17.0.zip .)
+          cp README_WEB_FR.md dist/windows-portable/
+          rm -f dist/windows-portable/web/sw.template.js
+          (cd dist/windows-portable && zip -qr ../DrafftInk_Windows_Portable_0.18.0.zip .)
 
       - name: Assemble web package
         shell: bash
@@ -92,20 +97,22 @@ jobs:
           set -euo pipefail
           mkdir -p dist/web
           cp -a web/. dist/web/
-          (cd dist/web && zip -qr ../DrafftInk_Web_0.17.0.zip .)
+          cp README_WEB_FR.md dist/web/
+          rm -f dist/web/sw.template.js
+          (cd dist/web && zip -qr ../DrafftInk_Web_0.18.0.zip .)
 
       - name: Upload Windows portable ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: DrafftInk-Windows-Portable-0.17.0
-          path: dist/DrafftInk_Windows_Portable_0.17.0.zip
+          name: DrafftInk-Windows-Portable-0.18.0
+          path: dist/DrafftInk_Windows_Portable_0.18.0.zip
           if-no-files-found: error
           retention-days: 30
 
       - name: Upload web ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: DrafftInk-Web-0.17.0
-          path: dist/DrafftInk_Web_0.17.0.zip
+          name: DrafftInk-Web-0.18.0
+          path: dist/DrafftInk_Web_0.18.0.zip
           if-no-files-found: error
           retention-days: 30

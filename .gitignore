@@ -24,3 +24,6 @@ Thumbs.db
 __pycache__/
 *.pyc
 .drafftink-server.pid
+
+# Generated from the exact packaged WASM and web assets
+/web/sw.js
