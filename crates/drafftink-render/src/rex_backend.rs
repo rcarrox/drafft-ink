@@ -45,25 +45,33 @@ fn math_to_ascii(c: char) -> Option<char> {
     }
 }
 
+fn math_codepoints(math: &TtfMathFont<'_>) -> &'static HashMap<u16, char> {
+    static CODEPOINTS: std::sync::OnceLock<HashMap<u16, char>> = std::sync::OnceLock::new();
+    CODEPOINTS.get_or_init(|| {
+        let mut map = HashMap::new();
+        if let Some(cmap) = math.font().tables().cmap {
+            for table in cmap.subtables.into_iter().filter(|t| t.is_unicode()) {
+                table.codepoints(|cp| {
+                    if let (Some(c), Some(gid)) = (char::from_u32(cp), table.glyph_index(cp)) {
+                        map.insert(gid.0, c);
+                    }
+                });
+            }
+        }
+        map
+    })
+}
+
 // Keep the structural MATH font, but measure letters with the very same font
 // and scale used to draw them. Substituting outlines only leaves incorrect gaps.
 pub struct MixedMathFont<'a, 'p> {
     pub math: TtfMathFont<'a>,
     pub primary: Option<ttf_parser::Face<'p>>,
-    codepoints: HashMap<u16, char>,
+    codepoints: &'static HashMap<u16, char>,
 }
 impl<'a, 'p> MixedMathFont<'a, 'p> {
     pub fn new(math: TtfMathFont<'a>, primary: Option<ttf_parser::Face<'p>>) -> Self {
-        let mut codepoints = HashMap::new();
-        if let Some(cmap) = math.font().tables().cmap {
-            for table in cmap.subtables.into_iter().filter(|t| t.is_unicode()) {
-                table.codepoints(|cp| {
-                    if let (Some(c), Some(gid)) = (char::from_u32(cp), table.glyph_index(cp)) {
-                        codepoints.insert(gid.0, c);
-                    }
-                });
-            }
-        }
+        let codepoints = math_codepoints(&math);
         Self {
             math,
             primary,
@@ -211,29 +219,7 @@ impl<'a, 'f, 'p> VelloBackend<'a, 'f, 'p> {
         transform: Affine,
         color: Color,
     ) -> Self {
-        // The MATH font is the fixed bundled XITS face. Build its reverse cmap
-        // once instead of scanning thousands of glyphs for every formula/frame.
-        static CODEPOINTS: std::sync::OnceLock<HashMap<u16, char>> = std::sync::OnceLock::new();
-        let glyph_to_codepoint = CODEPOINTS.get_or_init(|| {
-            let mut map = HashMap::new();
-            for subtable in math_font
-                .font()
-                .tables()
-                .cmap
-                .iter()
-                .flat_map(|c| c.subtables)
-            {
-                if subtable.is_unicode() {
-                    subtable.codepoints(|cp| {
-                        if let (Some(c), Some(gid)) = (char::from_u32(cp), subtable.glyph_index(cp))
-                        {
-                            map.insert(gid.0, c);
-                        }
-                    });
-                }
-            }
-            map
-        });
+        let glyph_to_codepoint = math_codepoints(math_font);
 
         Self {
             scene,

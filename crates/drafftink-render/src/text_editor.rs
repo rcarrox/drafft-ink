@@ -205,11 +205,11 @@ impl TextEditState {
             for line in layout.lines() {
                 for item in line.items() {
                     if let parley::PositionedLayoutItem::InlineBox(b) = item {
-                        if layout
-                            .inline_boxes()
-                            .iter()
-                            .any(|raw| raw.id == b.id && raw.index == cursor.index())
-                        {
+                        if layout.inline_boxes().iter().any(|raw| {
+                            raw.id == b.id
+                                && raw.index == cursor.index()
+                                && self.script_value() == 0
+                        }) {
                             return Some(parley::BoundingBox::new(
                                 b.x as f64,
                                 b.y as f64,
