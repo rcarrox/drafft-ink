@@ -147,12 +147,15 @@ function inspectCapture(file) {
     const target=[(tool[0]+tool[2])/2,(tool[1]+tool[3])/2];
     await page.mouse.move(700,500);await page.waitForTimeout(100);await page.mouse.down();
     await page.mouse.move(...target,{steps:15});
-    const captured=await wait(s=>s.selection_rect!==null);
-    const rectangle=captured.selection_rect;
-    // Default camera zoom/offset are one/zero; destination follows the mouse
-    // all the way into the panel, rather than stopping at its boundary.
-    assert(Math.abs(rectangle[0]-target[0])<2||Math.abs(rectangle[2]-target[0])<2);
-    assert(Math.abs(rectangle[1]-target[1])<2||Math.abs(rectangle[3]-target[1])<2);
+    // Marquee bounds are world coordinates; account for the real default
+    // zoom (1.68) and wait for the frame processing the final mouse event.
+    const followsPointer=s=> {
+      if(!s.selection_rect)return false;
+      const screen=s.selection_rect.map((v,i)=>v*s.zoom+s.camera_offset[i%2]);
+      return (Math.abs(screen[0]-target[0])<2||Math.abs(screen[2]-target[0])<2)
+          && (Math.abs(screen[1]-target[1])<2||Math.abs(screen[3]-target[1])<2);
+    };
+    await wait(followsPointer);
     await page.mouse.up();await wait(s=>s.selection_rect===null&&s.tool==='Select');
     assert.equal((await state()).selected_count,1);
     await snapshot(page,'accent-selection.png');
