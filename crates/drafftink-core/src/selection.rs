@@ -5,7 +5,7 @@ use kurbo::{Affine, Point, Rect};
 use serde::{Deserialize, Serialize};
 
 /// Handle size in screen pixels.
-pub const HANDLE_SIZE: f64 = 16.0;
+pub const HANDLE_SIZE: f64 = 6.0;
 /// Handle hit tolerance in screen pixels.
 pub const HANDLE_HIT_TOLERANCE: f64 = 8.0;
 
@@ -69,6 +69,15 @@ impl Handle {
     }
 }
 
+/// Keep the controls outside text glyphs without changing document geometry.
+pub fn selection_bounds(shape: &Shape) -> Rect {
+    if matches!(shape, Shape::Text(_) | Shape::Math(_)) {
+        shape.bounds().inflate(6.0, 4.0)
+    } else {
+        shape.bounds()
+    }
+}
+
 /// Get the selection handles for a shape.
 pub fn get_handles(shape: &Shape) -> Vec<Handle> {
     match shape {
@@ -115,8 +124,8 @@ pub fn get_handles(shape: &Shape) -> Vec<Handle> {
             corner_and_rotate_handles(bounds, rotation)
         }
         Shape::Text(_) | Shape::Math(_) => {
-            // Text and Math support nonuniform display scaling, including edge handles.
-            let bounds = shape.bounds();
+            // Text and Math controls include a content margin.
+            let bounds = selection_bounds(shape);
             let rotation = shape.rotation();
             corner_and_rotate_handles(bounds, rotation)
         }
@@ -606,7 +615,9 @@ fn rotate_delta(delta: kurbo::Vec2, angle: f64) -> kurbo::Vec2 {
     kurbo::Vec2::new(cos * delta.x - sin * delta.y, sin * delta.x + cos * delta.y)
 }
 fn apply_box_resize(shape: &mut Shape, kind: HandleKind, delta: kurbo::Vec2, aspect: bool) {
-    let old = shape.bounds();
+    let content = shape.bounds();
+    let is_text = matches!(shape, Shape::Text(_) | Shape::Math(_));
+    let old = selection_bounds(shape);
     let w = old.width().max(1.0);
     let h = old.height().max(1.0);
     let rotation = shape.rotation();
@@ -693,7 +704,17 @@ fn apply_box_resize(shape: &mut Shape, kind: HandleKind, delta: kurbo::Vec2, asp
     });
     nw = nw.abs().max(0.001).copysign(nw);
     nh = nh.abs().max(0.001).copysign(nh);
-    if aspect && matches!(kind, HandleKind::Corner(_)) {
+    if is_text && aspect {
+        let sx = (nw.abs() - 12.0).max(0.001) / content.width().max(0.001);
+        let sy = (nh.abs() - 8.0).max(0.001) / content.height().max(0.001);
+        let factor = if left || right {
+            if top || bottom { sx.max(sy) } else { sx }
+        } else {
+            sy
+        };
+        nw = (content.width() * factor + 12.0).copysign(nw);
+        nh = (content.height() * factor + 8.0).copysign(nh);
+    } else if aspect && matches!(kind, HandleKind::Corner(_)) {
         let scale = (nw.abs() / w).max(nh.abs() / h);
         nw = (w * scale).copysign(nw);
         nh = (h * scale).copysign(nh);
@@ -721,8 +742,18 @@ fn apply_box_resize(shape: &mut Shape, kind: HandleKind, delta: kurbo::Vec2, asp
     );
     let center = old.center() + shift;
     let next = Rect::from_center_size(center, kurbo::Size::new(nw.abs(), nh.abs()));
+    let sx = if is_text {
+        ((nw.abs() - 12.0).max(0.001) / content.width().max(0.001)).copysign(nw)
+    } else {
+        nw / w
+    };
+    let sy = if is_text {
+        ((nh.abs() - 8.0).max(0.001) / content.height().max(0.001)).copysign(nh)
+    } else {
+        nh / h
+    };
     let scale = Affine::translate((center.x, center.y))
-        * Affine::scale_non_uniform(nw / w, nh / h)
+        * Affine::scale_non_uniform(sx, sy)
         * Affine::translate((-old.center().x, -old.center().y));
     match shape {
         Shape::Rectangle(rect) => {
@@ -751,13 +782,13 @@ fn apply_box_resize(shape: &mut Shape, kind: HandleKind, delta: kurbo::Vec2, asp
             }
         }
         Shape::Text(text) => {
-            text.display_scale[0] *= nw / w;
-            text.display_scale[1] *= nh / h;
+            text.display_scale[0] *= sx;
+            text.display_scale[1] *= sy;
             text.position = scale * text.position;
         }
         Shape::Math(math) => {
-            math.display_scale[0] *= nw / w;
-            math.display_scale[1] *= nh / h;
+            math.display_scale[0] *= sx;
+            math.display_scale[1] *= sy;
             math.position = scale * math.position;
         }
         _ => {}
@@ -1170,7 +1201,7 @@ mod edge_handle_regressions {
     fn all_box_objects_cross_opposite_corner_after_rotation() {
         for angle in [0.0, 0.7, 1.8] {
             for shape in shapes(angle) {
-                let old = shape.bounds();
+                let old = selection_bounds(&shape);
                 let anchor = get_handles(&shape)[0].position;
                 let delta = rotate_delta(
                     kurbo::Vec2::new(-old.width() * 1.4, -old.height() * 1.5),
@@ -1182,8 +1213,8 @@ mod edge_handle_regressions {
                     delta,
                     false,
                 );
-                assert!((next.bounds().width() - old.width() * 0.4).abs() < 1e-8);
-                assert!((next.bounds().height() - old.height() * 0.5).abs() < 1e-8);
+                assert!((selection_bounds(&next).width() - old.width() * 0.4).abs() < 1e-8);
+                assert!((selection_bounds(&next).height() - old.height() * 0.5).abs() < 1e-8);
                 assert!(get_handles(&next)[3].position.distance(anchor) < 1e-8);
                 match &next {
                     Shape::Text(t) => assert!(t.display_scale[0] < 0.0 && t.display_scale[1] < 0.0),
@@ -1387,5 +1418,41 @@ mod image_flip_tests {
         assert!((image.crop.x1 - 0.8).abs() < 1e-9);
         assert!((image.position.x - 20.0).abs() < 1e-9);
         assert!((image.width - 80.0).abs() < 1e-9);
+    }
+}
+
+#[cfg(test)]
+mod text_proportions_tests {
+    use super::*;
+    use crate::shapes::{Math, Text};
+    #[test]
+    fn padded_text_and_math_resize_proportionally_or_freely() {
+        let text = Text::new(Point::ZERO, "123456".into());
+        text.set_cached_size(100.0, 40.0);
+        let math = Math::new(Point::new(0.0, 30.0), "x".into());
+        math.set_cached_size(100.0, 30.0, -10.0);
+        for mut shape in [Shape::Text(text), Shape::Math(math)] {
+            shape.set_rotation(0.7);
+            let old = shape.bounds();
+            assert_eq!(selection_bounds(&shape).width(), old.width() + 12.0);
+            for kind in [
+                HandleKind::Corner(Corner::BottomRight),
+                HandleKind::Edge(Edge::Right),
+            ] {
+                let delta = rotate_delta(kurbo::Vec2::new(50.0, 5.0), 0.7);
+                let next = apply_manipulation(&shape, Some(kind), delta, true);
+                assert!(
+                    (next.bounds().width() / next.bounds().height() - old.width() / old.height())
+                        .abs()
+                        < 1e-8
+                );
+                let free = apply_manipulation(&shape, Some(kind), delta, false);
+                assert!(
+                    (free.bounds().width() / free.bounds().height() - old.width() / old.height())
+                        .abs()
+                        > 0.01
+                );
+            }
+        }
     }
 }

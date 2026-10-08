@@ -2261,6 +2261,18 @@ impl App {
         {
             let mut fonts = egui::FontDefinitions::default();
             fonts.font_data.insert(
+                "math_gelpen".into(),
+                egui::FontData::from_static(include_bytes!(
+                    "../../drafftink-render/assets/GelPen.ttf"
+                ))
+                .into(),
+            );
+            fonts.families.insert(
+                egui::FontFamily::Name("math_gelpen".into()),
+                vec!["math_gelpen".into()],
+            );
+
+            fonts.font_data.insert(
                 "DrafftInk Noto Sans".to_string(),
                 egui::FontData::from_static(include_bytes!(
                     "../../drafftink-render/assets/NotoSans-Regular.ttf"
@@ -2766,22 +2778,26 @@ impl ApplicationHandler for App {
                     }
                     Key::Character(c) if c == "^" => Some('^'),
                     _ if state.input.ctrl()
+                        && !state.input.alt()
                         && matches!(event.physical_key, PhysicalKey::Code(KeyCode::ArrowUp)) =>
                     {
                         Some('^')
                     }
                     _ if state.input.ctrl()
+                        && !state.input.alt()
                         && matches!(event.physical_key, PhysicalKey::Code(KeyCode::ArrowDown)) =>
                     {
                         Some('_')
                     }
                     _ if state.input.ctrl()
+                        && !state.input.alt()
                         && state.input.shift()
                         && matches!(event.physical_key, PhysicalKey::Code(KeyCode::Equal)) =>
                     {
                         Some('^')
                     }
                     _ if state.input.ctrl()
+                        && !state.input.alt()
                         && matches!(event.physical_key, PhysicalKey::Code(KeyCode::Equal)) =>
                     {
                         Some('_')
@@ -2836,6 +2852,39 @@ impl ApplicationHandler for App {
             }
         }
 
+        // Egui-winit has no system clipboard backend on WASM. Route the
+        // browser clipboard through TextEdit so selection/caret are respected.
+        #[cfg(target_arch = "wasm32")]
+        if let WindowEvent::KeyboardInput { event, .. } = &event {
+            if event.state == ElementState::Pressed
+                && !event.repeat
+                && state.input.ctrl()
+                && !state.input.alt()
+                && (state.ui_state.math_editor.is_some()
+                    || state.ui_state.text_command_editor.is_some()
+                    || state.ui_state.inline_formula_draft.is_some())
+            {
+                if let Key::Character(key) = &event.logical_key {
+                    let action = match key.to_ascii_lowercase().as_str() {
+                        "c" => Some(egui::Event::Copy),
+                        "x" => Some(egui::Event::Cut),
+                        "v" => {
+                            file_ops::request_clipboard_text_for_math();
+                            None
+                        }
+                        _ => None,
+                    };
+                    if matches!(key.to_ascii_lowercase().as_str(), "c" | "x" | "v") {
+                        if let Some(action) = action {
+                            state.egui_state.egui_input_mut().events.push(action);
+                        }
+                        state.needs_redraw = true;
+                        state.window.request_redraw();
+                        return;
+                    }
+                }
+            }
+        }
         // Let egui process the event first
         let egui_response = state.egui_state.on_window_event(&state.window, &event);
 
@@ -3005,6 +3054,18 @@ impl ApplicationHandler for App {
                     if postscript == "GoogleSans-Medium" && !state.ui_state.math_input_font_ready {
                         let mut fonts = egui::FontDefinitions::default();
                         fonts.font_data.insert(
+                            "math_gelpen".into(),
+                            egui::FontData::from_static(include_bytes!(
+                                "../../drafftink-render/assets/GelPen.ttf"
+                            ))
+                            .into(),
+                        );
+                        fonts.families.insert(
+                            egui::FontFamily::Name("math_gelpen".into()),
+                            vec!["math_gelpen".into()],
+                        );
+
+                        fonts.font_data.insert(
                             "noto_sans".into(),
                             egui::FontData::from_static(include_bytes!(
                                 "../../drafftink-render/assets/NotoSans-Regular.ttf"
@@ -3151,14 +3212,15 @@ impl ApplicationHandler for App {
                 // Check for pending math clipboard paste (WASM async)
                 #[cfg(target_arch = "wasm32")]
                 if let Some(clipboard_text) = file_ops::take_pending_math_clipboard() {
-                    if let Some(editor) = state.ui_state.math_editor.as_mut() {
-                        editor.input = clipboard_text;
-                        let latex = crate::math_input::friendly_math_to_latex(&editor.input);
-                        if let Some(Shape::Math(math)) =
-                            state.canvas.document.get_shape_mut(editor.shape_id)
-                        {
-                            math.set_formula(editor.input.clone(), latex);
-                        }
+                    if state.ui_state.math_editor.is_some()
+                        || state.ui_state.text_command_editor.is_some()
+                        || state.ui_state.inline_formula_draft.is_some()
+                    {
+                        state
+                            .egui_state
+                            .egui_input_mut()
+                            .events
+                            .push(egui::Event::Paste(clipboard_text));
                     }
                 }
 
@@ -4834,6 +4896,12 @@ impl ApplicationHandler for App {
                 });
 
                 state.ui_keyboard_pending = false;
+                #[cfg(target_arch = "wasm32")]
+                for command in &egui_output.platform_output.commands {
+                    if let egui::OutputCommand::CopyText(text) = command {
+                        file_ops::copy_text_to_clipboard(text);
+                    }
+                }
                 state
                     .egui_state
                     .handle_platform_output(&state.window, egui_output.platform_output);
@@ -5998,7 +6066,7 @@ impl ApplicationHandler for App {
                         // Literal ^ belongs to composition and external expanders.
                         // Ctrl+ArrowUp / Ctrl+Shift+= enters superscript.
                         // Ctrl+ArrowDown / Ctrl+= enters subscript.
-                        let has_ctrl = state.input.ctrl();
+                        let has_ctrl = state.input.ctrl() && !state.input.alt();
                         let script_key = match &event.logical_key {
                             Key::Character(c) if has_ctrl && c == "_" => {
                                 Some(TextKey::ToggleSubscript)

@@ -9,3 +9,13 @@ En validation. SourceAuto précédente écrivait uniquementIndexedDB ; garder r�
 Dernière livraison0.11 : mainb7c6440e1bedee6e90e77f34aac4dd061eb3ff6e, PR12, CI37715815143/Portable37715815060 réussis. ZipSHA2565d42480cd9c552d0df647409aac5bcfbfbdc0e6255148ec55827678de0556233. 200MoEdgeTotalnonvérifié ; WASM21%de moins cas2images.
 
 IMPORTANTOUTILS : ne jamais réessayer Cua.waitForEvent(download) ; a bloqué20958secondes. TéléchargerlesartifactsviaGitHub et testerfilesystemavecVM/mocks/CI plutôtqu’attendreunévénementdedownloadducontrôleurnavigateur. Usertab8887 àpréserver.
+
+## Reprise 0.13.0 — en préparation
+
+Base main 1b55bb025dc536a6df8dbbd8984438418fcf5245. Branche codex/0.13.0-math-selection.
+Text/Math proportionnels par défaut (Shift libre), contrôles circulaires 6 px avec zone de prise inchangée,
+cadre avec marge locale 6/4, géométrie du retournement calculée dans ce cadre. Images/crop inchangés.
+bin(n,k), normalisation ∞ dans LaTeX, AltGr exclu des raccourcis Ctrl, Math GelPen et SVG utilisateur.
+Presse-papiers WASM injecté en événements egui Copy/Cut/Paste, conserve curseur/sélection.
+Les compilations Rust/WASM restent uniquement Actions. CI et artefact final à confirmer.
+Ne jamais utiliser les attentes download de Cua (ancien blocage) ; télécharger via le connecteur GitHub.

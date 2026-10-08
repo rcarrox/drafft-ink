@@ -1,4 +1,4 @@
-# DrafftInk Local 0.12.0
+# DrafftInk Local 0.13.0
 
 Version personnelle du tableau DrafftInk, sans collaboration reseau.
 
@@ -26,7 +26,7 @@ Workflow : `.github/workflows/build-portable.yml`.
 
 A chaque push sur `main`, deux artefacts sont produits :
 
-- `DrafftInk-Windows-Portable-0.12.0` : version locale Windows precompilee ;
+- `DrafftInk-Windows-Portable-0.13.0` : version locale Windows precompilee ;
 - `DrafftInk-Web-0.9.0` : fichiers statiques a deposer sur un serveur web.
 
 ## Modifications de cette branche
@@ -146,3 +146,11 @@ Flèche seule : déplacement fin d’un pixel de rendu ; Shift+flèche : pas his
 Ctrl+S enregistre un PNG complet du canvas (même pendant Text/Math) ; Ctrl+Shift+S conserve le JSON. La sauvegarde régulière garde sa récupération navigateur et écrit aussi le PNG dans le dossier d’export autorisé, seulement après modification. Sans permission, pas de rafale de téléchargements : réautoriser le dossier dans Settings. Le PNG contient les données éditables du document. Le statut de sauvegarde est visible.
 
 Zoom au pavé tactile : vitesse 2× par défaut, réglable de 0,25× à 8× dans Settings ; 1× retrouve l’ancien comportement. Pan deux doigts conservé. Panneau Stroke resserré.
+
+## Nouveautés 0.13.0
+
+- Text/Math : proportions conservées par défaut, Shift pour déformer librement.
+- Poignées circulaires plus petites, marge autour des caractères ; retournement et rotation conservés.
+- `bin(n,k)` dans Text, y compris arguments imbriqués et aperçu pendant la saisie.
+- Bornes infinies Unicode dans le code LaTeX et correction des touches AltGr françaises.
+- Math : icône TeX fournie, GelPen, champ plus aéré, copier/coller au curseur avec sélection.

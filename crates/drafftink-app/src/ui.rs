@@ -3694,11 +3694,7 @@ fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAct
 /// Render a compact inline formula editor next to the formula on the canvas.
 /// The formula itself is updated live, so there is no blocking modal/panel.
 fn render_math_editor(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
-    let input_family = if ui_state.math_input_font_ready {
-        egui::FontFamily::Name("math_medium".into())
-    } else {
-        egui::FontFamily::Proportional
-    };
+    let input_family = egui::FontFamily::Name("math_gelpen".into());
     let screen_rect = ctx.input(|i| i.content_rect());
     let pos = ui_state
         .math_editor_screen_pos
@@ -3749,7 +3745,7 @@ fn render_math_editor(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction>
                             .fill(Color32::WHITE)
                             .corner_radius(CornerRadius::same(6))
                             .stroke(Stroke::new(1.0, Color32::from_gray(210)))
-                            .inner_margin(Margin::symmetric(8, 5))
+                            .inner_margin(Margin::symmetric(12, 10))
                             .show(ui, |ui| {
                                 ui.visuals_mut().text_cursor.stroke = Stroke::new(2.0, Color32::BLACK);
                                 ui.visuals_mut().text_cursor.blink = true;

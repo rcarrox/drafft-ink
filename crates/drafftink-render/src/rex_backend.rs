@@ -146,7 +146,9 @@ impl<'f, 'p> FontBackend<TtfMathFont<'f>> for VelloBackend<'_, 'f, 'p> {
                         );
 
                     let mut builder = PathBuilder(BezPath::new());
-                    if primary.outline_glyph(primary_gid, &mut builder).is_some() {
+                    if primary.outline_glyph(primary_gid, &mut builder).is_some()
+                        && !builder.0.elements().is_empty()
+                    {
                         self.scene.fill(
                             vello::peniko::Fill::NonZero,
                             glyph_transform,

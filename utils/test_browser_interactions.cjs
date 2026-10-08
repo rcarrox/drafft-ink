@@ -40,7 +40,7 @@ function inspectCapture(file) {
 
 (async () => {
   const browser = await chromium.launch({ channel: 'chromium', headless: true, args: ['--enable-unsafe-webgpu', '--use-angle=swiftshader'] });
-  const context = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+  const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, permissions: ['clipboard-read','clipboard-write'] });
   await context.addInitScript(() => localStorage.setItem('drafftink.user_settings.v1', JSON.stringify({ restore_last_document: false, intro_json: '', autosave_enabled: false, default_font: 'Noto Sans', default_font_postscript: '' })));
   const page = await context.newPage();
   const logs = [];
@@ -190,6 +190,29 @@ function inspectCapture(file) {
     const saveCount=(await state()).png_save_requests;
     await page.keyboard.press('Control+s');await wait(s=>s.png_save_requests===saveCount+1);
     await page.keyboard.press('Escape');await wait(s=>s.editing_text===null);
+
+    // New code command uses the same inline axis and supports live completion.
+    await control('New canvas');await wait(s=>s.shapes.length===0);
+    await page.keyboard.press('t');await page.mouse.click(400,300);await wait(s=>!!s.editing_text);
+    await keys('bin(');await wait(s=>s.command_editor==='bin(');
+    await keys('n,k)');await wait(s=>commandText(s)?.formulas[0].math.latex==='\\binom{n}{k}');
+    await page.keyboard.press('Enter');await page.keyboard.press('Escape');await wait(s=>s.editing_text===null);
+    // Math's browser clipboard replaces just the selection, then inserts at the caret.
+    await control('New canvas');await wait(s=>s.shapes.length===0);
+    await page.keyboard.press('m');await page.mouse.click(400,300);
+    const mathText=s=>s.shapes.find(item=>item.shape.Math)?.shape.Math;
+    await keys('123456');await wait(s=>mathText(s)?.source==='123456');
+    await page.keyboard.press('Control+a');await page.keyboard.press('Control+c');
+    await page.waitForFunction(async()=>await navigator.clipboard.readText()==='123456');
+    await page.evaluate(()=>navigator.clipboard.writeText('x+∞'));
+    await page.keyboard.press('Control+v');await wait(s=>mathText(s)?.source==='x+∞');
+    await page.keyboard.press('ArrowLeft');await page.evaluate(()=>navigator.clipboard.writeText('2'));
+    await page.keyboard.press('Control+v');await wait(s=>mathText(s)?.source==='x+2∞');
+    // French AltGr+Equal emits a literal brace, never the Ctrl+= subscript command.
+    await input.send('Input.dispatchKeyEvent',{type:'keyDown',key:'}',code:'Equal',text:'}',unmodifiedText:'}',modifiers:3});
+    await input.send('Input.dispatchKeyEvent',{type:'keyUp',key:'}',code:'Equal',modifiers:0});
+    await wait(s=>mathText(s)?.source.includes('}')&&!mathText(s)?.source.includes('_'));
+    await page.keyboard.press('Escape');
 
     // Separate browser context with a public, deterministic 1200x2000 PNG fixture.
     const imageContext = await browser.newContext({viewport:{width:1280,height:720}});
