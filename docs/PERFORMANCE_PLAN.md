@@ -1,5 +1,7 @@
 # Mémoire — diagnostic et solutions proposées
 
+Mise à jour 0.11 : plusieurs propositions sont maintenant implémentées. Lire MEMORY_0.11.md et la PR de codex/0.11.0-memory-budget pour les détails et la validation. Les propositions ci-dessous décrivent le point de départ 0.9 ; elles ne sont pas une mesure de RAM totale.
+
 ## Ce que signifient les 800 Mo
 
 L’utilisateur indique 800 Mo pour l’ensemble d’Edge dans Windows, pas pour l’onglet DrafftInk seul. Ce total ne permet pas d’attribuer 800 Mo à l’application. Le point de départ est le gestionnaire du navigateur (Shift+Échap), avec les lignes onglet, GPU, navigateur et extensions, et la colonne mémoire JavaScript. [Documentation Microsoft](https://learn.microsoft.com/en-us/microsoft-edge/devtools/memory-problems/microsoft-edge-browser-task-manager).

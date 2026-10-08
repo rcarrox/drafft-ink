@@ -1,40 +1,14 @@
-# État de reprise — 0.10.0
+# État de reprise — 0.11.0
 
-7 octobre 2026. Travail local autorisé, compilateur Rust/WASM : GitHub Actions.
-Branche codex/0.10.0-transform-math-alignment, PR #11 : https://github.com/rcarrox/drafft-ink/pull/11. Lire la description de la PR de cette branche pour les statuts CI/fusion/artefact finaux.
+7 octobre 2026. Travail local autorisé ; Rust/WASM compilés exclusivement par GitHub Actions.
+Branche codex/0.11.0-memory-budget. Lire la PR de cette branche pour les statuts CI/fusion/artefacts finaux.
 
-Demandes : traverser les bords avec les poignées de tous les objets, conserver le pivot après rotation et le miroir du texte/math ; axe des formules aligné sur les caractères et le signe égal ; rééditer les blocs validés par double-clic ; mini panneau 10 pixels sous la formule et suivant sa hauteur.
+Demande : alléger l’application, cible comparable aux 200 Mo de Paint.NET. Les 800 Mo précédemment relevés étaient l’ensemble d’Edge dans Windows ; ne pas attribuer ce total à l’onglet et ne pas annoncer un total inférieur à 200 Mo sans mesure comparable.
 
-Implémentation en cours de validation. Tests Rust géométrie et axes, puis interactions réelles WASM Chromium. Aucun test Rust local, aucune police privée publiée, aucun changement volontaire du pinch/pan. Les limites WebGPU du CI logiciel restent à signaler ; un screenshot uniforme ne valide pas le rendu.
+Changements en validation : réutilisation texture d’écran/scène ; moteur GPU Area-only et partagé à l’export ; readback libéré avant encodage PNG ; cache LRU images 32 Mio avec aperçus zoom/2048 px, export original complet sans rétention de son décodage ; caches des canvas inactifs libérés ; documents/historiques déplacés entre canvas sans copie ; historique de payloads clonés 16 Mio et cache de géométrie environ 4 Mio ; WASM chargé par streaming ; diagnostics de composants et de mémoire WASM/JS. Les budgets de cache ne sont pas la RAM totale. Le moteur Vello conserve des réserves GPU fixes importantes ; ne pas les réduire aveuglément sans protection contre les dépassements.
 
-Dernière livraison : 0.9.0, main 4b37c23931533e33a4f330bcb4877246d4886614 ; PR #10, CI 37625716688 et portable 37625716813 réussis. ZIP SHA256 4059f85414f56d3eaca91358f3a77615dab66f0a8ca38c59029f3a9734a0125c.
+Tests ciblés natifs et Chromium : aperçus/qualité originale/JSON source inchangée, LRU et suppression des caches, historique Undo/Redo, absence d’accumulation des chemins pendant drag, réutilisation texture et basculement retour entre deux canvas. Maintenir les régressions 0.10 et le pinch/pan.
 
-## Nouveautés 0.9
+Dernière livraison : 0.10.0, main04b84a6534f8e020b6571c08dd165ba6347e9d09, PR #11 fusionnée, CI37660570262 et portable37660570353 réussis. ZIP SHA256c3d8dba54a211d35d2a5cef561d54821d5322dac714d80e37837e3b8b6aee662. Publication exacte dans la description de PR11.
 
-Text reconnaît directement sum(, prod(, int(, lim(, sqrt( et frac(. Un mini panneau de code prend le focus ; la formule apparaît immédiatement et se complète pendant la saisie, avec blocs manquants provisoires et fractions imbriquées. Entrée conserve le bloc et continue le texte ; Échap conserve et termine l’édition. Une sélection du bloc puis Ctrl+Entrée permet de rouvrir le code. Le source et le rendu restent sérialisés. Les contrôles Chromium vérifient la somme, la fraction imbriquée et le texte ajouté après fermeture du panneau.
-
-Les 800 Mo signalés concernent l’ensemble d’Edge. Les propositions de diagnostic/optimisation sont détaillées dans PERFORMANCE_PLAN.md ; aucun gain mémoire mesuré ni optimisation de cache supplémentaire n’est revendiqué pour 0.9.
-
-## Code et ressources
-
-Text conserve le caret littéral, y compris une touche morte française, les séquences `^^`, `^p`, `^4`, `^>` et `^<`, ainsi que les lettres accentuées. Les suppressions d’un expander correspondent désormais aux caractères réellement présents. Ctrl+haut/bas reste l’alternative exposant/indice. La sélection dispose de Ctrl+B/I/U ; spans, couleurs et positions des formules suivent les remplacements Unicode et sont conservés en JSON.
-
-Text contient des blocs de formule dans son flux : fractions imbriquées, racines carrées/n-ièmes, sommes, produits, intégrales et limites, avec champs séparés et saisie conviviale. Les anciens objets Math restent pris en charge. La police math embarquée est réellement **STIX Two Math** malgré son ancien nom de fichier `rex-xits.otf` ; sa vraie famille est utilisée en secours pour ≥, ≤, ∏, ∫, etc. Les Google Sans privées restent uniquement sur le PC utilisateur. Le texte utilise une police embarquée en attendant une police locale manquante.
-
-Les images ont des drapeaux miroir indépendants. Traverser le bord opposé avec une poignée retourne le contenu sans altérer la source. Rotation près des coins : angle relatif au point de pression, pivot au centre, Shift pour le snap. Le crop tient compte du miroir et de la rotation. JSON et Undo/Redo conservent les transformations.
-
-Ctrl+P cache les panneaux/outils/onglets. F11 utilise le plein écran Chrome/Edge. Le cache Text conserve une scène complète avec styles/formules et coordonnées de variation de fontes. Aucun service applicatif distant, caméra, micro ou collaboration n’est ajouté.
-
-## Preuves et limites
-
-La révision `022c43c95a3527d06bc4e36fc893dfa3332ad1bf` a passé les huit jobs du [CI #46](https://github.com/rcarrox/drafft-ink/actions/runs/37578399416), dont Rust, WASM, natifs Ubuntu/macOS et Chromium Interactions. Le dernier head de PR #10 doit passer avant fusion ; la description de cette PR donne la validation finale. Clippy historique reste non bloquant ; consulter ses logs plutôt que déclarer le lint entièrement propre.
-
-`utils/test_browser_interactions.cjs` pilote le vrai build WASM, avec touches ordinaires, paquets Unicode et touche morte simulée. Il vérifie `123^4` → `123⁴`, ≥/≤, doubles carets/accents, mise en forme partielle, fraction imbriquée/racine n-ième, présentation/plein écran, miroir/rotation d’image 1200×2000 et Undo/Redo. Le compositeur WebGPU de Chromium en CI peut produire une capture uniforme malgré un état correct. Le contrôle des pixels détecte cette limite (blanc/noir/uniforme) ; une perte explicite de l’instance WebGPU en CI est signalée comme contrôle de pixels indisponible, jamais comme un succès visuel. Les tests d’état restent actifs, les métadonnées PNG Unicode sont testées en Rust, et le rendu/encodage sont contrôlés localement. Les captures, états et logs sont dans l’artefact `chromium-interaction-evidence`. Le diagnostic `?drafftink-test=1` est uniquement en lecture.
-
-La simulation n’est pas un essai physique du programme Beeftext sous Windows. Les racines/fractions/sommes/produits/intégrales/limites et glyphes sont aussi testés côté Rust. Les captures doivent être inspectées ; une simple présence de PNG n’est pas une validation visuelle. La mémoire Edge à 800 Mo n’a pas été mesurée.
-
-## Reprise cloud
-
-Aucun environnement Codex Cloud n’a été créé/publié par cette tâche. Les scripts et ressources du dépôt restent portables ; lire `CLOUD_DEVELOPMENT.md` lorsque le passage cloud est effectivement décidé. La suite Chromium demandée pour la préparation est maintenant implémentée en Actions. Ne pas publier les polices privées ni dépendre des chemins Windows de développement.
-
-Dernière livraison antérieure : 0.7.0, commit `9b16b66ddf8cc545ebfe479240ea3f8acefb4b87`, portable Actions `37550413580`, artefact `11452063008`, SHA256 ZIP `9b8d9bd27ccb6e084550efaf09cce9822e14592a07eaa047d1c33ac84e817a16`.
+Les vérifications visuelles restent locales ; le WebGPU logiciel du CI peut perdre son instance et les captures uniformes sont signalées comme indisponibles, jamais comme succès visuel. Les événements Beeftext sont simulés. Clippy historique non bloquant. Aucun environnement Codex Cloud publié par cette tâche. Aucune police privée publiée.

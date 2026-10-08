@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 /// Maximum number of undo states to keep.
 const MAX_UNDO_HISTORY: usize = 50;
+const MAX_HISTORY_BYTES: usize = 16 * 1024 * 1024;
 
 /// Distance threshold for detecting closed polygons (first ≈ last point).
 
@@ -21,6 +22,43 @@ struct DocumentSnapshot {
     shapes: HashMap<ShapeId, Shape>,
     /// Z-order of shapes.
     z_order: Vec<ShapeId>,
+}
+
+// Count deep-cloned payloads; image source bytes are Arc-shared and counted nowhere twice.
+fn snapshot_payload_bytes(shapes: &HashMap<ShapeId, Shape>, order: &[ShapeId]) -> usize {
+    fn payload(shape: &Shape) -> usize {
+        match shape {
+            Shape::Freehand(s) => {
+                s.points.capacity() * std::mem::size_of::<Point>() + s.pressures.capacity() * 8
+            }
+            Shape::Line(s) => s.intermediate_points.capacity() * std::mem::size_of::<Point>(),
+            Shape::Arrow(s) => s.intermediate_points.capacity() * std::mem::size_of::<Point>(),
+            Shape::Text(s) => {
+                s.content.capacity()
+                    + s.char_colors.capacity()
+                        * std::mem::size_of::<Option<crate::shapes::SerializableColor>>()
+                    + s.char_styles.capacity()
+                        * std::mem::size_of::<crate::shapes::CharacterStyle>()
+                    + s.formulas
+                        .iter()
+                        .map(|f| {
+                            f.math.latex.capacity()
+                                + f.math.source.capacity()
+                                + f.parts.iter().map(String::capacity).sum::<usize>()
+                        })
+                        .sum::<usize>()
+            }
+            Shape::Math(s) => s.latex.capacity() + s.source.capacity(),
+            Shape::Group(s) => {
+                s.children.capacity() * std::mem::size_of::<Shape>()
+                    + s.children.iter().map(payload).sum::<usize>()
+            }
+            _ => 0,
+        }
+    }
+    shapes.capacity() * (std::mem::size_of::<ShapeId>() + std::mem::size_of::<Shape>())
+        + order.len() * std::mem::size_of::<ShapeId>()
+        + shapes.values().map(payload).sum::<usize>()
 }
 
 /// A canvas document containing all shapes and state.
@@ -77,9 +115,24 @@ impl CanvasDocument {
         // Clear redo stack when new changes are made
         self.redo_stack.clear();
 
-        // Limit undo history size
-        if self.undo_stack.len() > MAX_UNDO_HISTORY {
+        self.trim_history();
+    }
+
+    pub fn history_memory_bytes(&self) -> usize {
+        self.undo_stack
+            .iter()
+            .chain(&self.redo_stack)
+            .map(|snapshot| snapshot_payload_bytes(&snapshot.shapes, &snapshot.z_order))
+            .sum()
+    }
+    fn trim_history(&mut self) {
+        while self.undo_stack.len() > MAX_UNDO_HISTORY
+            || (self.history_memory_bytes() > MAX_HISTORY_BYTES && self.undo_stack.len() > 1)
+        {
             self.undo_stack.remove(0);
+        }
+        while self.history_memory_bytes() > MAX_HISTORY_BYTES && self.redo_stack.len() > 1 {
+            self.redo_stack.remove(0);
         }
     }
 
@@ -94,6 +147,7 @@ impl CanvasDocument {
             // Restore the snapshot
             self.shapes = snapshot.shapes;
             self.z_order = snapshot.z_order;
+            self.trim_history();
 
             true
         } else {
@@ -112,6 +166,7 @@ impl CanvasDocument {
             // Restore the snapshot
             self.shapes = snapshot.shapes;
             self.z_order = snapshot.z_order;
+            self.trim_history();
 
             true
         } else {
@@ -886,5 +941,32 @@ mod tests {
         // Redo on empty stack should return false
         assert!(!doc.can_redo());
         assert!(!doc.redo());
+    }
+}
+
+#[cfg(test)]
+mod history_budget_tests {
+    use super::*;
+    #[test]
+    fn heavy_strokes_have_bounded_history_and_can_undo_redo() {
+        let mut document = CanvasDocument::new();
+        let stroke = crate::shapes::Freehand::from_points(vec![Point::ZERO; 100_000]);
+        let id = stroke.id();
+        document.add_shape(Shape::Freehand(stroke));
+        for n in 0..50 {
+            document.push_undo();
+            if let Some(Shape::Freehand(stroke)) = document.get_shape_mut(id) {
+                stroke.points[0].x = n as f64;
+            }
+        }
+        assert!(document.history_memory_bytes() <= MAX_HISTORY_BYTES);
+        assert!(document.undo_stack.len() < 50);
+        assert!(document.undo());
+        assert!(document.redo());
+        let Shape::Freehand(stroke) = document.get_shape(id).unwrap() else {
+            panic!()
+        };
+        assert_eq!(stroke.points[0].x, 49.0);
+        assert!(document.history_memory_bytes() <= MAX_HISTORY_BYTES);
     }
 }
