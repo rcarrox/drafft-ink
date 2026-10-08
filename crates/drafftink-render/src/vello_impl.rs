@@ -2357,12 +2357,18 @@ impl Renderer for VelloRenderer {
             let bounds = shape.bounds().inflate(4.0, 4.0);
             let bg = Color::from(pin.background);
             if bg.to_rgba8().a > 0 {
+                let mut background_path = BezPath::new();
+                background_path.move_to(Point::new(bounds.x0, bounds.y0));
+                background_path.line_to(Point::new(bounds.x1, bounds.y0));
+                background_path.line_to(Point::new(bounds.x1, bounds.y1));
+                background_path.line_to(Point::new(bounds.x0, bounds.y1));
+                background_path.close_path();
                 self.scene.fill(
                     Fill::NonZero,
                     Affine::IDENTITY,
                     bg,
                     None,
-                    &BezPath::from_rect(bounds),
+                    &background_path,
                 );
             }
             self.render_shape(shape, Affine::IDENTITY, ctx.canvas.is_selected(shape.id()));
