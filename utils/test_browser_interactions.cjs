@@ -88,7 +88,10 @@ function inspectCapture(file) {
   const control = async name => {
     const s = await wait(s => !!s.controls[name]);
     const [x0, y0, x1, y1] = s.controls[name];
-    await page.mouse.click((x0 + x1) / 2, (y0 + y1) / 2);
+    await page.mouse.move((x0+x1)/2,(y0+y1)/2);
+    await page.waitForTimeout(100);
+    await page.mouse.click((x0 + x1) / 2, (y0 + y1) / 2, {delay:60});
+    await page.waitForTimeout(100);
   };
   const focusCanvasTool = async tool => {
     // MouseInput consumption uses egui's previous hover frame. Give the canvas
@@ -225,6 +228,7 @@ function inspectCapture(file) {
     await input.send('Input.dispatchKeyEvent',{type:'keyUp',key:'}',code:'Equal',modifiers:0});
     await wait(s=>mathText(s)?.source.includes('}')&&!mathText(s)?.source.includes('_'));
     await page.keyboard.press('Escape');
+    await page.waitForTimeout(150);
 
     // Original characters and font-dependent scripts, including symbols without Unicode script glyphs.
     const nextScriptTab=(await state()).active_tab+1;await control('New canvas');await wait(s=>s.active_tab===nextScriptTab&&s.shapes.length===0);

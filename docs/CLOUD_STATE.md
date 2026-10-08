@@ -10,12 +10,19 @@ Dernière livraison0.11 : mainb7c6440e1bedee6e90e77f34aac4dd061eb3ff6e, PR12, CI
 
 IMPORTANTOUTILS : ne jamais réessayer Cua.waitForEvent(download) ; a bloqué20958secondes. TéléchargerlesartifactsviaGitHub et testerfilesystemavecVM/mocks/CI plutôtqu’attendreunévénementdedownloadducontrôleurnavigateur. Usertab8887 àpréserver.
 
-## Reprise 0.13.0 — en préparation
+## Reprise 0.13.0 — corrections Text/Math
 
 Base main 1b55bb025dc536a6df8dbbd8984438418fcf5245. Branche codex/0.13.0-math-selection.
 Text/Math proportionnels par défaut (Shift libre), contrôles circulaires 6 px avec zone de prise inchangée,
 cadre avec marge locale 6/4, géométrie du retournement calculée dans ce cadre. Images/crop inchangés.
 bin(n,k), normalisation ∞ dans LaTeX, AltGr exclu des raccourcis Ctrl, Math GelPen et SVG utilisateur.
 Presse-papiers WASM injecté en événements egui Copy/Cut/Paste, conserve curseur/sélection.
-Les compilations Rust/WASM restent uniquement Actions. CI et artefact final à confirmer.
+Les compilations Rust/WASM restent uniquement Actions. 187 tests Rust et le build WASM passent.
+Les nouveaux scénarios Chromium binomial, proportions/Shift, copier/coller au curseur et AltGr passent
+dans CI 37738814047 ; les clics UI attendent maintenant l'actualisation du survol/focus.
+Le GPU logiciel CI peut perdre son instance et échouer à lire un PNG : la validation des pixels reste
+distincte de celle des interactions. Le rendu local (binomial, GelPen, petites poignées et marges) a été observé.
+La PR #14 centralise la fusion et la provenance du ZIP final DrafftInk_Windows_Portable_0.13.0.zip.
+Pour reprendre, vérifier main/PR #14 et les workflows CI / Build DrafftInk Portable du commit fusionné.
+Un aperçu isolé port 8897 reste ouvert ; préserver sa feuille et l'onglet utilisateur 8887.
 Ne jamais utiliser les attentes download de Cua (ancien blocage) ; télécharger via le connecteur GitHub.
