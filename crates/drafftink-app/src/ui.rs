@@ -3841,6 +3841,24 @@ mod math_editor_regressions {
     }
     fn setup(text: &str) -> (Context, UiState) {
         let ctx = Context::default();
+        let mut fonts = egui::FontDefinitions::default();
+        fonts.font_data.insert(
+            "math_gelpen".into(),
+            egui::FontData::from_static(include_bytes!("../../drafftink-render/assets/GelPen.ttf"))
+                .into(),
+        );
+        fonts.font_data.insert(
+            "math_symbols".into(),
+            egui::FontData::from_static(include_bytes!(
+                "../../drafftink-render/assets/rex-xits.otf"
+            ))
+            .into(),
+        );
+        fonts.families.insert(
+            egui::FontFamily::Name("math_gelpen".into()),
+            vec!["math_gelpen".into(), "math_symbols".into()],
+        );
+        ctx.set_fonts(fonts);
         let mut state = UiState::default();
         state.math_editor = Some(MathEditorState {
             shape_id: ShapeId::new_v4(),
