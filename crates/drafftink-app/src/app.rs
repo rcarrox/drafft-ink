@@ -3434,18 +3434,12 @@ impl ApplicationHandler for App {
                 // Geometric tools always start in Architect mode.
                 let mut tool_style = state.ui_state.to_shape_style();
                 // Highlighter strokes are stored as freehand paths with the
-                // highlighter's widened, 50%-alpha style. When Draw is selected
-                // while one remains selected, do not feed that derived style
-                // back into the regular pen.
-                let selected_highlighter = state.canvas.selection.first()
-                    .and_then(|id| state.canvas.document.get_shape(*id))
-                    .is_some_and(|shape| {
-                        matches!(shape, Shape::Freehand(_))
-                            && shape.style().stroke_color.a == 128
-                            && shape.style().stroke_width >= 12.0
-                    });
+                // highlighter's widened, 50%-alpha style. Do not feed that
+                // derived style back into the regular pen, even when a selected
+                // non-highlighter object comes first in a multi-selection.
                 if state.canvas.tool_manager.current_tool == ToolKind::Freehand
-                    && selected_highlighter
+                    && tool_style.stroke_color.a == 128
+                    && tool_style.stroke_width >= 12.0
                 {
                     tool_style.stroke_width = 2.0;
                     tool_style.stroke_color.a = 255;
