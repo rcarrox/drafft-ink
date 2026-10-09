@@ -42,6 +42,11 @@ pub struct InputState {
     pinch_distance: Option<f64>,
     /// Previous center between two fingers (for pan during pinch).
     pinch_center: Option<Point>,
+    /// Modifier state from the platform event stream. Keeping it explicitly
+    /// avoids losing modified arrows when an egui panel retains keyboard focus.
+    ctrl_down: bool,
+    shift_down: bool,
+    alt_down: bool,
 }
 
 impl Default for InputState {
@@ -62,6 +67,9 @@ impl InputState {
             touches: [None, None],
             pinch_distance: None,
             pinch_center: None,
+            ctrl_down: false,
+            shift_down: false,
+            alt_down: false,
         }
     }
 
@@ -78,6 +86,12 @@ impl InputState {
 
     /// Process a window event. Returns true on redraw request.
     pub fn process_window_event(&mut self, event: &WindowEvent) -> bool {
+        if let WindowEvent::ModifiersChanged(modifiers) = event {
+            let state = modifiers.state();
+            self.ctrl_down = state.control_key();
+            self.shift_down = state.shift_key();
+            self.alt_down = state.alt_key();
+        }
         let result = self.helper.process_window_event(event);
 
         // Handle double-click and drag detection
@@ -175,15 +189,15 @@ impl InputState {
     // --- Modifiers ---
 
     pub fn shift(&self) -> bool {
-        self.helper.held_shift()
+        self.shift_down || self.helper.held_shift()
     }
 
     pub fn ctrl(&self) -> bool {
-        self.helper.held_control()
+        self.ctrl_down || self.helper.held_control()
     }
 
     pub fn alt(&self) -> bool {
-        self.helper.held_alt()
+        self.alt_down || self.helper.held_alt()
     }
 
     // --- Custom logic ---

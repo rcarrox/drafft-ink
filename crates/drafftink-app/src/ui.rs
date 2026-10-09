@@ -67,6 +67,9 @@ pub struct SelectedShapeProps {
     pub path_style: u8,
     /// Stroke style for lines/arrows (0 = Solid, 1 = Dashed, 2 = Dotted).
     pub stroke_style: u8,
+    /// Arrowhead style at the beginning/end (0=None, 1=Open, 2=Filled).
+    pub arrow_start_head: u8,
+    pub arrow_end_head: u8,
     /// Sloppiness level (0 = Architect, 1 = Artist, 2 = Cartoonist).
     pub sloppiness: u8,
     /// Fill pattern (0 = Solid, 1 = Hachure, etc).
@@ -151,6 +154,8 @@ impl SelectedShapeProps {
                 } else {
                     arrow.style.stroke_style
                 } as u8,
+                arrow_start_head: arrow.start_head as u8,
+                arrow_end_head: arrow.end_head as u8,
                 sloppiness,
                 fill_pattern,
                 has_fill,
@@ -648,6 +653,8 @@ pub enum UiAction {
     SetPathStyle(u8), // 0 = Direct, 1 = Flowing, 2 = Angular
     /// Set stroke style for selected lines/arrows.
     SetStrokeStyle(u8), // 0 = Solid, 1 = Dashed, 2 = Dotted
+    /// Configure the start/end marker for a selected arrow.
+    SetArrowHead(bool, u8), // bool selects start (true) or end (false); 0=None, 1=Open, 2=Filled
     /// Undo the last action.
     Undo,
     /// Redo the last undone action.
@@ -1019,12 +1026,18 @@ fn floating_area(_ctx: &Context, state: &UiState, id: &str, default: Pos2) -> eg
         "laser_palette" => Vec2::new(210.0, 140.0),
         _ => Vec2::new(300.0, 200.0),
     };
-    egui::Area::new(egui::Id::new(id))
-        .default_size(size)
-        .default_pos(pos)
-        .movable(true)
-        .constrain(true)
-        .order(egui::Order::Foreground)
+    let area = egui::Area::new(egui::Id::new(id)).default_size(size);
+    if id == "laser_palette" {
+        area.fixed_pos(default)
+            .movable(false)
+            .constrain(true)
+            .order(egui::Order::Foreground)
+    } else {
+        area.default_pos(pos)
+            .movable(true)
+            .constrain(true)
+            .order(egui::Order::Foreground)
+    }
 }
 fn remember_panel(state: &mut UiState, id: &str, response: &egui::Response) {
     if response.drag_stopped() {
@@ -1038,7 +1051,7 @@ fn remember_panel(state: &mut UiState, id: &str, response: &egui::Response) {
 fn panel_grip(ui: &mut egui::Ui) {
     let (rect, response) = ui.allocate_exact_size(
         Vec2::new(ui.available_width().clamp(24.0, 400.0), 7.0),
-        egui::Sense::hover(),
+        egui::Sense::drag(),
     );
     for offset in [-6.0, 0.0, 6.0] {
         ui.painter().circle_filled(
@@ -1112,6 +1125,7 @@ fn stroke_pattern_button(ui: &mut egui::Ui, pattern: StrokeStyle, selected: bool
 fn render_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
     let mut action = None;
     let tools = get_tools();
+    let mut laser_anchor = None;
 
     let screen = ctx.input(|i| i.content_rect());
     let output = floating_area(
@@ -1158,7 +1172,7 @@ fn render_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                         // while using the same hover and selected backgrounds as all tools.
                         style.icon_tint = None;
                         style.selected_icon_tint = None;
-                        style.icon_offset = Vec2::new(2.0, 0.0);
+                        style.icon_offset = Vec2::new(4.0, 0.0);
                     }
                     if tool.kind == ToolKind::LaserPointer {
                         let [r, g, b] = ui_state.settings.laser_color;
@@ -1167,8 +1181,23 @@ fn render_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                         style.selected_icon_tint = Some(laser);
                         style.hover_icon_tint = Some(laser);
                     }
+                    let icon_offset = style.icon_offset;
+                    let icon_size = style.icon_size;
                     button = button.style(style).selected(is_selected);
                     let response = button.show_response(ui);
+                    if special_pointer_icon {
+                        let icon_rect = Rect::from_center_size(
+                            response.rect.center() + icon_offset,
+                            icon_size,
+                        );
+                        ui_state.test_controls.insert(
+                            format!("tool_{:?}_icon", tool.kind),
+                            [icon_rect.min.x, icon_rect.min.y, icon_rect.max.x, icon_rect.max.y],
+                        );
+                    }
+                    if tool.kind == ToolKind::LaserPointer {
+                        laser_anchor = Some(response.rect.right_center() + Vec2::new(12.0, 0.0));
+                    }
                     ui_state.test_controls.insert(
                         format!("tool_{:?}", tool.kind),
                         [
@@ -1204,8 +1233,6 @@ fn render_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                     }
                     if tool.kind == ToolKind::LaserPointer && response.secondary_clicked() {
                         ui_state.laser_color_open = !ui_state.laser_color_open;
-                        ui_state.laser_color_pos =
-                            response.rect.right_center() + Vec2::new(12.0, 0.0);
                     }
                 }
             });
@@ -1213,13 +1240,32 @@ fn render_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
     });
 
     remember_panel(ui_state, "toolbar", &output.response);
+    ui_state.test_controls.insert(
+        "toolbar".into(),
+        [
+            output.response.rect.min.x,
+            output.response.rect.min.y,
+            output.response.rect.max.x,
+            output.response.rect.max.y,
+        ],
+    );
+    if ui_state.laser_color_open {
+        if let Some(anchor) = laser_anchor {
+            ui_state.laser_color_pos = anchor;
+        } else {
+            ui_state.laser_color_open = false;
+            ui_state.laser_color_rect = None;
+        }
+    }
     if ui_state.laser_color_open
         && ctx.input(|i| i.pointer.primary_pressed())
         && ctx.input(|i| i.pointer.interact_pos()).is_some_and(|pos| {
-            !ui_state.laser_color_rect.is_some_and(|rect| rect.contains(pos))
-                && !ui_state.test_controls.get("tool_LaserPointer").is_some_and(|rect| {
-                    Rect::from_min_max(Pos2::new(rect[0], rect[1]), Pos2::new(rect[2], rect[3])).contains(pos)
-                })
+            let in_palette = ui_state.laser_color_rect.is_some_and(|rect| rect.contains(pos));
+            let toolbar_grip = Rect::from_min_size(
+                output.response.rect.min,
+                Vec2::new(output.response.rect.width(), 12.0),
+            );
+            !in_palette && !toolbar_grip.contains(pos)
         })
     {
         ui_state.laser_color_open = false;
@@ -1253,14 +1299,32 @@ fn render_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                         )));
                     }
                     let mut permanent = ui_state.settings.laser_permanent;
-                    if ui.checkbox(&mut permanent, "Permanent").changed() {
+                    let permanent_response = ui.checkbox(&mut permanent, "Permanent");
+                    ui_state.test_controls.insert(
+                        "laser_permanent".into(),
+                        [
+                            permanent_response.rect.min.x,
+                            permanent_response.rect.min.y,
+                            permanent_response.rect.max.x,
+                            permanent_response.rect.max.y,
+                        ],
+                    );
+                    if permanent_response.changed() {
                         action = Some(UiAction::SetLaserPermanent(permanent));
                     }
                 });
             },
         );
-        remember_panel(ui_state, "laser_palette", &output.response);
         ui_state.laser_color_rect = Some(output.response.rect);
+        ui_state.test_controls.insert(
+            "laser_palette".into(),
+            [
+                output.response.rect.min.x,
+                output.response.rect.min.y,
+                output.response.rect.max.x,
+                output.response.rect.max.y,
+            ],
+        );
     }
     action
 }
@@ -2262,6 +2326,31 @@ fn render_right_panel(
                                 action = Some(UiAction::SetStrokeStyle(2));
                             }
                         });
+                        if props.is_arrow && props.has_selection {
+                            for (is_start, label, selected) in [
+                                (true, "Départ", props.arrow_start_head),
+                                (false, "Arrivée", props.arrow_end_head),
+                            ] {
+                                ui.add_space(4.0);
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(label)
+                                            .size(11.0)
+                                            .color(Color32::from_gray(100)),
+                                    );
+                                    ui.spacing_mut().item_spacing = Vec2::new(4.0, 0.0);
+                                    for (value, name) in
+                                        [(0u8, "Aucune"), (1, "Ouverte"), (2, "Pleine")]
+                                    {
+                                        if ToggleButton::new(name, selected == value).show(ui)
+                                            && selected != value
+                                        {
+                                            action = Some(UiAction::SetArrowHead(is_start, value));
+                                        }
+                                    }
+                                });
+                            }
+                        }
                     }
 
                     // Calligraphy mode (for freehand tool only)

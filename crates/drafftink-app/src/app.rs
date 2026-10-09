@@ -4462,6 +4462,36 @@ impl ApplicationHandler for App {
                                     );
                                 }
                             }
+                            UiAction::SetArrowHead(is_start, level) => {
+                                use drafftink_core::shapes::ArrowHeadStyle;
+                                let head = match level {
+                                    0 => ArrowHeadStyle::None,
+                                    2 => ArrowHeadStyle::Filled,
+                                    _ => ArrowHeadStyle::Open,
+                                };
+                                let has_selection = !state.canvas.selection.is_empty();
+                                if has_selection {
+                                    state.canvas.document.push_undo();
+                                }
+                                for &shape_id in &state.canvas.selection.clone() {
+                                    if let Some(Shape::Arrow(arrow)) =
+                                        state.canvas.document.get_shape_mut(shape_id)
+                                    {
+                                        if is_start {
+                                            arrow.start_head = head;
+                                        } else {
+                                            arrow.end_head = head;
+                                        }
+                                    }
+                                }
+                                if has_selection {
+                                    broadcast_doc_changes(
+                                        &mut state.collab,
+                                        &state.canvas.document,
+                                        state.websocket.as_ref(),
+                                    );
+                                }
+                            }
                             UiAction::Undo => {
                                 if state.canvas.document.undo() {
                                     state.canvas.clear_selection();
@@ -5406,6 +5436,13 @@ impl ApplicationHandler for App {
                         }).collect();
 
                         let status = serde_json::json!({"shapes":shapes,"presentation":state.ui_state.presentation_mode,"tool":format!("{:?}",state.ui_state.current_tool),"editing_text":state.event_handler.editing_text,"inline_dialog":state.ui_state.inline_formula_draft.is_some(),"inline_error":state.ui_state.inline_formula_error,"zoom":state.canvas.camera.zoom,"camera_offset":[state.canvas.camera.offset.x,state.canvas.camera.offset.y],"cursor_mode":browser_cursor_kind(state).0,"png_save_requests":state.png_save_requests,"active_tab":state.active_tab,"tabs":state.tabs.len(),"memory":{"parked_shapes_total":state.tabs.iter().map(|tab|tab.document.len()).sum::<usize>(),"image_cache_bytes":state.shape_renderer.image_cache_bytes(),"image_cache_budget_bytes":32*1024*1024,"path_cache_payload_bytes":state.shape_renderer.path_cache_bytes(),"history_payload_bytes":state.canvas.document.history_memory_bytes(),"render_target_allocations":state.render_target_allocations,"render_target_bytes":state.surface.config.width as u64*state.surface.config.height as u64*4},"geometry":format!("{:?}",state.ui_state.geometry),"context_properties":state.ui_state.context_properties,"properties_visible":!state.ui_state.context_rects.is_empty(),"selected_text":state.text_edit_state.as_ref().and_then(|e|e.editor().selected_text()).map(|s|s.to_string()),"insertion_script":state.text_edit_state.as_ref().map(|e|e.script_value()),"text_caret":state.text_edit_state.as_ref().and_then(|e|e.cursor_geometry(1.5)).map(|r|[r.x0,r.y0,r.x1,r.y1]),"editing_math":state.ui_state.math_editor.as_ref().map(|e| e.shape_id),"math_form_rect":state.ui_state.math_editor_rect.map(|r|[r.min.x,r.min.y,r.max.x,r.max.y]),"math_input_focused":state.ui_state.math_editor.as_ref().is_some_and(|e|state.egui_ctx.memory(|m|m.focused()==Some(egui::Id::new(("math_source",e.shape_id))))),"command_editor":state.ui_state.text_command_editor.as_ref().map(|e| &e.source),"selected_count":state.canvas.selection.len(),"accent_color":state.ui_state.settings.accent_color,"selection_rect":selection_rect.map(|r|[r.x0,r.y0,r.x1,r.y1]),"controls":state.ui_state.test_controls});
+                        let status = {
+                            let mut status = status;
+                            status["laser_permanent"] = state.ui_state.settings.laser_permanent.into();
+                            status["laser_palette_open"] = state.ui_state.laser_color_open.into();
+                            status["eraser_mode"] = format!("{:?}", state.ui_state.eraser_mode).into();
+                            status
+                        };
                         let _ = js_sys::Reflect::set(
                             window.as_ref(),
                             &JsValue::from_str("__drafftinkTestState"),
@@ -6305,8 +6342,15 @@ impl ApplicationHandler for App {
             WindowEvent::KeyboardInput { event, .. } => {
                 // A selection nudge belongs to the canvas and must be handled
                 // before egui's focus guard consumes Ctrl+vertical arrows.
+                let vertical_nudge_fallback = state.input.shift()
+                    && !state.input.ctrl()
+                    && !state.input.alt()
+                    && matches!(
+                        event.physical_key,
+                        PhysicalKey::Code(KeyCode::ArrowUp | KeyCode::ArrowDown)
+                    );
                 if event.state == ElementState::Pressed
-                    && state.input.ctrl()
+                    && ((state.input.ctrl() && !state.input.alt()) || vertical_nudge_fallback)
                     && state.event_handler.editing_text.is_none()
                     && state.ui_state.math_editor.is_none()
                     && !state.ui_state.settings_open
@@ -7261,6 +7305,38 @@ impl ApplicationHandler for App {
                                 }
                                 key if state.ui_state.settings.tool_for_key(key).is_some() => {
                                     if let Some(tool) = state.ui_state.settings.tool_for_key(key) {
+                                        if matches!(tool, ToolKind::LaserPointer | ToolKind::Eraser)
+                                            && !event.repeat
+                                        {
+                                            if tool == ToolKind::LaserPointer {
+                                                if state.canvas.tool_manager.current_tool == tool {
+                                                    state.ui_state.settings.laser_permanent =
+                                                        !state.ui_state.settings.laser_permanent;
+                                                } else {
+                                                    state.ui_state.settings.laser_permanent = false;
+                                                }
+                                                crate::settings::save_settings(
+                                                    &state.ui_state.settings,
+                                                );
+                                            } else {
+                                                state.ui_state.eraser_mode =
+                                                    if state.canvas.tool_manager.current_tool != tool
+                                                        || state.ui_state.eraser_mode
+                                                            == EraserMode::Manual
+                                                    {
+                                                        EraserMode::Classic
+                                                    } else {
+                                                        EraserMode::Manual
+                                                    };
+                                                state.event_handler.eraser_mode =
+                                                    state.ui_state.eraser_mode;
+                                            }
+                                            if state.canvas.tool_manager.current_tool == tool {
+                                                state.needs_redraw = true;
+                                                state.window.request_redraw();
+                                                return;
+                                            }
+                                        }
                                         finish_math_editor(state);
                                         if tool == ToolKind::Ellipse
                                             && state.canvas.tool_manager.current_tool

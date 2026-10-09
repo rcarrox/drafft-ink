@@ -10,7 +10,7 @@ mod math;
 mod rectangle;
 mod text;
 
-pub use arrow::Arrow;
+pub use arrow::{Arrow, ArrowHeadStyle};
 pub use ellipse::{Ellipse, GeometryKind};
 pub use freehand::Freehand;
 pub use group::Group;

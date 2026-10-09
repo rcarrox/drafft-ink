@@ -3277,6 +3277,30 @@ impl ShapeRenderer for VelloRenderer {
             Shape::Arrow(arrow) => {
                 let path = shape.to_path();
                 self.render_stroke_only(&path, shape.style(), arrow.stroke_style, shape_transform);
+                for head in arrow.filled_head_paths() {
+                    self.scene.fill(
+                        Fill::NonZero,
+                        shape_transform,
+                        shape.style().stroke_with_opacity(),
+                        None,
+                        &head,
+                    );
+                    let stroke = outline_stroke(
+                        shape.style().stroke_width,
+                        if shape.style().stroke_style == StrokeStyle::Solid {
+                            arrow.stroke_style
+                        } else {
+                            shape.style().stroke_style
+                        },
+                    );
+                    self.scene.stroke(
+                        &stroke,
+                        shape_transform,
+                        shape.style().stroke_with_opacity(),
+                        None,
+                        &head,
+                    );
+                }
             }
             Shape::Freehand(freehand) => {
                 if freehand.closed {
