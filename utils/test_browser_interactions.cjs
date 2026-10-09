@@ -1,493 +1,309 @@
-// Real Chromium/WASM input; read-only diagnostics never mutate the application.
-const { chromium } = require('../work/e2e/node_modules/playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const zlib = require('node:zlib');
-const evidence = path.resolve('work/e2e/evidence');
-fs.mkdirSync(evidence, { recursive: true });
+YªçŠx-®éÜj×¢ëiºÚ+Š§j[h‘éÜ¢éí×~»Ñ:-jZ.¶›­–)Þ³Ròò&VÂ6‡&öÖ—VÒõt4Ò–çWC²&VBÖöæÇ’F–væ÷7F–72æWfW"×WFFRF†RÆ–6F–öâàÐ¦6öç7B²6‡&öÖ—VÒÒÒ&WV—&R‚rââ÷v÷&²öS&RöæöFUöÖöGVÆW2÷Æ—w&–v‡Br“°Ð¦6öç7B76W'BÒ&WV—&R‚væöFS¦76W'B÷7G&–7Br“°Ð¦6öç7Bg2Ò&WV—&R‚væöFS¦g2r“°Ð¦6öç7BF‚Ò&WV—&R‚væöFS§F‚r“°Ð¦6öç7B¦Æ–"Ò&WV—&R‚væöFS§¦Æ–"r“°Ð¦6öç7BWf–FVæ6RÒF‚ç&W6öÇfR‚wv÷&²öS&RöWf–FVæ6Rr“°Ð¦g2æÖ¶F—%7–æ2†Wf–FVæ6RÂ²&V7W'6—fS¢G'VRÒ“°Ð Ð Ð¢òò&V¦V7BV×G’vV$uR6GW&W3²&V6öç7G'V7B7FæF&B6‡&öÖ—VÒ$t"õ$t$äw2àÐ¦gVæ7F–öâ–ç7V7D6GW&R†f–ÆR’°Ð¢6öç7BæsÖg2ç&VDf–ÆU7–æ2†f–ÆR“°Ð¢ÆWBöfg6WCÓ‚Çv–GF‚Æ†V–v‡BÆ'¶6öç7B'G3ÕµÓ°Ð¢v†–ÆR†öfg6WCÇæræÆVæwF‚’°Ð¢6öç7B6—¦S×ærç&VET–çC3$$R†öfg6WB’ÇFs×ærçFõ7G&–ær‚v66–’rÆöfg6WB³BÆöfg6WB³‚“°Ð¢6öç7BFF×ærç7V&'&’†öfg6WB³‚Æöfg6WB³‚·6—¦R“°Ð¢–b‡FsÓÓÒt”„E"r’·v–GFƒÖFFç&VET–çC3$$Rƒ“¶†V–v‡CÖFFç&VET–çC3$$RƒB“¶76W'BæWVÂ†FF³…ÒÃ‚“¶'ÖFF³•ÓÓÓÓcóC¦FF³•ÓÓÓÓ#ó3£¶76W'B†'ÂuVç7W÷'FVB67&VVç6†÷Bärf÷&ÖBr“·ÐÐ¢–b‡FsÓÓÒt”DBr—'G2çW6‚†FF“°Ð¢öfg6WB³×6—¦R³#°Ð¢ÐÐ¢6öç7B&s×¦Æ–"æ–æfÆFU7–æ2„'VffW"æ6öæ6B‡'G2’“¶6öç7B7G&–FS×v–GF‚¦'°Ð¢ÆWB&Wf–÷W3Ô'VffW"æÆÆö2‡7G&–FR’Ç÷6—F–öãÓÆæöçv†—FSÓ¶6öç7B6öÆ÷'3ÖæWr6WB‚“°Ð¢6öç7BWFƒÒ†Æ"Æ2“Óâ¶6öç7BÖ¶"Ö2ÇÔÖF‚æ'2‡Ö’Ç#ÔÖF‚æ'2‡Ö"’Ç3ÔÖF‚æ'2‡Ö2“·&WGW&âÃ×"bgÃ×3ö§#Ã×3ö#¦3·Ó°Ð¢f÷"†ÆWB“Ó·“Æ†V–v‡C·’²²’°Ð¢6öç7Bf–ÇFW#×&u·÷6—F–öâ²µÒÇ&÷sÔ'VffW"æg&öÒ‡&rç7V&'&’‡÷6—F–öâÇ÷6—F–öâ·7G&–FR’“·÷6—F–öâ³×7G&–FS°Ð¢f÷"†ÆWBƒÓ·ƒÇ7G&–FS·‚²²’°Ð¢6öç7BÆVgC×ƒãÖ'÷&÷u·‚Ö'Ó£ÇW×&Wf–÷W5·…ÒÇWW$ÆVgC×ƒãÖ'÷&Wf–÷W5·‚Ö'Ó£°Ð¢6öç7B&VF–7F–öãÖf–ÇFW#ÓÓÓó¦f–ÇFW#ÓÓÓöÆVgC¦f–ÇFW#ÓÓÓ#÷W¦f–ÇFW#ÓÓÓ3ôÖF‚æfÆö÷"‚†ÆVgB·W’ó"“§WF‚†ÆVgBÇWÇWW$ÆVgB“°Ð¢&÷u·…ÓÒ‡&÷u·…Ò·&VF–7F–öâ’c#SS°Ð¢ÐÐ¢f÷"†ÆWBƒÓ·ƒÇ7G&–FS·‚³Ö'’°Ð¢–b‡&÷u·…ÓÃ#3WÇÇ&÷u·‚³ÓÃ#3WÇÇ&÷u·‚³%ÓÃ#3R–æöçv†—FR²³°Ð¢–b†6öÆ÷'2ç6—¦SÃ#Sb–6öÆ÷'2æFB„'&’æg&öÒ‡&÷rç7V&'&’‡‚Ç‚¶'’’æ¦ö–â‚rÂr’“°Ð¢ÐÐ¢&Wf–÷W3×&÷s°Ð¢ÐÐ¢&WGW&â¶f–ÆS§F‚æ&6VæÖR†f–ÆR’Çv–GF‚Æ†V–v‡BÆæöçv†—FU÷—†VÇ3¦æöçv†—FRÆF—7F–æ7Eö6öÆ÷'3¦6öÆ÷'2ç6—¦RÇfÆ–C¦æöçv†—FSãbf6öÆ÷'2ç6—¦SãgÓ°Ð§ÐÐ Ð¢†7–æ2‚’Óâ°Ð¢6öç7B'&÷w6W"Òv—B6‡&öÖ—VÒæÆVæ6‚‡²6†ææVÃ¢v6‡&öÖ—VÒrÂ†VFÆW73¢G'VRÂ&w3¢²rÒÖVæ&ÆR×Vç6fR×vV&wRrÂrÒ×W6RÖævÆS×7v–gG6†FW"uÒÒ“°Ð¢6öç7B6öçFW‡BÒv—B'&÷w6W"ææWt6öçFW‡B‡²f–Ww÷'C¢²v–GFƒ¢#ƒÂ†V–v‡C¢s#ÒÂW&Ö—76–öç3¢²v6Æ—&ö&B×&VBrÂv6Æ—&ö&B×w&—FRuÒÒ“°Ð¢v—B6öçFW‡BæFD–æ—E67&—B‚‚’ÓâÆö6Å7F÷&vRç6WD—FVÒ‚vG&fgF–æ²çW6W%÷6WGF–æw2çcrÂ¥4ôâç7G&–æv–g’‡²&W7F÷&UöÆ7EöFö7VÖVçC¢fÇ6RÂ–çG&õö§6öã¢rrÂWF÷6fUöVæ&ÆVC¢fÇ6RÂ†–FU÷&÷W'F–W3¢fÇ6RÂFVfVÇEöföçC¢tæ÷Fò6ç2rÂFVfVÇEöföçE÷÷7G67&—C¢rrÒ’’“°Ð¢ÆWBvRÒv—B6öçFW‡BææWuvR‚“°Ð¢6öç7BÆöw2ÒµÓ°Ð¢vRæöâ‚v6öç6öÆRrÂÖW76vRÓâÆöw2çW6‚†ÖW76vRçG—R‚’²s¢r²ÖW76vRçFW‡B‚’’“°Ð¢vRæöâ‚wvVW'&÷"rÂW'&÷"ÓâÆöw2çW6‚‚utTU%$õ#¢r²W'&÷"’“°Ð¢6öç7B7FFRÒ‚’ÓâvRæWfÇVFR‚‚’Óâ¥4ôâç'6R‡v–æF÷råõöG&fgF–æµFW7E7FFR’“°Ð¢6öç7Bv—BÒ7–æ2&VF–6FRÓâ°Ð¢f÷"†ÆWB’Ò²’Â²’²²’°Ð¢6öç7B7W'&VçBÒv—B7FFR‚’æ6F6‚‚‚’ÓâçVÆÂ“°Ð¢–b†7W'&VçBbb&VF–6FR†7W'&VçB’’&WGW&â7W'&VçC°Ð¢v—BvRçv—Df÷%F–ÖV÷WBƒ“°Ð¢ÐÐ¢F‡&÷ræWrW'&÷"‚uF–ÖVB÷WC²7FFSÒr²¥4ôâç7G&–æv–g’†v—B7FFR‚’æ6F6‚‚‚’ÓâçVÆÂ’’“°Ð¢Ó°Ð¢6öç7BFW‡BÒ2Óâ2ç6†W2æf–æB†—FVÒÓâ—FVÒç6†RåFW‡B“òç6†RåFW‡C°Ð¢6öç7B6æ6†÷CÖ7–æ2‡F&vWBÆf–ÆR“Óâ°Ð¢v—BF&vWBæWfÇVFR‚‚“ÓææWr&öÖ—6R‡&W6öÇfSÓç&WVW7Dæ–ÖF–öäg&ÖR‚‚“Óç&WVW7Dæ–ÖF–öäg&ÖR‡&W6öÇfR’’’“°Ð¢v—BF&vWBç67&VVç6†÷B‡·Fƒ§F‚æ¦ö–â†Wf–FVæ6RÆf–ÆR—Ò“°Ð¢Ó°Ð¢6öç7BW‡÷'E—†VÇ3Ö7–æ2‡F&vWBÆf–ÆR“Óâ°Ð¢–b†Æöw2ç6öÖR†Æ–æSÓæÆ–æRæ–æ6ÇVFW2‚tfÆ–BW‡FW&æÂ–ç7Fæ6R&VfW&Væ6RæòÆöævW"W†—7G2r’’’°Ð¢&WGW&â¶f–ÆRÇfÆ–C¦fÇ6RÇ7FGW3¢wVæf–Æ&ÆRrÇ&V6öã¢t4’6ögGv&RvV$uR–ç7Fæ6RÆ÷7C²—†VÂ&VF&6²6ææ÷B&RfÆ–FFVB†W&RwÓ°Ð¢ÐÐ¢6öç7BF÷væÆöFVC×F&vWBçv—Df÷$WfVçB‚vF÷væÆöBrÇ·F–ÖV÷WC£cÒ“°Ð¢v—BF&vWBæ¶W–&ö&Bç&W72‚t6öçG&öÂ¶Rr“°Ð¢v—B†v—BF÷væÆöFVB’ç6fT2‡F‚æ¦ö–â†Wf–FVæ6RÆf–ÆR’“°Ð¢6öç7B–ç7V7FVCÖ–ç7V7D6GW&R‡F‚æ¦ö–â†Wf–FVæ6RÆf–ÆR’“°Ð¢76W'B†–ç7V7FVBçfÆ–BÆuRärW‡÷'B—2V×G“¢G´¥4ôâç7G&–æv–g’†–ç7V7FVB—Ö“°Ð¢&WGW&â–ç7V7FVC°Ð¢Ó°Ð¢ÆWB–çWBÒv—B6öçFW‡BææWt4E6W76–öâ‡vR“°Ð¢6öç7B¶W—2Ò7–æ2fÇVRÓâ°Ð¢f÷"†6öç7B6†"öbfÇVR’°Ð¢–b†6†"æ6öFUö–çDBƒ’Â#‚’v—BvRæ¶W–&ö&Bç&W72†6†"“°Ð¢VÇ6R°Ð¢v—B–çWBç6VæB‚t–çWBæF—7F6„¶W”WfVçBrÂ²G—S¢v¶W”F÷vârÂ¶W“¢6†"ÂFW‡C¢6†"ÂVæÖöF–f–VEFW‡C¢6†"Ò“°Ð¢v—B–çWBç6VæB‚t–çWBæF—7F6„¶W”WfVçBrÂ²G—S¢v¶W•WrÂ¶W“¢6†"Ò“°Ð¢ÐÐ¢ÐÐ¢Ó°Ð¢6öç7B6&WE6¶WBÒ7–æ2¶W’Óâ°Ð¢v—B–çWBç6VæB‚t–çWBæF—7F6„¶W”WfVçBrÇ·G—S¢v¶W”F÷vârÆ¶W’Æ6öFS¢t'&6¶WDÆVgBrÂâââ†¶W“ÓÓÒtFVBs÷·Ó§·FW‡C¦¶W’ÇVæÖöF–f–VEFW‡C¦¶W—Ò—Ò“°Ð¢v—B–çWBç6VæB‚t–çWBæF—7F6„¶W”WfVçBrÇ·G—S¢v¶W•WrÆ¶W’Æ6öFS¢t'&6¶WDÆVgBwÒ“°Ð¢Ó°Ð¢6öç7B6öçG&öÂÒ7–æ2æÖRÓâ°Ð¢6öç7B2Òv—Bv—B‡2Óâ2æ6öçG&öÇ5¶æÖUÒ“°Ð¢6öç7B·ƒÂ“ÂƒÂ“ÒÒ2æ6öçG&öÇ5¶æÖUÓ°Ð¢v—BvRæÖ÷W6RæÖ÷fR‚‡ƒ·ƒ’ó"Â‡“·“’ó"“°Ð¢v—BvRçv—Df÷%F–ÖV÷WBƒ“°Ð¢v—BvRæÖ÷W6Ræ6Æ–6²‚‡ƒ²ƒ’ò"Â‡“²“’ò"Â¶FVÆ“£cÒ“°Ð¢v—BvRçv—Df÷%F–ÖV÷WBƒ“°Ð¢Ó°Ð¢6öç7Bfö7W46çf5FööÂÒ7–æ2FööÂÓâ°Ð¢òòÖ÷W6T–çWB6öç7V×F–öâW6W2VwV’w2&Wf–÷W2†÷fW"g&ÖRâv—fRF†R6çf0Ð¢òò†÷fW"æBV6‚fö7W2F—6Ö—76Âg&ÖR&Vf÷&RF†RÆ6VÖVçB6Æ–6²àÐ¢v—BvRæÖ÷W6RæÖ÷fRƒCÃ3“¶v—BvRçv—Df÷%F–ÖV÷WBƒ“°Ð¢v—BvRæ¶W–&ö&Bç&W72‚tW66Rr“¶v—BvRçv—Df÷%F–ÖV÷WBƒ“°Ð¢v—BvRæ¶W–&ö&Bç&W72‚tW66Rr“¶v—BvRçv—Df÷%F–ÖV÷WBƒ“°Ð¢v—BvRæ¶W–&ö&Bç&W72‡FööÂ“¶v—Bv—B‡3Óç2çFööÃÓÓÒ‡FööÃÓÓÒvÒsòtÖF‚s¢uFW‡Br’“°Ð¢v—BvRæÖ÷W6Ræ6Æ–6²ƒCÃ3“°Ð¢Ó°Ð¢6öç7Bf–ÆÂÒ7–æ2†æÖRÂfÇVR’Óâ²v—B6öçG&öÂ†æÖR“²v—BvRæ¶W–&ö&Bç&W72‚t6öçG&öÂ¶r“²v—B¶W—2‡fÇVR“²Ó°Ð¢G'’°Ð¢òòFVfVÇB6öçFW‡GVÂ&÷W'F–W2æB6†R6†ö÷6W"Âv—F†÷WBÇFW&–ærF†PÐ¢òòÆVv7’7V—FRw2W‡Æ–6—BÇv—2×f—6–&ÆR&÷W'F–W2&VfW&Væ6RàÐ¢6öç7BÖ–åvRÒvS°Ð¢6öç7BvVöÖWG'”6öçFW‡BÒv—B'&÷w6W"ææWt6öçFW‡B‡·f–Ww÷'C§·v–GFƒ£#ƒÆ†V–v‡C£s#×Ò“°Ð¢v—BvVöÖWG'”6öçFW‡BæFD–æ—E67&—B‚‚“ÓæÆö6Å7F÷&vRç6WD—FVÒ‚vG&fgF–æ²çW6W%÷6WGF–æw2çcrÄ¥4ôâç7G&–æv–g’‡·&W7F÷&UöÆ7EöFö7VÖVçC¦fÇ6RÆWF÷6fUöVæ&ÆVC¦fÇ6RÆFVfVÇEöföçC¢tæ÷Fò6ç2rÆFVfVÇEöföçE÷÷7G67&—C¢rwÒ’’“°Ð¢vRÒv—BvVöÖWG'”6öçFW‡BææWuvR‚“°Ð¢v—BvRæv÷Fò‡&ö6W72æVçbäE$deD”äµõDU5EõU$ÂÇÂv‡GG¢òó#rããã£ƒƒƒ‚óöG&fgF–æ²×FW7CÓr“°Ð¢v—Bv—B‡3Óç2ç6†W2æÆVæwFƒÓÓÓbb2ç&÷W'F–W5÷f—6–&ÆR“°Ð¢76W'BæWVÂ†v—BvRçF—FÆR‚’ÂuW'6ÿ	øËòr“°Ð¢v—BvRæÖ÷W6RæÖ÷fRƒCÃ3“¶v—BvRçv—Df÷%F–ÖV÷WBƒ“°Ð¢v—BvRæ¶W–&ö&Bç&W72‚vòr“¶v—Bv—B‡3Óç2çFööÃÓÓÒtVÆÆ—6Rrbg2ævVöÖWG'“ÓÓÒtVÆÆ—6Rr“°Ð¢v—BvRæ¶W–&ö&Bç&W72‚vòr“¶v—Bv—B‡3Óç2ævVöÖWG'“ÓÓÒuG&–ævÆRr“°Ð¢v—BvRæÖ÷W6RæÖ÷fRƒ3Ã#s“¶v—BvRæÖ÷W6RæF÷vâ‚“¶v—BvRæÖ÷W6RæÖ÷fRƒCcÃCÇ·7FW3£‡Ò“¶v—BvRæÖ÷W6RçW‚“°Ð¢6öç7BG&’Òv—Bv—B‡3Óç2ç6†W2ç6öÖR†“Óæ’ç6†RäVÆÆ—6SòævVöÖWG'“ÓÓÒuG&–ævÆRr’“°Ð¢76W'B‚G&’ç&÷W'F–W5÷f—6–&ÆR“°Ð¢v—BvRæ¶W–&ö&Bç&W72‚t6öçG&öÂ·¢r“¶v—Bv—B‡3Óç2ç6†W2æÆVæwFƒÓÓÓ“°Ð¢v—BvRæ¶W–&ö&Bç&W72‚t6öçG&öÂµ6†–gB·¢r“¶v—Bv—B‡3Óç2ç6†W2æÆVæwFƒÓÓÓ“°Ð¢v—BvRæÖ÷W6RæÖ÷fRƒ3ƒÃ#s“¶v—BvRçv—Df÷%F–ÖV÷WBƒ“°Ð¢v—BvRæÖ÷W6Ræ6Æ–6²ƒ3ƒÃ#sÇ¶'WGFöã¢w&–v‡BrÆFVÆ“£cÒ“°Ð¢v—Bv—B‡3Óç2æ6öçFW‡E÷&÷W'F–W2bg2ç&÷W'F–W5÷f—6–&ÆR“°Ð¢v—BvRæÖ÷W6RæÖ÷fRƒcÃS“¶v—BvRçv—Df÷%F–ÖV÷WBƒ“¶v—BvRæÖ÷W6Ræ6Æ–6²ƒcÃS“°Ð¢v—Bv—B‡3Óâ2æ6öçFW‡E÷&÷W'F–W2bb2ç&÷W'F–W5÷f—6–&ÆR“°Ð¢6öç7BVÆÆ—6T'WGFöãÒ†v—B7FFR‚’’æ6öçG&öÇ2çFööÅôVÆÆ—6S°Ð¢v—BvRæÖ÷W6RæÖ÷fR‚†VÆÆ—6T'WGFöå³Ò¶VÆÆ—6T'WGFöå³%Ò’ó"Â†VÆÆ—6T'WGFöå³Ò¶VÆÆ—6T'WGFöå³5Ò’ó"“¶v—BvRçv—Df÷%F–ÖV÷WBƒ“°Ð¢v—BvRæÖ÷W6Ræ6Æ–6²‚†VÆÆ—6T'WGFöå³Ò¶VÆÆ—6T'WGFöå³%Ò’ó"Â†VÆÆ—6T'WGFöå³Ò¶VÆÆ—6T'WGFöå³5Ò’ó"Ç¶'WGFöã¢w&–v‡BrÆFVÆ“£cÒ“°Ð¢v—B6öçG&öÂ‚vvVöÖWG'•õG&W¦ö–Br“¶v—Bv—B‡3Óç2ævVöÖWG'“ÓÓÒuG&W¦ö–Br“°Ð¢v—BvRæÖ÷W6RæÖ÷fRƒsÃ#s“¶v—BvRçv—Df÷%F–ÖV÷WBƒ“¶v—BvRæÖ÷W6RæF÷vâ‚“¶v—BvRæÖ÷W6RæÖ÷fRƒƒSÃCÇ·7FW3£‡Ò“¶v—BvRæÖ÷W6RçW‚“°Ð¢v—Bv—B‡3Óç2ç6†W2ç6öÖR†“Óæ’ç6†RäVÆÆ—6SòævVöÖWG'“ÓÓÒuG&W¦ö–Br’“°Ð¢v—B6æ6†÷B‡vRÂvvVöÖWG'’Ö6öçFW‡Bçærr“°Ð¢v—BvVöÖWG'”6öçFW‡Bæ6Æ÷6R‚“°Ð¢òò6çf2Ö'VVR6öçF–çVW2æB&VÆV6W2÷fW"fÆöF–ærFööÆ&"v—F†÷W@Ð¢òò7F—fF–ær—G2FööÃ²g&W6‚6Æ–6²gFW'v&G27F–ÆÂv÷&·2æ÷&ÖÆÇ’àÐ¢6öç7B6GW&T6öçFW‡CÖv—B'&÷w6W"ææWt6öçFW‡B‡·f–Ww÷'C§·v–GFƒ£#ƒÆ†V–v‡C£s#×Ò“°Ð¢v—B6GW&T6öçFW‡BæFD–æ—E67&—B‚‚“ÓæÆö6Å7F÷&vRç6WD—FVÒ‚vG&fgF–æ²çW6W%÷6WGF–æw2çcrÄ¥4ôâç7G&–æv–g’‡·&W7F÷&UöÆ7EöFö7VÖVçC¦fÇ6RÆWF÷6fUöVæ&ÆVC¦fÇ6RÆ66VçEö6öÆ÷#¥³ƒÃ3RÃ×Ò’’“°Ð¢vSÖv—B6GW&T6öçFW‡BææWuvR‚“¶v—BvRæv÷Fò‡&ö6W72æVçbäE$deD”äµõDU5EõU$ÂÇÂv‡GG¢òó#rããã£ƒƒƒ‚óöG&fgF–æ²×FW7CÓr“°Ð¢v—Bv—B‡3Óç2ç6†W2æÆVæwFƒÓÓÓ“¶76W'BæFVWWVÂ‚†v—B7FFR‚’’æ66VçEö6öÆ÷"Å³ƒÃ3RÃÒ“°Ð¢v—BvRæÖ÷W6RæÖ÷fRƒCÃ3S“¶v—BvRçv—Df÷%F–ÖV÷WBƒ“¶v—BvRæ¶W–&ö&Bç&W72‚w"r“°Ð¢v—Bv—B‡3Óç2çFööÃÓÓÒu&V7FævÆRr“¶v—BvRæÖ÷W6RæF÷vâ‚“¶v—BvRæÖ÷W6RæÖ÷fRƒSCÃCÇ·7FW3£‡Ò“¶v—BvRæÖ÷W6RçW‚“¶v—Bv—B‡3Óç2ç6†W2æÆVæwFƒÓÓÓ“°Ð¢v—BvRæ¶W–&ö&Bç&W72‚w2r“¶v—Bv—B‡3Óç2çFööÃÓÓÒu6VÆV7Br“°Ð¢6öç7BFööÃÒ†v—B7FFR‚’’æ6öçG&öÇ2çFööÅôVÆÆ—6S¶76W'B‡FööÂ“°Ð¢6öç7BF&vWCÕ²‡FööÅ³Ò·FööÅ³%Ò’ó"Â‡FööÅ³Ò·FööÅ³5Ò’ó%Ó°Ð¢v—BvRæÖ÷W6RæÖ÷fRƒsÃS“¶v—BvRçv—Df÷%F–ÖV÷WBƒ“¶v—BvRæÖ÷W6RæF÷vâ‚“°Ð¢v—BvRæÖ÷W6RæÖ÷fR‚ââçF&vWBÇ·7FW3£WÒ“°Ð¢òòÖ'VVR&÷VæG2&Rv÷&ÆB6ö÷&F–æFW3²66÷VçBf÷"F†R&VÂFVfVÇ@Ð¢òò¦ööÒƒãc‚’æBv—Bf÷"F†Rg&ÖR&ö6W76–ærF†Rf–æÂÖ÷W6RWfVçBàÐ¢6öç7BföÆÆ÷w5ö–çFW#×3Óâ°Ð¢–b‚2ç6VÆV7F–öå÷&V7B—&WGW&âfÇ6S°Ð¢6öç7B67&VVã×2ç6VÆV7F–öå÷&V7BæÖ‚‡bÆ’“Óçb§2ç¦ööÒ·2æ6ÖW&ööfg6WE¶’S%Ò“°Ð¢&WGW&â„ÖF‚æ'2‡67&VVå³Ò×F&vWE³Ò“Ã'ÇÄÖF‚æ'2‡67&VVå³%Ò×F&vWE³Ò“Ã"Ð¢bb„ÖF‚æ'2‡67&VVå³Ò×F&vWE³Ò“Ã'ÇÄÖF‚æ'2‡67&VVå³5Ò×F&vWE³Ò“Ã"“°Ð¢Ó°Ð¢v—Bv—B†föÆÆ÷w5ö–çFW"“°Ð¢v—BvRæÖ÷W6RçW‚“¶v—Bv—B‡3Óç2ç6VÆV7F–öå÷&V7CÓÓÖçVÆÂbg2çFööÃÓÓÒu6VÆV7Br“°Ð¢76W'BæWVÂ‚†v—B7FFR‚’’ç6VÆV7FVEö6÷VçBÃ“°Ð¢6öç7BF÷&Vf÷&TçVFvSÒ†v—B7FFR‚’’ç6†W5³Òæ&÷VæG5³Ó°Ð¢v—BvRæ¶W–&ö&Bç&W72‚t6öçG&öÂ´'&÷tF÷vâr“°Ð¢6öç7BçVFvVCÖv—Bv—B‡3Óç2ç6†W5³Òæ&÷VæG5³ÓçF÷&Vf÷&TçVFvR³#“°Ð¢76W'B„ÖF‚æ'2†çVFvVBç6†W5³Òæ&÷VæG5³Ò×F÷&Vf÷&TçVFvRÓ32ãb“Ã"Ât7G&Â´'&÷tF÷vâ6†÷VÆBçVFvRF†R6VÆV7F–öâfW'F–6ÆÇ’'’F†Ræ÷&ÖÂf7B7FWr“°Ð¢v—BvRæ¶W–&ö&Bç&W72‚t6öçG&öÂ´'&÷uWr“°Ð¢v—Bv—B‡3ÓäÖF‚æ'2‡2ç6†W5³Òæ&÷VæG5³Ò×F÷&Vf÷&TçVFvR“Ã“°Ð¢v—BvRæ¶W–&ö&Bç&W72‚t6öçG&öÂ´'&÷uWr“°Ð¢6öç7BÖ÷fVEWÖv—Bv—B‡3Óç2ç6†W5³Òæ&÷VæG5³ÓÇF÷&Vf÷&TçVFvRÓ#“°Ð¢76W'B„ÖF‚æ'2†Ö÷fVEWç6†W5³Òæ&÷VæG5³Ò×F÷&Vf÷&TçVFvR³32ãb“Ã"Ât7G&Â´'&÷uW6†÷VÆBçVFvRWv&B'’F†R6ÖRf7B7FWr“°Ð¢v—BvRæ¶W–&ö&Bç&W72‚t6öçG&öÂ´'&÷tF÷vâr“°Ð¢v—Bv—B‡3ÓäÖF‚æ'2‡2ç6†W5³Òæ&÷VæG5³Ò×F÷&Vf÷&TçVFvR“Ã“°Ð¢v—BvRæÖ÷W6RæÖ÷fRƒsƒÃCc“¶v—BvRæ¶W–&ö&Bç&W72‚w"r“¶v—Bv—B‡3Óç2çFööÃÓÓÒu&V7FævÆRr“°Ð¢v—BvRæÖ÷W6RæF÷vâ‚“¶v—BvRæÖ÷W6RæÖ÷fRƒ“ÃSCÇ·7FW3£WÒ“¶v—BvRæÖ÷W6RçW‚“¶v—Bv—B‡3Óç2ç6†W2æÆVæwFƒÓÓÓ"bg2ç6VÆV7FVEö6÷VçCÓÓÓ“°Ð¢v—BvRæ¶W–&ö&Bç&W72‚w2r“¶v—Bv—B‡3Óç2çFööÃÓÓÒu6VÆV7Br“°Ð¢6öç7Bf—'7D&÷VæG3Ò†v—B7FFR‚’’ç6†W5³Òæ&÷VæG3°Ð¢òòV×G’&V7FævÆW2&R†—B×FW7FVBöâF†V—"÷WFÆ–æS²7G&ÂÖ6Æ–6²F†Rf—6–&ÆRVFvRàÐ¢6öç7B×VÇF•6VÆV7Eö–çCÕ¶f—'7D&÷VæG5³Ò³Æf—'7D&÷VæG5³Ò³Ó°Ð¢v—BvRæÖ÷W6RæÖ÷fR‚ââæ×VÇF•6VÆV7Eö–çB“°Ð¢v—BvRæ¶W–&ö&BæF÷vâ‚t6öçG&öÂr“¶v—BvRæÖ÷W6Ræ6Æ–6²‚ââæ×VÇF•6VÆV7Eö–çB“¶v—BvRæ¶W–&ö&BçW‚t6öçG&öÂr“°Ð¢v—Bv—B‡3Óç2ç6VÆV7FVEö6÷VçCÓÓÓ"“°Ð¢v—BvRæ¶W–&ö&Bç&W72‚t6öçG&öÂ¶Âr“¶v—Bv—B‡3Óç2ç6†W2æWfW'’‡6†SÓç6†Rç–ææVB’“°Ð¢v—BvRæ¶W–&ö&Bç&W72‚t6öçG&öÂ·¢r“¶v—Bv—B‡3Óç2ç6†W2æWfW'’‡6†SÓâ6†Rç–ææVB’“°Ð¢òòVæFò&W7F÷&W2F†RFö7VÖVçB6æ6†÷BæB6ÆV'26VÆV7F–öã²6VÆV7B&÷F‚v–âàÐ¢v—BvRæÖ÷W6Ræ6Æ–6²‚ââæ×VÇF•6VÆV7Eö–çB“¶v—Bv—B‡3Óç2ç6VÆV7FVEö6÷VçCÓÓÓ“°Ð¢6öç7B6V6öæD&÷VæG3Ò†v—B7FFR‚’’ç6†W5³Òæ&÷VæG3°Ð¢6öç7B6V6öæEö–çCÕ·6V6öæD&÷VæG5³Ò³Ç6V6öæD&÷VæG5³Ò³Ó°Ð¢v—BvRæ¶W–&ö&BæF÷vâ‚t6öçG&öÂr“¶v—BvRæÖ÷W6Ræ6Æ–6²‚ââç6V6öæEö–çB“¶v—BvRæ¶W–&ö&BçW‚t6öçG&öÂr“°Ð¢v—Bv—B‡3Óç2ç6VÆV7FVEö6÷VçCÓÓÓ"“°Ð¢v—BvRæ¶W–&ö&Bç&W72‚t6öçG&öÂ¶Âr“¶v—Bv—B‡3Óç2ç6†W2æWfW'’‡6†SÓç6†Rç–ææVB’“°Ð¢v—BvRæ¶W–&ö&Bç&W72‚t6öçG&öÂ¶Âr“¶v—Bv—B‡3Óç2ç6†W2æWfW'’‡6†SÓâ6†Rç–ææVB’“°Ð¢v—B6æ6†÷B‡vRÂv66VçB×6VÆV7F–öâçærr“°Ð¢v—BvRæÖ÷W6RæÖ÷fRƒsÃS“¶v—BvRçv—Df÷%F–ÖV÷WBƒ“¶v—B6öçG&öÂ‚wFööÅôVÆÆ—6Rr“¶v—Bv—B‡3Óç2çFööÃÓÓÒtVÆÆ—6Rr“°Ð¢v—B6öçG&öÂ‚wFööÅô†–v†Æ–v‡FW"r“¶v—Bv—B‡3Óç2çFööÃÓÓÒt†–v†Æ–v‡FW"r“°Ð¢v—BvRæÖ÷W6RæÖ÷fRƒcÃS““¶v—BvRæÖ÷W6RæF÷vâ‚“¶v—BvRæÖ÷W6RæÖ÷fRƒcƒÃcÇ·7FW3£gÒ“¶v—BvRæÖ÷W6RçW‚“°Ð¢6öç7B†–v†Æ–v‡FW%7FFSÖv—Bv—B‡3Óç2ç6†W2æf–æB†—FVÓÓæ—FVÒç6†Räg&VV†æCòç7G–ÆRç7G&ö¶Uö6öÆ÷"æÓÓÓ#‚’“°Ð¢6öç7B†–v†Æ–v‡FW#Ö†–v†Æ–v‡FW%7FFRç6†W2æf–æB†—FVÓÓæ—FVÒç6†Räg&VV†æCòç7G–ÆRç7G&ö¶Uö6öÆ÷"æÓÓÓ#‚“°Ð¢76W'B††–v†Æ–v‡FW"ç6†Räg&VV†æBç7G–ÆRç7G&ö¶U÷v–GFƒãÓ"Âv†–v†Æ–v‡FW"¶VW2—G2v–FVæVBG&ç6ÇV6VçB7G&ö¶Rr“°Ð¢v—B6öçG&öÂ‚wFööÅôg&VV†æBr“¶v—Bv—B‡3Óç2çFööÃÓÓÒtg&VV†æBr“°Ð¢v—BvRæÖ÷W6RæÖ÷fRƒcÃcS“¶v—BvRæÖ÷W6RæF÷vâ‚“¶v—BvRæÖ÷W6RæÖ÷fRƒcƒÃcsÇ·7FW3£gÒ“¶v—BvRæÖ÷W6RçW‚“°Ð¢6öç7Bæ÷&ÖÄG&u7FFSÖv—Bv—B‡3Óç2ç6†W2æf–æB†—FVÓÓæ—FVÒæ–BÓÖ†–v†Æ–v‡FW"æ–Bbf—FVÒç6†Räg&VV†æCòç7G–ÆRç7G&ö¶Uö6öÆ÷"æÓÓÓ#SR’“°Ð¢6öç7Bæ÷&ÖÄG&sÖæ÷&ÖÄG&u7FFRç6†W2æf–æB†—FVÓÓæ—FVÒæ–BÓÖ†–v†Æ–v‡FW"æ–Bbf—FVÒç6†Räg&VV†æCòç7G–ÆRç7G&ö¶Uö6öÆ÷"æÓÓÓ#SR“°Ð¢76W'BæWVÂ†æ÷&ÖÄG&rç6†Räg&VV†æBç7G–ÆRç7G&ö¶U÷v–GF‚Ã"ÂtG&r&WGW&ç2Fò—G2æ÷&ÖÂv–GF‚gFW"†–v†Æ–v‡FW"r“°Ð¢v—B6GW&T6öçFW‡Bæ6Æ÷6R‚“°Ð¢òòÖF‚f÷&Òö–çFW"&÷VæG2W6RVwV’ö–çG2ÂWfVâöâ66ÆVBF—7Æ’àÐ¢6öç7BG”6öçFW‡CÖv—B'&÷w6W"ææWt6öçFW‡B‡·f–Ww÷'C§·v–GFƒ£#ƒÆ†V–v‡C£s#ÒÆFWf–6U66ÆTf7F÷#£'Ò“°Ð¢v—BG”6öçFW‡BæFD–æ—E67&—B‚‚“ÓæÆö6Å7F÷&vRç6WD—FVÒ‚vG&fgF–æ²çW6W%÷6WGF–æw2çcrÄ¥4ôâç7G&–æv–g’‡·&W7F÷&UöÆ7EöFö7VÖVçC¦fÇ6RÆWF÷6fUöVæ&ÆVC¦fÇ6RÆFVfVÇEöföçC¢tæ÷Fò6ç2rÆFVfVÇEöföçE÷÷7G67&—C¢rwÒ’’“°Ð¢vSÖv—BG”6öçFW‡BææWuvR‚“¶v—BvRæv÷Fò‡&ö6W72æVçbäE$deD”äµõDU5EõU$ÂÇÂv‡GG¢òó#rããã£ƒƒƒ‚óöG&fgF–æ²×FW7CÓr“¶v—Bv—B‡3Óç2ç6†W2æÆVæwFƒÓÓÓ“°Ð¢v—BvRæÖ÷W6RæÖ÷fRƒCÃ#“¶v—BvRçv—Df÷%F–ÖV÷WBƒ“¶v—BvRæ¶W–&ö&Bç&W72‚vÒr“¶v—Bv—B‡3Óç2çFööÃÓÓÒtÖF‚r“¶v—BvRçv—Df÷%F–ÖV÷WBƒ“¶v—BvRæÖ÷W6Ræ6Æ–6²ƒCÃ#Ç¶FVÆ“£cÒ“¶v—Bv—B‡3Óâ2æVF—F–æuöÖF‚bg2æÖF…ö–çWEöfö7W6VBbb2æÖF…öf÷&Õ÷&V7B“°Ð¢v—B¶W—2‚w‚³r“¶v—BúïKh‘éì¶»§q«^t]ØZ]YÙKšÙ^X›Ø\™œ™\ÜÊ	ÐÛÛ›Û
+Ð\œ›ÝÕ\	ÊNØ]ØZ]Ù^\Ê	ÌÉÊNØ]ØZ]ØZ]
+ÏO›X]^
+ÊOËœÛÝ\˜ÙOOOIÞŒÉÉ‰›X]^
+ÊOË›]^OOIÞŒÉÊNÃBˆ]ØZ]YÙKšÙ^X›Ø\™œ™\ÜÊ	ÐÛÛ›Û
+ØIÊNØ]ØZ]Ù^\Ê	Þ™\HW[ˆH
+ÈÞÚ_HWÞÚŸIÊNØ]ØZ]ØZ]
+ÏO›X]^
+ÊOËœÛÝ\˜ÙOOOIÞ™\HW[ˆH
+ÈÞÚ_HWÞÚŸIÉ‰›X]^
+ÊOË›]^OO[X]^
+ÊOËœÛÝ\˜ÙJNÃBˆ]ØZ]YÙKšÙ^X›Ø\™œ™\ÜÊ	ÐÛÛ›Û
+ØIÊNÃBˆÛÛœÝšY[™XÝJ]ØZ]Ý]J
+JK›X]Ù›Ü›WÜ™XÝØ]ØZ]YÙK›[Ý\ÙK›[Ý™JšY[™XÝÌJÌŒšY[™XÝÌWJÌŒ
+NØ]ØZ]ØZ]
+ÏOœË˜Ý\œÛÜ—Û[ÙOOOLŠNÃBˆ\ÜÙ\
+XÛÙUT’PÛÛ\Û™[
+]ØZ]YÙK™]˜[X]J
+
+OO™ØÝ[Y[œ]Y\žTÙ[XÝÜŠ	ØØ[˜\ÉÊKœÝ[K˜Ý\œÛÜŠJKš[˜ÛY\Ê	ÓMŒ›LˆL‰ÊJNÃBˆÛÛœÝX]]ÛJ]ØZ]Ý]J
+JK˜ÛÛ›ÛËÛÛÓX]Ø]ØZ]YÙK›[Ý\ÙK›[Ý™J
+X]]Û–ÌJÛX]]Û–Ì—JKÌ‹
+X]]Û–ÌWJÛX]]Û–Ì×JKÌŠNØ]ØZ]ØZ]
+ÏOœË˜Ý\œÛÜ—Û[ÙOOOL
+NÃBˆ]ØZ]YÙK›[Ý\ÙK›[Ý™JšY[™XÝÌJÌŒšY[™XÝÌWJÌŒ
+NØ]ØZ]ØZ]
+ÏOœË˜Ý\œÛÜ—Û[ÙOOOLŠNÃBˆ]ØZ]Ù^\Ê	ÌLŒÍM‰ÊNØ]ØZ]ØZ]
+ÏO›X]^
+ÊOËœÛÝ\˜ÙOOOIÌLŒÍM‰ÊNÃBˆ]ØZ]YÙKšÙ^X›Ø\™œ™\ÜÊ	ÐÛÛ›Û
+ØIÊNØ]ØZ]YÙKšÙ^X›Ø\™œ™\ÜÊ	ÐÛÛ›Û
+ØÉÊNÃBˆ]ØZ]YÙKØZ]›Ü‘[˜Ý[ÛŠ\Þ[˜Ê
+OO˜]ØZ]˜]šYØ]Ü‹˜Û\›Ø\™œ™XY^
+
+OOOIÌLŒÍM‰ÊNÃBˆ]ØZ]YÙK™]˜[X]J
+
+OO›˜]šYØ]Ü‹˜Û\›Ø\™Üš]U^
+	Þ
+ø¢'‰ÊJNÃBˆ]ØZ]YÙKšÙ^X›Ø\™œ™\ÜÊ	ÐÛÛ›Û
+Ý‰ÊNØ]ØZ]ØZ]
+ÏO›X]^
+ÊOËœÛÝ\˜ÙOOOIÞ
+ø¢'‰ÊNÃBˆ]ØZ]YÙKšÙ^X›Ø\™œ™\ÜÊ	Ð\œ›ÝÓY	ÊNØ]ØZ]YÙK™]˜[X]J
+
+OO›˜]šYØ]Ü‹˜Û\›Ø\™Üš]U^
+	Ì‰ÊJNÃBˆ]ØZ]YÙKšÙ^X›Ø\™œ™\ÜÊ	ÐÛÛ›Û
+Ý‰ÊNØ]ØZ]ØZ]
+ÏO›X]^
+ÊOËœÛÝ\˜ÙOOOIÞ
+Ì¸¢'‰ÊNÃBˆËÈœ™[˜Ú[ÜŠÑ\]X[[Z]ÈH]\˜[œ˜XÙK™]™\ˆHÝ›
+ÏHÝXœØÜš\ÛÛ[X[™ƒBˆ]ØZ][œ]œÙ[™
+	Ò[œ]™\Ü]ÚÙ^Q]™[	ËÝ\N‰ÚÙ^QÝÛ‰ËÙ^N‰ßIËÛÙN‰Ñ\]X[	Ë^‰ßIË[›[ÙYšYY^‰ßIË[ÙYšY\œÎŒßJNÃBˆ]ØZ][œ]œÙ[™
+	Ò[œ]™\Ü]ÚÙ^Q]™[	ËÝ\N‰ÚÙ^U\	ËÙ^N‰ßIËÛÙN‰Ñ\]X[	Ë[ÙYšY\œÎŒJNÃBˆ]ØZ]ØZ]
+ÏO›X]^
+ÊOËœÛÝ\˜ÙKš[˜ÛY\Ê	ßIÊI‰ˆ[X]^
+ÊOËœÛÝ\˜ÙKš[˜ÛY\Ê	×ÉÊJNÃBˆ]ØZ]YÙKšÙ^X›Ø\™œ™\ÜÊ	Ñ\ØØ\IÊNØ]ØZ]ØZ]
+ÏOœË™Y][™×ÛX]OO[[
+NÃBˆ]ØZ]YÙKØZ]›Ü•[Y[Ý]
+ML
+NÃBƒBˆËÈÜšYÚ[˜[Ú\˜XÝ\œÈ[™›ÛY\[™[ØÜš\Ë[˜ÛY[™ÈÞ[X›ÛÈÚ]Ý][šXÛÙHØÜš\Û\ËƒBˆÛÛœÝ™^ØÜš\XJ]ØZ]Ý]J
+JK˜XÝ]™WÝXŠÌNØ]ØZ]ÛÛ›Û
+	Ó™]ÈØ[˜\ÉÊNØ]ØZ]ØZ]
+ÏOœË˜XÝ]™WÝXOO[™^ØÜš\X‰‰œËœÚ\\Ë›[™ÝOOL
+NÃBˆ]ØZ]›ØÝ\ÐØ[˜\ÕÛÛ
+	Ý	ÊNØ]ØZ]ØZ]
+ÏOˆH\Ë™Y][™×Ý^
+NÃBˆ›ÜŠÛÛœÝœ˜XÙHÙˆÉÞÉË	ßI×JHÃBˆ]ØZ][œ]œÙ[™
+	Ò[œ]™\Ü]ÚÙ^Q]™[	ËÝ\N‰ÚÙ^QÝÛ‰ËÙ^N˜œ˜XÙKÛÙN˜œ˜XÙOOOIÞÉÏÉÑYÚ]	Î‰Ñ\]X[	Ë^˜œ˜XÙK[›[ÙYšYY^˜œ˜XÙK[ÙYšY\œÎŒßJNÃBˆ]ØZ][œ]œÙ[™
+	Ò[œ]™\Ü]ÚÙ^Q]™[	ËÝ\N‰ÚÙ^U\	ËÙ^N˜œ˜XÙKÛÙN˜œ˜XÙOOOIÞÉÏÉÑYÚ]	Î‰Ñ\]X[	Ë[ÙYšY\œÎŒJNÃBˆCBˆ]ØZ]ØZ]
+ÏOœËœÚ\\Ë™š[™
+OOšKšYOO\Ë™Y][™×Ý^
+OËœÚ\K•^˜ÛÛ[OOIÞßIÊNØ]ØZ]YÙKšÙ^X›Ø\™œ™\ÜÊ	ÐÛÛ›Û
+ØIÊNØ]ØZ]YÙKšÙ^X›Ø\™œ™\ÜÊ	Ð˜XÚÜÜXÙIÊNÃBˆ]ØZ]Ù^\Ê	Ð˜\ÙH	ÊNØ]ØZ]ØZ]
+ÏOˆH\Ë^ØØ\™]
+NÃBˆÛÛœÝ›Ü›X[Ø\™]J]ØZ]Ý]J
+JK^ØØ\™]ÃBˆ]ØZ]YÙKšÙ^X›Ø\™œ™\ÜÊ	ÐÛÛ›Û
+Ð\œ›ÝÕ\	ÊNØÛÛœÝÝ\Ý]OX]ØZ]ØZ]
+ÏOœËš[œÙ\[Û—ÜØÜš\OOLJNÃBˆ\ÜÙ\
+Ý\Ý]K^ØØ\™]Ì×K\Ý\Ý]K^ØØ\™]ÌWO›Ü›X[Ø\™]Ì×K[›Ü›X[Ø\™]ÌWJNØ\ÜÙ\
+Ý\Ý]K^ØØ\™]ÌWO›Ü›X[Ø\™]ÌWJNÃBˆ]ØZ]Ù^\Ê	ÐVŒs¬x¢i	ÊNØ]ØZ]YÙKšÙ^X›Ø\™œ™\ÜÊ	ÐÛÛ›Û
+Ð\œ›ÝÕ\	ÊNØ]ØZ]Ù^\Ê	Èš[‰ÊNÃBˆÛÛœÝØÜš\^\ÏOœËœÚ\\Ë™š[™
+][OOš][KšYOO\Ë™Y][™×Ý^
+OËœÚ\K•^ÃBˆ]ØZ]ØZ]
+ÏOœØÜš\^
+ÊOË˜ÛÛ[OOIÐ˜\ÙHVŒs¬x¢iš[‰ÊNÃBˆ]ØZ]ØZ]
+ÏOœØÜš\^
+ÊK˜Ú\—ÜÝ[\ËœÛXÙJKLŠK™]™\žJÝ[OOœÝ[KœØÜš\OOLJJNÃBˆ]ØZ]YÙKšÙ^X›Ø\™œ™\ÜÊ	ÐÛÛ›Û
+ØIÊNØ]ØZ]YÙKšÙ^X›Ø\™œ™\ÜÊ	ÐÛÛ›Û
+Ð\œ›ÝÑÝÛ‰ÊNØ]ØZ]ØZ]
+ÏOœØÜš\^
+ÊK˜Ú\—ÜÝ[\Ë™]™\žJÝ[OOœÝ[KœØÜš\OOKLJJNÃBˆËÈÜXÙH™[XZ[œÈ[ˆHØÜš\[™[ˆ[\H™^[™H\È]ÈØ\™]™[ÝËƒBˆ]ØZ]YÙKšÙ^X›Ø\™œ™\ÜÊ	Ñ\ØØ\IÊNØ]ØZ]ÛÛ›Û
+	Ó™]ÈØ[˜\ÉÊNØ]ØZ]ØZ]
+ÏOœËœÚ\\Ë›[™ÝOOL
+NÃBˆ]ØZ]›ØÝ\ÐØ[˜\ÕÛÛ
+	Ý	ÊNØ]ØZ]ØZ]
+ÏOˆH\Ë™Y][™×Ý^
+NØ]ØZ]Ù^\Ê	Þ	ÊNØ]ØZ]YÙKšÙ^X›Ø\™œ™\ÜÊ	ÐÛÛ›Û
+Ð\œ›ÝÕ\	ÊNØ]ØZ]Ù^\Ê	ÍH‰ÊNÃBˆ]ØZ]ØZ]
+ÏOœØÜš\^
+ÊOË˜ÛÛ[OOIÞH‰É‰œØÜš\^
+ÊK˜Ú\—ÜÝ[\ËœÛXÙJJK™]™\žJÏO˜ËœØÜš\OOLJJNÃBˆ]ØZ]YÙKšÙ^X›Ø\™œ™\ÜÊ	Ð\œ›ÝÔšYÚ	ÊNØ]ØZ]ØZ]
+ÏOœËš[œÙ\[Û—ÜØÜš\OOL
+NØ]ØZ]YÙKšÙ^X›Ø\™œ™\ÜÊ	Ñ[\‰ÊNÃBˆÛÛœÝ[\S[™OX]ØZ]ØZ]
+ÏOœØÜš\^
+ÊOË˜ÛÛ[OOIÞH—‰É‰œË^ØØ\™]Ë–ÌOJNÃBˆ\ÜÙ\
+[\S[™K^ØØ\™]ÌWOŒ
+NÃBˆ]ØZ]Ù^\Ê	Ú[ÈÛÜ›	ÊNØ]ØZ]ØZ]
+ÏOœØÜš\^
+ÊOË˜ÛÛ[™[™ÕÚ]
+	Ú[ÈÛÜ›	ÊJNÃBˆ]ØZ]YÙKšÙ^X›Ø\™œ™\ÜÊ	Ñ\ØØ\IÊNØ]ØZ]ÛÛ›Û
+	Ó™]ÈØ[˜\ÉÊNØ]ØZ]ØZ]
+ÏOœËœÚ\\Ë›[™ÝOOL
+NÃBˆ]ØZ]›ØÝ\ÐØ[˜\ÕÛÛ
+	Ý	ÊNØ]ØZ]ØZ]
+ÏOˆH\Ë™Y][™×Ý^
+NØ]ØZ]Ù^\Ê	Ú[ÈÛÜ›	ÊNØ]ØZ]ØZ]
+ÏOœØÜš\^
+ÊOË˜ÛÛ[OOIÚ[ÈÛÜ›	ÊNÃBˆ]ØZ]YÙKšÙ^X›Ø\™œ™\ÜÊ	Ñ\ØØ\IÊNØ]ØZ]ØZ]
+ÏOœË™Y][™×Ý^OO[[
+NØ]ØZ]ÛÛ›Û
+	ÝÛÛÔÙ[XÝ	ÊNÃBˆÛÛœÝÛÜ™J]ØZ]Ý]J
+JKœÚ\\Ë™š[™
+OOšKœÚ\K•^
+NÃBˆ]ØZ]YÙK›[Ý\ÙK›[Ý™JÛÜ™˜›Ý[™ÖÌJÌK
+ÛÜ™˜›Ý[™ÖÌWJÝÛÜ™˜›Ý[™ÖÌ×JKÌŠNØ]ØZ]YÙKØZ]›Ü•[Y[Ý]
+L
+NÃBˆ]ØZ]YÙK›[Ý\ÙK™›ÛXÚÊÛÜ™˜›Ý[™ÖÌJÌK
+ÛÜ™˜›Ý[™ÖÌWJÝÛÜ™˜›Ý[™ÖÌ×JKÌ‹Ù[^NŽJNØ]ØZ]ØZ]
+ÏOœËœÙ[XÝYÝ^OOIÚ[ÉÉ‰œË˜Ý\œÛÜ—Û[ÙOOOLJNÃBˆ]ØZ]Ù^\Ê	Ö	ÊNØ]ØZ]ØZ]
+ÏOœØÜš\^
+ÊOË˜ÛÛ[OOIÖÛÜ›	ÊNÃBˆ]ØZ]YÙKšÙ^X›Ø\™œ™\ÜÊ	Ñ\ØØ\IÊNØ]ØZ]ÛÛ›Û
+	Ó™]ÈØ[˜\ÉÊNØ]ØZ]ØZ]
+ÏOœËœÚ\\Ë›[™ÝOOL
+NÃBˆ]ØZ]›ØÝ\ÐØ[˜\ÕÛÛ
+	ÛIÊNØ]ØZ]ØZ]
+ÏOˆH\Ë™Y][™×ÛX]	‰œË›X]Ú[œ]Ù›ØÝ\ÙY
+NØ]ØZ]Ù^\Ê	Þ
+ÌIÊNØ]ØZ]ØZ]
+ÏO›X]^
+ÊOËœÛÝ\˜ÙOOOIÞ
+ÌIÊNÃBˆ]ØZ]YÙK›[Ý\ÙK›[Ý™JLÌ
+NØ]ØZ]YÙKØZ]›Ü•[Y[Ý]
+L
+NØ]ØZ]YÙK›[Ý\ÙK˜ÛXÚÊLÌÙ[^NŒJNØ]ØZ]ØZ]
+ÏOœË™Y][™×ÛX]OO[[	‰œËœÚ\\Ë›[™ÝOOLJNÃBˆÛÛœÝ\]X][ÛJ]ØZ]Ý]J
+JKœÚ\\Ë™š[™
+OOšKœÚ\K“X]
+NÃBˆ]ØZ]YÙK›[Ý\ÙK›[Ý™J
+\]X][Û‹˜›Ý[™ÖÌJÙ\]X][Û‹˜›Ý[™ÖÌ—JKÌ‹
+\]X][Û‹˜›Ý[™ÖÌWJÙ\]X][Û‹˜›Ý[™ÖÌ×JKÌŠNØ]ØZ]YÙKØZ]›Ü•[Y[Ý]
+L
+NÃBˆ]ØZ]YÙK›[Ý\ÙK˜ÛXÚÊ
+\]X][Û‹˜›Ý[™ÖÌJÙ\]X][Û‹˜›Ý[™ÖÌ—JKÌ‹
+\]X][Û‹˜›Ý[™ÖÌWJÙ\]X][Û‹˜›Ý[™ÖÌ×JKÌ‹Ø]ÛŽ‰ÜšYÚ	Ë[^NŒJNÃBˆ]ØZ]ÛÛ›Û
+	ÛX]ÛØš™XÝÙ›Û	ÊNØ]ØZ]ÛÛ›Û
+	ÛX]ÛØš™XÝÙ›Û“›ÝÈØ[œÉÊNØ]ØZ]ØZ]
+ÏO›X]^
+ÊOË™›Û™˜[Z[OOOIÓ›ÝÔØ[œÉÊNØ]ØZ]Û˜\ÚÝ
+YÙK	ÛX]Y›Ûœ™ÉÊNÃBˆ]ØZ]YÙKšÙ^X›Ø\™œ™\ÜÊ	ÐÛÛ›Û
+Þ‰ÊNØ]ØZ]ØZ]
+ÏO›X]^
+ÊOË™›Û™˜[Z[OOOIÑÙ[[‰ÊNÃBˆ]ØZ]YÙK›[Ý\ÙK›[Ý™JLÌ
+NØ]ØZ]YÙKØZ]›Ü•[Y[Ý]
+L
+NÃBˆËÈHÝXœÙ\]Y[ÛXÚÈØ[ˆXÙHH™]ÈX]ÈHÛÛ˜\ˆÝÚ]ÚÛÜÙ\È]ƒBˆ]ØZ]YÙK›[Ý\ÙK˜ÛXÚÊLÌÙ[^NŒJNØ]ØZ]ØZ]
+ÏOˆH\Ë™Y][™×ÛX]	‰œË›X]Ú[œ]Ù›ØÝ\ÙY	‰œËœÚ\\Ë›[™ÝOOLŠNØ]ØZ]Ù^\Ê	ÞIÊNÃBˆ]ØZ]ÛÛ›Û
+	ÝÛÛÔ™XÝ[™ÛIÊNØ]ØZ]ØZ]
+ÏOœËÛÛOOIÔ™XÝ[™ÛIÉ‰œË™Y][™×ÛX]OO[[	‰œËœÚ\\Ë›[™ÝOOLŠNÃBˆ]ØZ]ÛÛ›Û
+	ÝÛÛÔÙ[XÝ	ÊNØÛÛœÝY]X]J]ØZ]Ý]J
+JKœÚ\\Ë™š[™
+OOšKœÚ\K“X]
+NÃBˆ]ØZ]YÙK›[Ý\ÙK›[Ý™J
+Y]X]˜›Ý[™ÖÌJÙY]X]˜›Ý[™ÖÌ—JKÌ‹
+Y]X]˜›Ý[™ÖÌWJÙY]X]˜›Ý[™ÖÌ×JKÌŠNØ]ØZ]YÙKØZ]›Ü•[Y[Ý]
+L
+NØ]ØZ]YÙK›[Ý\ÙK™›ÛXÚÊ
+Y]X]˜›Ý[™ÖÌJÙY]X]˜›Ý[™ÖÌ—JKÌ‹
+Y]X]˜›Ý[™ÖÌWJÙY]X]˜›Ý[™ÖÌ×JKÌ‹Ù[^NŽJNØ]ØZ]ØZ]
+ÏOˆH\Ë™Y][™×ÛX]	‰œËÛÛOOIÔÙ[XÝ	ÊNÃBˆÛÛœÝÙ[XÝY›Ü›OJ]ØZ]Ý]J
+JK›X]Ù›Ü›WÜ™XÝØ]ØZ]YÙK›[Ý\ÙK›[Ý™JÙ[XÝY›Ü›VÌJÌŒÙ[XÝY›Ü›VÌWJÌŒ
+NØ]ØZ]ØZ]
+ÏOœË˜Ý\œÛÜ—Û[ÙOOOLŠNÃBˆ]ØZ]YÙK›[Ý\ÙK›[Ý™JLŒ
+NØ]ØZ]ØZ]
+ÏOœË˜Ý\œÛÜ—Û[ÙOOOL
+NØ]ØZ]YÙKšÙ^X›Ø\™œ™\ÜÊ	Ñ\ØØ\IÊNØ]ØZ]ØZ]
+ÏOœË™Y][™×ÛX]OO[[
+NÃBˆ]ØZ]ÛÛ›Û
+	Ó™]ÈØ[˜\ÉÊNØ]ØZ]ØZ]
+ÏOœËœÚ\\Ë›[™ÝOOL
+NØ]ØZ]›ØÝ\ÐØ[˜\ÕÛÛ
+	Ý	ÊNØ]ØZ]ØZ]
+ÏOˆH\Ë™Y][™×Ý^
+NØ]ØZ]Ù^\Ê	ÜØ]™IÊNÃBˆÛÛœÝØ]™PÛÝ[J]ØZ]Ý]J
+JKœ™×ÜØ]™WÜ™\]Y\ÝÎÃBˆ]ØZ]YÙKšÙ^X›Ø\™œ™\ÜÊ	ÐÛÛ›Û
+ÜÉÊNØ]ØZ]ØZ]
+ÏOœËœ™×ÜØ]™WÜ™\]Y\ÝÏOO\Ø]™PÛÝ[
+ÌJNÃBˆ]ØZ]YÙKšÙ^X›Ø\™œ™\ÜÊ	Ñ\ØØ\IÊNØ]ØZ]ØZ]
+ÏOœË™Y][™×Ý^OO[[
+NÃBƒBˆËÈÙ\\˜]Hœ›ÝÜÙ\ˆÛÛ^Ú]HX›XË]\›Z[š\ÝXÈLŒŒ‘Èš^\™KƒBˆÛÛœÝ[XYÙPÛÛ^H]ØZ]œ›ÝÜÙ\‹›™]ÐÛÛ^
+ÝšY]ÜÜžÝÚYŒLŽZYÚÌŒ_JNÃBˆÛÛœÝ[XYÙRYIÌLMNLIÎÃBˆÛÛœÝ[XYÙO^ÚYš[XYÙRYÜÚ][ÛŽžÞŒŒNŒMLKÚYŒMŒZYÚŒLŒÛÝ\˜ÙWÝÚYŒLŒÛÝ\˜ÙWÚZYÚŒŒ›Ü›X]‰Ô™ÉË]WØ˜\ÙM™œËœ™XYš[TÞ[˜Ê	ÝÛÜšËÙL™KÙš^\™\ËÚ[XYÙKLLŒŒœ™ÉÊKÔÝš[™Ê	Ø˜\ÙM	ÊK›Ý][ÛŽŒÜ›ÜžÞŒLŒNŒKLNŒ_KÝ[NžÜÝ›ÚÙWØÛÛÜŽžÜŽŒÎŒŽŒNŒM_KÝ›ÚÙWÝÚYŒ‹š[ØÛÛÜŽ›[ÜXÚ]NŒ__NÃBˆËÈÚ\TÝ[HØ\œšY\ÈY][Û˜[Y˜][Ëš[Yœ›ÛHH™X[^Ú\KƒBˆ[XYÙKœÝ[O]^
+™Y›Ü™JKœÝ[NÃBˆÛÛœÝš^\™O^ÚY‰Ú[XYÙKYš^\™IË˜[YN‰Ò[XYÙIËÚ\\ÎžÖÚ[XYÙRYNžÒ[XYÙNš[XYÙ__K—ÛÜ™\Ž–Ú[XYÙRY_NÃBˆ]ØZ][XYÙPÛÛ^˜Y[š]ØÜš\
+š^\™HOˆØØ[ÝÜ˜YÙKœÙ]][J	Ù˜Y™[šË\Ù\—ÜÙ][™ÜËŒIË”ÓÓ‹œÝš[™ÚYžJÜ™\ÝÜ™WÛ\ÝÙØÝ[Y[™˜[ÙK]]ÜØ]™WÙ[˜X›Y™˜[ÙK[›×ÚœÛÛŽ’”ÓÓ‹œÝš[™ÚYžJš^\™J_JJKš^\™JNÃBˆÛÛœÝ[XYÙTYÙOX]ØZ][XYÙPÛÛ^›™]ÔYÙJ
+NÃBˆ[XYÙTYÙK›ÛŠ	ØÛÛœÛÛIËY\ÜØYÙOO›ÙÜËœ\Ú
+Y\ÜØYÙK\J
+JÉÎˆ	ÊÛY\ÜØYÙK^
+
+JJNÃBˆ[XYÙTYÙK›ÛŠ	ÜYÙY\œ›Ü‰Ë\œ›ÜO›ÙÜËœ\Ú
+	ÔQÑQT”“ÔŽˆ	ÊÙ\œ›ÜŠJNÃBˆ]ØZ][XYÙTYÙK™ÛÝÊ	Ú‹ËÌLËŒŒŒNŽÏÙ˜Y™[šË]\ÝLIÊNÃBˆ]ØZ][XYÙTYÙKØZ]›Ü‘[˜Ý[ÛŠ
+
+HOˆÚ[™ÝË—×Ù˜Y™[šÕ\ÝÝ]H	‰ˆ”ÓÓ‹œ\œÙJÚ[™ÝË—×Ù˜Y™[šÕ\ÝÝ]JKœÚ\\ËœÛÛYJÏOœËœÚ\K’[XYÙJJNÃBˆÛÛœÝ[XYÙTÝ]OX\Þ[˜Ê
+OO’”ÓÓ‹œ\œÙJ]ØZ][XYÙTYÙK™]˜[X]J
+
+OOÚ[™ÝË—×Ù˜Y™[šÕ\ÝÝ]JJNÃBˆÛÛœÝØZ][XYÙOX\Þ[˜È™YXØ]OOˆÈ›ÜŠ]OLÚOLÚJÊÊ^ØÛÛœÝÝ]OX]ØZ][XYÙTÝ]J
+NÚYŠ™YXØ]JÝ]KœÚ\\Ë™š[™
+ÏOœËœÚ\K’[XYÙJJJ\™]\›ˆÝ]NØ]ØZ][XYÙTYÙKØZ]›Ü•[Y[Ý]
+L
+Nß]›ÝÈ™]È\œ›ÜŠ	Ò[XYÙH˜[œÙ›Ü›H˜Z[Yˆ	ÊÒ”ÓÓ‹œÝš[™ÚYžJ
+]ØZ][XYÙTÝ]J
+JKœÚ\\Ë›X\
+ÏOŠØ›Ý[™ÎœË˜›Ý[™Ë›Ý][ÛŽœËœÚ\K’[XYÙOËœ›Ý][Û‹›\ÞœËœÚ\K’[XYÙOË™›\Þ›\ÞNœËœÚ\K’[XYÙOË™›\Þ_JJJJNÈNÃBˆÛÛœÝ[š]X[[XYÙSY[[ÜžOJ]ØZ][XYÙTÝ]J
+JK›Y[[ÜžNÃBˆ\ÜÙ\
+[š]X[[XYÙSY[[ÜžKš[XYÙWØØXÚWØž]\ÏŒ	‰ˆ[š]X[[XYÙSY[[ÜžKš[XYÙWØØXÚWØž]\ÏLŒ
+ŒŒ
+Í
+NÃBˆÛÛœÝØ\ÛSY[[ÜžOX]ØZ][XYÙTYÙK™]˜[X]J
+
+OOÚ[™ÝË™˜Y™[šÓY[[ÜžU\ØYÙJ
+JNÃBˆ\ÜÙ\
+Ø\ÛSY[[ÜžKØ\ÛWØž]\ÏŒ
+NÃBˆ]][OJ]ØZ][XYÙTÝ]J
+JKœÚ\\Ë™š[™
+ÏOœËœÚ\K’[XYÙJNÃBˆ]ØZ][XYÙTYÙK›[Ý\ÙK˜ÛXÚÊ
+][K˜›Ý[™ÖÌJÚ][K˜›Ý[™ÖÌ—JKÌ‹
+][K˜›Ý[™ÖÌWJÚ][K˜›Ý[™ÖÌ×JKÌŠNÃBˆÛÛœÝ[™OZ][Kš[™\Ë™š[™
+OššÚ[™OOIÐÛÜ›™\Š›ÝÛTšYÚ
+IÊNÃBˆÛÛœÝš^YZ][Kš[™\Ë™š[™
+OššÚ[™OOIÐÛÜ›™\ŠÜY
+IÊNÃBˆ]ØZ][XYÙTYÙK›[Ý\ÙK›[Ý™J[™Kž[™KžJNØ]ØZ][XYÙTYÙK›[Ý\ÙK™ÝÛŠ
+NØ]ØZ][XYÙTYÙK›[Ý\ÙK›[Ý™Jš^YžLLš^YžKNÜÝ\ÎŒŒJNØ]ØZ][XYÙTYÙK›[Ý\ÙK\
+
+NÃBˆ]ØZ]ØZ][XYÙJÏOœËœÚ\K’[XYÙK™›\Þ	‰ˆËœÚ\K’[XYÙK™›\ÞJNÃBˆ]ØZ]Û˜\ÚÝ
+[XYÙTYÙK	Ú[XYÙKY›\Yœ™ÉÊNÃBˆ]ØZ][XYÙTYÙKšÙ^X›Ø\™œ™\ÜÊ	ÐÛÛ›Û
+Þ‰ÊNØ]ØZ]ØZ][XYÙJÏOˆ\ËœÚ\K’[XYÙK™›\Þ	‰ˆ\ËœÚ\K’[XYÙK™›\ÞJNÃBˆ]ØZ][XYÙTYÙKšÙ^X›Ø\™œ™\ÜÊ	ÐÛÛ›Û
+ÔÚY
+Þ‰ÊNØ]ØZ]ØZ][XYÙJÏOœËœÚ\K’[XYÙK™›\Þ	‰ˆËœÚ\K’[XYÙK™›\ÞJNÃBˆ][OJ]ØZ][XYÙTÝ]J
+JKœÚ\\Ë™š[™
+ÏOœËœÚ\K’[XYÙJNÃBˆ]ØZ][XYÙTYÙK›[Ý\ÙK˜ÛXÚÊ
+][K˜›Ý[™ÖÌJÚ][K˜›Ý[™ÖÌ—JKÌ‹
+][K˜›Ý[™ÖÌWJÚ][K˜›Ý[™ÖÌ×JKÌŠNÃBˆÛÛœÝÛÜ›™\Z][Kš[™\Ë™š[™
+OššÚ[™OOIÐÛÜ›™\ŠÜY
+IÊNÃBˆÛÛœÝÞJ][K˜›Ý[™ÖÌJÚ][K˜›Ý[™ÖÌ—JKÌ‹ÞOJ][K˜›Ý[™ÖÌWJÚ][K˜›Ý[™ÖÌ×JKÌŽÃBˆÛÛœÝÞXÛÜ›™\‹žLL‹ÞOXÛÜ›™\‹žKLLŽÃBˆ]ØZ][XYÙTYÙK›[Ý\ÙK›[Ý™JÞÞJNØ]ØZ][XYÙTYÙK›[Ý\ÙK™ÝÛŠ
+NØ]ØZ][XYÙTYÙK›[Ý\ÙK›[Ý™JÞJÞKXÞJKÞJÊÞXÞ
+KÜÝ\ÎŒŒJNØ]ØZ][XYÙTYÙK›[Ý\ÙK\
+
+NÃBˆ]ØZ]ØZ][XYÙJÏO“X]˜XœÊËœÚ\K’[XYÙKœ›Ý][Û‹SX]”KÌŠOŒŠNÃBˆ]ØZ]Û˜\ÚÝ
+[XYÙTYÙK	Ú[XYÙK\›Ý]Yœ™ÉÊNÃBˆœËÜš]Qš[TÞ[˜Ê]š›Ú[Š]šY[˜ÙK	Ú[XYÙK\Ý]KšœÛÛ‰ÊK”ÓÓ‹œÝš[™ÚYžJ]ØZ][XYÙTÝ]J
+K[ŠJNÃBˆÛÛœÝš[˜[[XYÙSY[[ÜžOJ]ØZ][XYÙTÝ]J
+JK›Y[[ÜžNÃBˆ\ÜÙ\
+š[˜[[XYÙSY[[ÜžKš[XYÙWØØXÚWØž]\ÏYš[˜[[XYÙSY[[ÜžKš[XYÙWØØXÚWØYÙ]Øž]\ÊNÃBˆ\ÜÙ\
+š[˜[[XYÙSY[[ÜžKœ™[™\—Ý\™Ù]Ø[ØØ][ÛœÏLK	ÔØÜ™Y[ˆ\™Ù]]\Ý™H™]\ÙYXÜ›ÜÜÈ[XYÙHX[š\[][ÛœÉÊNÃBˆœËÜš]Qš[TÞ[˜Ê]š›Ú[Š]šY[˜ÙK	ÛY[[ÜžKšœÛÛ‰ÊK”ÓÓ‹œÝš[™ÚYžJÚ[š]X[Ú[XYÙNš[š]X[[XYÙSY[[ÜžKY\—Ú[XYÙWÛX[š\[][ÛœÎ™š[˜[[XYÙSY[[ÜžKØ\ÛNØ\ÛSY[[ÜžKÜšYÚ[˜[Ü™Ø˜WØž]\ÎŒLŒ
+ŒŒ
+K[ŠJNÃBˆÛÛœÝ[XYÙPÛÛ›ÛX\Þ[˜È˜[YOOˆÃBˆ]ØZ][XYÙTYÙKØZ]›Ü‘[˜Ý[ÛŠ˜[YOO’”ÓÓ‹œ\œÙJÚ[™ÝË—×Ù˜Y™[šÕ\ÝÝ]JK˜ÛÛ›ÛÖÛ˜[YWK˜[YJNÃBˆÛÛœÝÞLKLWOJ]ØZ][XYÙTÝ]J
+JK˜ÛÛ›ÛÖÛ˜[YWNÃBˆ]ØZ][XYÙTYÙK›[Ý\ÙK˜ÛXÚÊ
+
+ÞJKÌ‹
+L
+ÞLJKÌŠNÃBˆNÃBˆ]ØZ][XYÙPÛÛ›Û
+	Ó™]ÈØ[˜\ÉÊNÃBˆ]ØZ][XYÙTYÙKØZ]›Ü‘[˜Ý[ÛŠ
+
+OO’”ÓÓ‹œ\œÙJÚ[™ÝË—×Ù˜Y™[šÕ\ÝÝ]JK˜XÝ]™WÝXOOLJNÃBˆÛÛœÝ[\UXX]ØZ][XYÙTÝ]J
+NÃBˆ\ÜÙ\™\]X[
+[\UX‹œÚ\\Ë›[™Ý
+NÃBˆ\ÜÙ\™\]X[
+[\UX‹›Y[[ÜžKš[XYÙWØØXÚWØž]\Ë	Ò[˜XÝ]™HØ[˜\ÈXÛÙY^[È]\Ý™H™[X\ÙY	ÊNÃBˆ]ØZ][XYÙPÛÛ›Û
+	ÐØ[˜\È	ÊNÃBˆ]ØZ][XYÙTYÙKØZ]›Ü‘[˜Ý[ÛŠ
+
+OO’”ÓÓ‹œ\œÙJÚ[™ÝË—×Ù˜Y™[šÕ\ÝÝ]JK˜XÝ]™WÝXOOL
+NÃBˆ\ÜÙ\
+
+]ØZ][XYÙTÝ]J
+JKœÚ\\ËœÛÛYJÏOœËœÚ\K’[XYÙOËšYOOZ[XYÙRY
+JNÃBˆ\ÜÙ\™\]X[
+
+]ØZ][XYÙTÝ]J
+JK›Y[[ÜžKœ\šÙYÜÚ\\×ÝÝ[	ÐXÝ]™HØÝ[Y[]\Ý›Ý™HÛÛ™Y[È]ÈXˆÛÝ	ÊNÃBˆÛÛœÝ[XYÙT^[ÏX]ØZ]^Ü^[Ê[XYÙTYÙK	Ú[XYÙK\™[™\‹Y^Üœ™ÉÊNÃBˆ]ØZ][XYÙPÛÛ^˜ÛÜÙJ
+NÃBˆËÈ[ØÜ™Y[ˆ\ÈHÓH™Z]š[ÜˆÚXÚËˆÙY\ÛÙØ\™KQÔH™XY˜XÚÈÚXÚÜÃBˆËÈ™Y›Ü™H\Ü^K[[ÙH˜[œÚ][ÛœÈ[ˆÚ›ÛZ][IÜÈXY\ÜÈÛÛ\ÜÚ]Ü‹ƒBˆ]ØZ]YÙK˜œš[™ÕÑœ›Û
+
+NÃBˆ]ØZ]YÙKšÙ^X›Ø\™œ™\ÜÊ	ÑŒLIÊNÃBˆ]ØZ]YÙKØZ]›Ü‘[˜Ý[ÛŠ
+
+HOˆHYØÝ[Y[™[ØÜ™Y[‘[[Y[
+NÃBˆ]ØZ]YÙKšÙ^X›Ø\™œ™\ÜÊ	ÑŒLIÊNÈ]ØZ]YÙKØZ]›Ü‘[˜Ý[ÛŠ
+
+HOˆYØÝ[Y[™[ØÜ™Y[‘[[Y[
+NÃBƒBƒBˆÛÛœÝØ\\™\ÏVÉÛX]Y›Ûœ™ÉË	Ý^Yœ˜XÝ[Û‹œ™ÉË	Ý^\›ÛÝœ™ÉË	Ü™\Ù[][Û‹œ™ÉË	Ú[XYÙKY›\Yœ™ÉË	Ú[XYÙK\›Ý]Yœ™É×K›X\
+š[OOš[œÜXÝØ\\™J]š›Ú[Š]šY[˜ÙKš[JJJNÃBˆœËÜš]Qš[TÞ[˜Ê]š›Ú[Š]šY[˜ÙK	ØØ\\™K]˜[Y][Û‹šœÛÛ‰ÊK”ÓÓ‹œÝš[™ÚYžJÜØÜ™Y[—ØØ\\™\Î˜Ø\\™\ËÜWÙ^ÜÎ–Ý^^[Ë[XYÙT^[×_K[ŠJNÃBˆYŠØ\\™\ËœÛÛYJÏOˆXË˜[Y
+_]^^[Ë˜[YZ[XYÙT^[Ë˜[Y
+XÛÛœÛÛKØ\›Š	ÐÒHÙX‘ÔH^[]šY[˜ÙH[˜]˜Z[X›NÈ[\˜XÝ[ÛˆÝ]H\ÝÈ\ÜÙYˆØØ[RH[™˜]]™H‘ÈY]Y]HÚXÚÜÈ\™HÙ\\˜]H]šY[˜ÙK‰ÊNÃBˆœËÜš]Qš[TÞ[˜Ê]š›Ú[Š]šY[˜ÙK	Ü™\Ý[šœÛÛ‰ÊK”ÓÓ‹œÝš[™ÚYžJÈ\ÜÙYˆYKÜWÜ^[×Ý˜[Y]Yˆ^^[Ë˜[Y	‰š[XYÙT^[Ë˜[YØÙ[˜\š[ÜÎˆÉÑœ™[˜ÚXYØ\™][™XØÙ[ÉË	Õ[šXÛÙH^[™\ˆ×‹×™\XÙ[Y[	Ë	Ü\X[Ù[XÝY‹ÒKÕIË	Û™\ÝY[›[™Hœ˜XÝ[Û‰Ë	Ú[™^Y›ÛÝ	Ë	Ü™\Ù[][Û‰Ë	Ù[ØÜ™Y[‰Ë	Ñ\ØØ\H™\Ù\™\È^	Ë	Ú[XYÙHZ\œ›ÜœËÛÜ›™\ˆ›Ý][Û‹[™ËÔ™YÉ×HK[ŠJNÃBˆÛÛœÛÛK›ÙÊ	ÐÚ›ÛZ][H[\˜XÝ[ÛˆÚXÚÜÈ\ÜÙY‰ÊNÃBˆHØ]Ú
+\œ›ÜŠHÃBˆ]ØZ]YÙKœØÜ™Y[œÚÝ
+È]ˆ]š›Ú[Š]šY[˜ÙK	Ù˜Z[\™Kœ™ÉÊHJK˜Ø]Ú
 
 
-// Reject empty WebGPU captures; reconstruct standard Chromium RGB/RGBA PNGs.
-function inspectCapture(file) {
-  const png=fs.readFileSync(file);
-  let offset=8,width,height,bpp;const parts=[];
-  while(offset<png.length) {
-    const size=png.readUInt32BE(offset),tag=png.toString('ascii',offset+4,offset+8);
-    const data=png.subarray(offset+8,offset+8+size);
-    if(tag==='IHDR') {width=data.readUInt32BE(0);height=data.readUInt32BE(4);assert.equal(data[8],8);bpp=data[9]===6?4:data[9]===2?3:0;assert(bpp,'Unsupported screenshot PNG format');}
-    if(tag==='IDAT')parts.push(data);
-    offset+=size+12;
-  }
-  const raw=zlib.inflateSync(Buffer.concat(parts));const stride=width*bpp;
-  let previous=Buffer.alloc(stride),position=0,nonwhite=0;const colors=new Set();
-  const paeth=(a,b,c)=> {const p=a+b-c,pa=Math.abs(p-a),pb=Math.abs(p-b),pc=Math.abs(p-c);return pa<=pb&&pa<=pc?a:pb<=pc?b:c;};
-  for(let y=0;y<height;y++) {
-    const filter=raw[position++],row=Buffer.from(raw.subarray(position,position+stride));position+=stride;
-    for(let x=0;x<stride;x++) {
-      const left=x>=bpp?row[x-bpp]:0,up=previous[x],upperLeft=x>=bpp?previous[x-bpp]:0;
-      const prediction=filter===0?0:filter===1?left:filter===2?up:filter===3?Math.floor((left+up)/2):paeth(left,up,upperLeft);
-      row[x]=(row[x]+prediction)&255;
-    }
-    for(let x=0;x<stride;x+=bpp) {
-      if(row[x]<235||row[x+1]<235||row[x+2]<235)nonwhite++;
-      if(colors.size<256)colors.add(Array.from(row.subarray(x,x+bpp)).join(','));
-    }
-    previous=row;
-  }
-  return {file:path.basename(file),width,height,nonwhite_pixels:nonwhite,distinct_colors:colors.size,valid:nonwhite>1000&&colors.size>16};
-}
-
-(async () => {
-  const browser = await chromium.launch({ channel: 'chromium', headless: true, args: ['--enable-unsafe-webgpu', '--use-angle=swiftshader'] });
-  const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, permissions: ['clipboard-read','clipboard-write'] });
-  await context.addInitScript(() => localStorage.setItem('drafftink.user_settings.v1', JSON.stringify({ restore_last_document: false, intro_json: '', autosave_enabled: false, hide_properties: false, default_font: 'Noto Sans', default_font_postscript: '' })));
-  let page = await context.newPage();
-  const logs = [];
-  page.on('console', message => logs.push(message.type() + ': ' + message.text()));
-  page.on('pageerror', error => logs.push('PAGEERROR: ' + error));
-  const state = () => page.evaluate(() => JSON.parse(window.__drafftinkTestState));
-  const wait = async predicate => {
-    for (let i = 0; i < 100; i++) {
-      const current = await state().catch(() => null);
-      if (current && predicate(current)) return current;
-      await page.waitForTimeout(100);
-    }
-    throw new Error('Timed out; state=' + JSON.stringify(await state().catch(() => null)));
-  };
-  const text = s => s.shapes.find(item => item.shape.Text)?.shape.Text;
-  const snapshot=async(target,file)=> {
-    await target.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
-    await target.screenshot({path:path.join(evidence,file)});
-  };
-  const exportPixels=async(target,file)=> {
-    if(logs.some(line=>line.includes('A valid external Instance reference no longer exists'))) {
-      return {file,valid:false,status:'unavailable',reason:'CI software WebGPU instance lost; pixel readback cannot be validated here'};
-    }
-    const downloaded=target.waitForEvent('download',{timeout:60000});
-    await target.keyboard.press('Control+e');
-    await (await downloaded).saveAs(path.join(evidence,file));
-    const inspected=inspectCapture(path.join(evidence,file));
-    assert(inspected.valid,`GPU PNG export is empty: ${JSON.stringify(inspected)}`);
-    return inspected;
-  };
-  let input = await context.newCDPSession(page);
-  const keys = async value => {
-    for (const char of value) {
-      if (char.codePointAt(0) < 128) await page.keyboard.press(char);
-      else {
-        await input.send('Input.dispatchKeyEvent', { type: 'keyDown', key: char, text: char, unmodifiedText: char });
-        await input.send('Input.dispatchKeyEvent', { type: 'keyUp', key: char });
-      }
-    }
-  };
-  const caretPacket = async key => {
-    await input.send('Input.dispatchKeyEvent',{type:'keyDown',key,code:'BracketLeft',...(key==='Dead'?{}:{text:key,unmodifiedText:key})});
-    await input.send('Input.dispatchKeyEvent',{type:'keyUp',key,code:'BracketLeft'});
-  };
-  const control = async name => {
-    const s = await wait(s => !!s.controls[name]);
-    const [x0, y0, x1, y1] = s.controls[name];
-    await page.mouse.move((x0+x1)/2,(y0+y1)/2);
-    await page.waitForTimeout(100);
-    await page.mouse.click((x0 + x1) / 2, (y0 + y1) / 2, {delay:60});
-    await page.waitForTimeout(100);
-  };
-  const focusCanvasTool = async tool => {
-    // MouseInput consumption uses egui's previous hover frame. Give the canvas
-    // hover and each focus dismissal a frame before the placement click.
-    await page.mouse.move(400,300);await page.waitForTimeout(100);
-    await page.keyboard.press('Escape');await page.waitForTimeout(100);
-    await page.keyboard.press('Escape');await page.waitForTimeout(100);
-    await page.keyboard.press(tool);await wait(s=>s.tool===(tool==='m'?'Math':'Text'));
-    await page.mouse.click(400,300);
-  };
-  const fill = async (name, value) => { await control(name); await page.keyboard.press('Control+a'); await keys(value); };
-  try {
-    // Default contextual properties and shape chooser, without altering the
-    // legacy suite's explicit always-visible properties preference.
-    const mainPage = page;
-    const geometryContext = await browser.newContext({viewport:{width:1280,height:720}});
-    await geometryContext.addInitScript(()=>localStorage.setItem('drafftink.user_settings.v1',JSON.stringify({restore_last_document:false,autosave_enabled:false,default_font:'Noto Sans',default_font_postscript:''})));
-    page = await geometryContext.newPage();
-    await page.goto(process.env.DRAFFTINK_TEST_URL || 'http://127.0.0.1:8888/?drafftink-test=1');
-    await wait(s=>s.shapes.length===0&&!s.properties_visible);
-    assert.equal(await page.title(),'QursoðŸŒ¿');
-    await page.mouse.move(400,300);await page.waitForTimeout(100);
-    await page.keyboard.press('o');await wait(s=>s.tool==='Ellipse'&&s.geometry==='Ellipse');
-    await page.keyboard.press('o');await wait(s=>s.geometry==='Triangle');
-    await page.mouse.move(300,270);await page.mouse.down();await page.mouse.move(460,410,{steps:8});await page.mouse.up();
-    const tri = await wait(s=>s.shapes.some(i=>i.shape.Ellipse?.geometry==='Triangle'));
-    assert(!tri.properties_visible);
-    await page.keyboard.press('Control+z');await wait(s=>s.shapes.length===0);
-    await page.keyboard.press('Control+Shift+z');await wait(s=>s.shapes.length===1);
-    await page.mouse.move(380,270);await page.waitForTimeout(100);
-    await page.mouse.click(380,270,{button:'right',delay:60});
-    await wait(s=>s.context_properties&&s.properties_visible);
-    await page.mouse.move(600,500);await page.waitForTimeout(100);await page.mouse.click(600,500);
-    await wait(s=>!s.context_properties&&!s.properties_visible);
-    const ellipseButton=(await state()).controls.tool_Ellipse;
-    await page.mouse.move((ellipseButton[0]+ellipseButton[2])/2,(ellipseButton[1]+ellipseButton[3])/2);await page.waitForTimeout(100);
-    await page.mouse.click((ellipseButton[0]+ellipseButton[2])/2,(ellipseButton[1]+ellipseButton[3])/2,{button:'right',delay:60});
-    await control('geometry_Trapezoid');await wait(s=>s.geometry==='Trapezoid');
-    await page.mouse.move(700,270);await page.waitForTimeout(100);await page.mouse.down();await page.mouse.move(850,410,{steps:8});await page.mouse.up();
-    await wait(s=>s.shapes.some(i=>i.shape.Ellipse?.geometry==='Trapezoid'));
-    await snapshot(page,'geometry-context.png');
-    await geometryContext.close();
-    // A canvas marquee continues and releases over a floating toolbar without
-    // activating its tool; a fresh click afterwards still works normally.
-    const captureContext=await browser.newContext({viewport:{width:1280,height:720}});
-    await captureContext.addInitScript(()=>localStorage.setItem('drafftink.user_settings.v1',JSON.stringify({restore_last_document:false,autosave_enabled:false,accent_color:[180,35,100]})));
-    page=await captureContext.newPage();await page.goto(process.env.DRAFFTINK_TEST_URL || 'http://127.0.0.1:8888/?drafftink-test=1');
-    await wait(s=>s.shapes.length===0);assert.deepEqual((await state()).accent_color,[180,35,100]);
-    await page.mouse.move(400,350);await page.waitForTimeout(100);await page.keyboard.press('r');
-    await wait(s=>s.tool==='Rectangle');await page.mouse.down();await page.mouse.move(540,410,{steps:8});await page.mouse.up();await wait(s=>s.shapes.length===1);
-    await page.keyboard.press('s');await wait(s=>s.tool==='Select');
-    const tool=(await state()).controls.tool_Ellipse;assert(tool);
-    const target=[(tool[0]+tool[2])/2,(tool[1]+tool[3])/2];
-    await page.mouse.move(700,500);await page.waitForTimeout(100);await page.mouse.down();
-    await page.mouse.move(...target,{steps:15});
-    // Marquee bounds are world coordinates; account for the real default
-    // zoom (1.68) and wait for the frame processing the final mouse event.
-    const followsPointer=s=> {
-      if(!s.selection_rect)return false;
-      const screen=s.selection_rect.map((v,i)=>v*s.zoom+s.camera_offset[i%2]);
-      return (Math.abs(screen[0]-target[0])<2||Math.abs(screen[2]-target[0])<2)
-          && (Math.abs(screen[1]-target[1])<2||Math.abs(screen[3]-target[1])<2);
-    };
-    await wait(followsPointer);
-    await page.mouse.up();await wait(s=>s.selection_rect===null&&s.tool==='Select');
-    assert.equal((await state()).selected_count,1);
-    const topBeforeNudge=(await state()).shapes[0].bounds[1];
-    await page.keyboard.press('Control+ArrowDown');
-    const nudged=await wait(s=>s.shapes[0].bounds[1]>topBeforeNudge+20);
-    assert(Math.abs(nudged.shapes[0].bounds[1]-topBeforeNudge-33.6)<2,'Ctrl+ArrowDown should nudge the selection vertically by the normal fast step');
-    await page.keyboard.press('Control+ArrowUp');
-    await wait(s=>Math.abs(s.shapes[0].bounds[1]-topBeforeNudge)<1);
-    await page.keyboard.press('Control+ArrowUp');
-    const movedUp=await wait(s=>s.shapes[0].bounds[1]<topBeforeNudge-20);
-    assert(Math.abs(movedUp.shapes[0].bounds[1]-topBeforeNudge+33.6)<2,'Ctrl+ArrowUp should nudge upward by the same fast step');
-    await page.keyboard.press('Control+ArrowDown');
-    await wait(s=>Math.abs(s.shapes[0].bounds[1]-topBeforeNudge)<1);
-    await page.mouse.move(780,460);await page.keyboard.press('r');await wait(s=>s.tool==='Rectangle');
-    await page.mouse.down();await page.mouse.move(900,540,{steps:5});await page.mouse.up();await wait(s=>s.shapes.length===2&&s.selected_count===1);
-    await page.keyboard.press('s');await wait(s=>s.tool==='Select');
-    const firstBounds=(await state()).shapes[0].bounds;
-    // Empty rectangles are hit-tested on their outline; Ctrl-click the visible edge.
-    const multiSelectPoint=[firstBounds[0]+1,firstBounds[1]+1];
-    await page.mouse.move(...multiSelectPoint);
-    await page.keyboard.down('Control');await page.mouse.click(...multiSelectPoint);await page.keyboard.up('Control');
-    await wait(s=>s.selected_count===2);
-    await page.keyboard.press('Control+l');await wait(s=>s.shapes.every(shape=>shape.pinned));
-    await page.keyboard.press('Control+z');await wait(s=>s.shapes.every(shape=>!shape.pinned));
-    // Undo restores the document snapshot and clears selection; select both again.
-    await page.mouse.click(...multiSelectPoint);await wait(s=>s.selected_count===1);
-    const secondBounds=(await state()).shapes[1].bounds;
-    const secondPoint=[secondBounds[0]+1,secondBounds[1]+1];
-    await page.keyboard.down('Control');await page.mouse.click(...secondPoint);await page.keyboard.up('Control');
-    await wait(s=>s.selected_count===2);
-    await page.keyboard.press('Control+l');await wait(s=>s.shapes.every(shape=>shape.pinned));
-    await page.keyboard.press('Control+l');await wait(s=>s.shapes.every(shape=>!shape.pinned));
-    await snapshot(page,'accent-selection.png');
-    await page.mouse.move(700,500);await page.waitForTimeout(100);await control('tool_Ellipse');await wait(s=>s.tool==='Ellipse');
-    await control('tool_Highlighter');await wait(s=>s.tool==='Highlighter');
-    await page.mouse.move(600,590);await page.mouse.down();await page.mouse.move(680,610,{steps:6});await page.mouse.up();
-    const highlighter=await wait(s=>s.shapes.find(item=>item.shape.Freehand?.style.stroke_color.a===128));
-    assert(highlighter.shape.Freehand.style.stroke_width>=12,'highlighter keeps its widened translucent stroke');
-    await control('tool_Freehand');await wait(s=>s.tool==='Freehand');
-    await page.mouse.move(600,650);await page.mouse.down();await page.mouse.move(680,670,{steps:6});await page.mouse.up();
-    const normalDraw=await wait(s=>s.shapes.find(item=>item.id!==highlighter.id&&item.shape.Freehand?.style.stroke_color.a===255));
-    assert.equal(normalDraw.shape.Freehand.style.stroke_width,2,'Draw returns to its normal width after Highlighter');
-    await captureContext.close();
-    // Math form pointer bounds use egui points, even on a scaled display.
-    const dpiContext=await browser.newContext({viewport:{width:1280,height:720},deviceScaleFactor:2});
-    await dpiContext.addInitScript(()=>localStorage.setItem('drafftink.user_settings.v1',JSON.stringify({restore_last_document:false,autosave_enabled:false,default_font:'Noto Sans',default_font_postscript:''})));
-    page=await dpiContext.newPage();await page.goto(process.env.DRAFFTINK_TEST_URL || 'http://127.0.0.1:8888/?drafftink-test=1');await wait(s=>s.shapes.length===0);
-    await page.mouse.move(400,200);await page.waitForTimeout(100);await page.keyboard.press('m');await wait(s=>s.tool==='Math');await page.waitForTimeout(100);await page.mouse.click(400,200,{delay:60});await wait(s=>!!s.editing_math&&s.math_input_focused&&!!s.math_form_rect);
-    await keys('x+1');await wait(s=>s.shapes[0].shape.Math?.source==='x+1');
-    const field=(await state()).math_form_rect;
-    await page.mouse.click(field[0]+25,field[1]+22,{delay:60});await wait(s=>!!s.editing_math&&s.shapes.length===1);
-    await page.mouse.move(150,220);await page.waitForTimeout(100);await page.mouse.click(150,220,{delay:60});await wait(s=>s.editing_math===null&&s.shapes.length===1);
-    await dpiContext.close();page=mainPage;
-    await page.goto(process.env.DRAFFTINK_TEST_URL || 'http://127.0.0.1:8888/?drafftink-test=1');
-    await wait(s => s.shapes.length === 0);
-    await snapshot(page,'initial.png');
-    await page.mouse.move(300,300);await page.waitForTimeout(100);await page.keyboard.press('r');await wait(s=>s.tool==='Rectangle');
-    await page.mouse.move(300,300);await page.mouse.down();await page.mouse.move(470,410,{steps:6});await page.mouse.up();await wait(s=>s.shapes.length===1);
-    const originalRect=(await state()).shapes[0].shape.Rectangle.position.x;
-    await page.keyboard.press('s');await page.mouse.move(303,320);await page.waitForTimeout(100);await page.mouse.down();await page.mouse.move(1278,320,{steps:12});
-    await wait(s=>s.camera_offset[0]< -30);const edge=(await state()).shapes[0];assert(Math.abs(edge.bounds[0]-1275)<5);
-    await page.mouse.move(900,320,{steps:6});await page.waitForTimeout(100);const stopped=(await state()).camera_offset[0];await page.waitForTimeout(250);assert(Math.abs((await state()).camera_offset[0]-stopped)<1);
-    await page.mouse.up();await page.keyboard.press('Control+z');await wait(s=>Math.abs(s.shapes[0].shape.Rectangle.position.x-originalRect)<1e-7);
-    await control('New canvas');await wait(s=>s.shapes.length===0);
-
-    // A completed shape remains selected and can resize with its drawing tool still active.
-    await page.keyboard.press('r');await wait(s=>s.tool==='Rectangle');
-    await page.mouse.move(320,260);await page.mouse.down();await page.mouse.move(440,350,{steps:6});await page.mouse.up();
-    await wait(s=>s.shapes.length===1&&s.selected_count===1);
-    await page.mouse.move(440,350);await page.waitForTimeout(100);await page.mouse.down();await page.mouse.move(510,390,{steps:6});await page.mouse.up();
-    await wait(s=>s.shapes.length===1&&s.shapes[0].bounds[2]-s.shapes[0].bounds[0]>170&&s.tool==='Rectangle');
-    await control('New canvas');await wait(s=>s.shapes.length===0);
-
-    await page.mouse.click(370,270);
-    await page.keyboard.press('t');await wait(s=>s.tool==='Text');
-    await page.mouse.click(370, 270);
-    await wait(s => !!s.editing_text);
-    await keys('123'); await caretPacket('Dead'); await keys('4');
-    await wait(s => text(s)?.content === '123^4');
-    await page.keyboard.press('Backspace'); await page.keyboard.press('Backspace'); await keys('â´');
-    await wait(s => text(s)?.content === '123â´');
-    for (const [trigger,replacement] of [['>','â‰¥'],['<','â‰¤']]) {
-      await caretPacket('Dead');await keys(trigger);
-      await page.keyboard.press('Backspace');await page.keyboard.press('Backspace');await keys(replacement);
-    }
-    await caretPacket('Dead');await caretPacket('^');await caretPacket('Dead');await keys('p');
-    await caretPacket('Dead');await keys('Ã¢');
-    await wait(s => text(s)?.content === '123â´â‰¥â‰¤^^^pÃ¢');
-    await page.keyboard.press('Control+a');
-    await page.keyboard.press('Control+b'); await page.keyboard.press('Control+i'); await page.keyboard.press('Control+u');
-    await wait(s => text(s)?.char_styles.length === Array.from(text(s).content).length && text(s).char_styles.every(style => style.bold && style.italic && style.underline));
-    await page.keyboard.press('ArrowRight');
-    await page.keyboard.press('Shift+ArrowLeft');await page.keyboard.press('Shift+ArrowLeft');
-    await page.keyboard.press('Control+b');await page.keyboard.press('Control+i');await page.keyboard.press('Control+u');
-    await wait(s=>text(s)?.char_styles.slice(-2).every(style=>!style.bold&&!style.italic&&!style.underline) && text(s)?.char_styles.slice(0,-2).every(style=>style.bold&&style.italic&&style.underline));
-    await page.keyboard.press('ArrowRight');
-    await keys(' frac(frac(1,2),frac(3,4))');await wait(s=>!!s.command_editor);
-    await page.keyboard.press('Enter');await wait(s=>!s.command_editor&&text(s)?.formulas.length===1);
-    await snapshot(page,'text-fraction.png');
-    await keys(' fin');
-    await wait(s => text(s)?.content.endsWith(' fin'));
-    await keys(' root(x+1,3)');await wait(s=>!!s.command_editor);await page.keyboard.press('Enter');await wait(s=>!s.command_editor);
-    await wait(s => text(s)?.formulas.length === 2 && !s.inline_dialog);
-    await snapshot(page,'text-root.png');
-    const before = await state();
-    await page.keyboard.press('Control+p'); await wait(s => s.presentation);
-    await snapshot(page,'presentation.png');
-    await page.keyboard.press('Control+p'); await wait(s => !s.presentation);
-    assert.equal(text(await state()).content, text(before).content);
-    await page.keyboard.press('Escape');
-    await wait(s => !s.editing_text && text(s)?.formulas.length === 2);
-    await page.keyboard.press('Control+z');await wait(s=>text(s)?.formulas.length===1);
-    await page.keyboard.press('Control+Shift+z');await wait(s=>text(s)?.formulas.length===2);
-
-    assert(!logs.some(line => line.startsWith('PAGEERROR:')), logs.join('\n'));
-    const textPixels=await exportPixels(page,'text-render-export.png');
-    fs.writeFileSync(path.join(evidence, 'state.json'), JSON.stringify(await state(), null, 2));
-    // Type a command directly in Text; arguments move into a focused mini editor.
-    await page.keyboard.press('t');await page.mouse.click(360,500);await wait(s=>!!s.editing_text);
-    await keys('sum(');await wait(s=>s.command_editor==='sum(');
-    const commandText=s=>s.shapes.find(item=>item.id===s.editing_text)?.shape.Text;
-    await wait(s=>commandText(s)?.formulas.length===1&&commandText(s).formulas[0].math.latex.includes('\\sum'));
-    await keys('kx,k,1,n)');await wait(s=>s.command_editor==='sum(kx,k,1,n)');
-    await wait(s=>commandText(s)?.formulas[0].math.latex==='\\sum_{k=1}^{n} kx');
-    await page.keyboard.press('Enter');await wait(s=>s.command_editor===null&&!!s.editing_text);
-    await keys(' = frac(');await wait(s=>s.command_editor==='frac(');
-    await keys('a,frac(b,c))');await wait(s=>s.command_editor==='frac(a,frac(b,c))');
-    await wait(s=>commandText(s)?.formulas.some(f=>f.math.latex==='\\frac{a}{\\frac{b}{c}}'));
-    await snapshot(page,'live-text-command.png');
-    await page.keyboard.press('Enter');await wait(s=>s.command_editor===null&&!!s.editing_text);await keys(' suite');
-    await wait(s=>commandText(s)?.content.endsWith(' suite'));
-    await page.keyboard.press('Escape');await wait(s=>s.editing_text===null);
-    // A validated formula reopens with a direct double-click.
-    const validCommand=await state();
-    const commandId=validCommand.shapes.find(item=>item.shape.Text?.formulas.some(f=>f.math.source==='sum(kx,k,1,n)')).id;
-    const commandBounds=validCommand.shapes.find(item=>item.id===commandId).bounds;
-    await page.keyboard.press('s');
-    await page.mouse.dblclick(commandBounds[0]+15,(commandBounds[1]+commandBounds[3])/2);
-    await wait(s=>s.command_editor==='sum(kx,k,1,n)');
-    await page.keyboard.press('Control+a');await keys('sum(kÂ²,k,1,n)');
-    await wait(s=>s.command_editor==='sum(kÂ²,k,1,n)');
-    await page.keyboard.press('Escape');await wait(s=>s.editing_text===null);
-    // Cross the left edge with the right edge handle of the Text object.
-    const beforeFlip=(await state()).shapes.find(item=>item.id===commandId);
-    await page.keyboard.press('s');await page.mouse.click(beforeFlip.bounds[0]+10,(beforeFlip.bounds[1]+beforeFlip.bounds[3])/2);
-    const right=beforeFlip.handles.find(h=>h.kind==='Edge(Right)');
-    await page.mouse.move(right.x,right.y);await page.mouse.down();
-    await page.mouse.move(beforeFlip.bounds[0]-60,right.y,{steps:8});await page.mouse.up();
-    await wait(s=>s.shapes.find(item=>item.id===commandId)?.shape.Text.display_scale[0]<0);
-    await page.keyboard.press('Control+z');await wait(s=>s.shapes.find(item=>item.id===commandId)?.shape.Text.display_scale[0]>0);
-
-    // One physical render pixel for a normal arrow, historical GRID_SIZE for Ctrl.
-    const nudgeBefore=(await state()).shapes.find(item=>item.id===commandId);
-    await page.mouse.click(nudgeBefore.bounds[0]+10,(nudgeBefore.bounds[1]+nudgeBefore.bounds[3])/2);
-    await page.keyboard.press('ArrowRight');await wait(s=>Math.abs(s.shapes.find(item=>item.id===commandId).bounds[0]-nudgeBefore.bounds[0]-1)<0.01);
-    const nudgeFine=(await state()).shapes.find(item=>item.id===commandId);
-    await page.keyboard.press('Control+ArrowRight');await wait(s=>Math.abs(s.shapes.find(item=>item.id===commandId).bounds[0]-nudgeFine.bounds[0]-20*s.zoom)<0.01);
-    // Run input/clipboard checks before requesting a GPU PNG export.
-    // New code command uses the same inline axis and supports live completion.
-    await control('New canvas');await wait(s=>s.shapes.length===0);
-    await focusCanvasTool('t');await wait(s=>!!s.editing_text);
-    await keys('bin(');await wait(s=>s.command_editor==='bin(');
-    await keys('n,k)');await wait(s=>commandText(s)?.formulas[0].math.latex==='\\binom{n}{k}');
-    await page.keyboard.press('Enter');await page.keyboard.press('Escape');await wait(s=>s.editing_text===null);
-    const binShape=(await state()).shapes.find(item=>item.shape.Text);
-    await page.keyboard.press('s');
-    const resizeBin=async free=> {
-      await page.mouse.click((binShape.bounds[0]+binShape.bounds[2])/2,(binShape.bounds[1]+binShape.bounds[3])/2);
-      const handle=(await state()).shapes.find(item=>item.id===binShape.id).handles.find(h=>h.kind==='Edge(Right)');
-      if(free)await page.keyboard.down('Shift');
-      await page.mouse.move(handle.x,handle.y);await page.mouse.down();await page.mouse.move(handle.x+45,handle.y,{steps:6});await page.mouse.up();
-      if(free)await page.keyboard.up('Shift');
-      const resized=await wait(s=>s.shapes.find(item=>item.id===binShape.id).shape.Text.display_scale[0]>1.05);
-      const scale=resized.shapes.find(item=>item.id===binShape.id).shape.Text.display_scale;
-      if(free)assert.equal(scale[1],1);else assert(Math.abs(scale[0]-scale[1])<1e-7);
-      await page.keyboard.press('Control+z');await wait(s=>s.shapes.find(item=>item.id===binShape.id).shape.Text.display_scale[0]===1);
-    };
-    await resizeBin(false);await resizeBin(true);
-    // Math's browser clipboard replaces just the selection, then inserts at the caret.
-    await control('New canvas');await wait(s=>s.shapes.length===0);
-    await focusCanvasTool('m');await wait(s=>!!s.editing_math&&s.math_input_focused);
-    const mathText=s=>s.shapes.find(item=>item.shape.Math)?.shape.Math;
-    await keys('x');await page.keyboard.press('Control+ArrowUp');await keys('3');await wait(s=>mathText(s)?.source==='x^3'&&mathText(s)?.latex==='x^3');
-    await page.keyboard.press('Control+a');await keys('x\\neq y\\in A + x_{i} y_{j}');await wait(s=>mathText(s)?.source==='x\\neq y\\in A + x_{i} y_{j}'&&mathText(s)?.latex===mathText(s)?.source);
-    await page.keyboard.press('Control+a');
-    const fieldRect=(await state()).math_form_rect;await page.mouse.move(fieldRect[0]+20,fieldRect[1]+20);await wait(s=>s.cursor_mode===2);
-    assert(decodeURIComponent(await page.evaluate(()=>document.querySelector('canvas').style.cursor)).includes('M60 26l12 12'));
-    const mathButton=(await state()).controls.tool_Math;await page.mouse.move((mathButton[0]+mathButton[2])/2,(mathButton[1]+mathButton[3])/2);await wait(s=>s.cursor_mode===0);
-    await page.mouse.move(fieldRect[0]+20,fieldRect[1]+20);await wait(s=>s.cursor_mode===2);
-    await keys('123456');await wait(s=>mathText(s)?.source==='123456');
-    await page.keyboard.press('Control+a');await page.keyboard.press('Control+c');
-    await page.waitForFunction(async()=>await navigator.clipboard.readText()==='123456');
-    await page.evaluate(()=>navigator.clipboard.writeText('x+âˆž'));
-    await page.keyboard.press('Control+v');await wait(s=>mathText(s)?.source==='x+âˆž');
-    await page.keyboard.press('ArrowLeft');await page.evaluate(()=>navigator.clipboard.writeText('2'));
-    await page.keyboard.press('Control+v');await wait(s=>mathText(s)?.source==='x+2âˆž');
-    // French AltGr+Equal emits a literal brace, never the Ctrl+= subscript command.
-    await input.send('Input.dispatchKeyEvent',{type:'keyDown',key:'}',code:'Equal',text:'}',unmodifiedText:'}',modifiers:3});
-    await input.send('Input.dispatchKeyEvent',{type:'keyUp',key:'}',code:'Equal',modifiers:0});
-    await wait(s=>mathText(s)?.source.includes('}')&&!mathText(s)?.source.includes('_'));
-    await page.keyboard.press('Escape');await wait(s=>s.editing_math===null);
-    await page.waitForTimeout(150);
-
-    // Original characters and font-dependent scripts, including symbols without Unicode script glyphs.
-    const nextScriptTab=(await state()).active_tab+1;await control('New canvas');await wait(s=>s.active_tab===nextScriptTab&&s.shapes.length===0);
-    await focusCanvasTool('t');await wait(s=>!!s.editing_text);
-    for(const brace of ['{','}']) {
-      await input.send('Input.dispatchKeyEvent',{type:'keyDown',key:brace,code:brace==='{'?'Digit4':'Equal',text:brace,unmodifiedText:brace,modifiers:3});
-      await input.send('Input.dispatchKeyEvent',{type:'keyUp',key:brace,code:brace==='{'?'Digit4':'Equal',modifiers:0});
-    }
-    await wait(s=>s.shapes.find(i=>i.id===s.editing_text)?.shape.Text.content==='{}');await page.keyboard.press('Control+a');await page.keyboard.press('Backspace');
-    await keys('Base ');await wait(s=>!!s.text_caret);
-    const normalCaret=(await state()).text_caret;
-    await page.keyboard.press('Control+ArrowUp');const supState=await wait(s=>s.insertion_script===1);
-    assert(supState.text_caret[3]-supState.text_caret[1]<normalCaret[3]-normalCaret[1]);assert(supState.text_caret[1]<normalCaret[1]);
-    await keys('AZ09Î±â‰¤@');await page.keyboard.press('Control+ArrowUp');await keys(' fin');
-    const scriptText=s=>s.shapes.find(item=>item.id===s.editing_text)?.shape.Text;
-    await wait(s=>scriptText(s)?.content==='Base AZ09Î±â‰¤@ fin');
-    await wait(s=>scriptText(s).char_styles.slice(5,12).every(style=>style.script===1));
-    await page.keyboard.press('Control+a');await page.keyboard.press('Control+ArrowDown');await wait(s=>scriptText(s).char_styles.every(style=>style.script===-1));
-    // Space remains in the script, and an empty next line has its caret below.
-    await page.keyboard.press('Escape');await control('New canvas');await wait(s=>s.shapes.length===0);
-    await focusCanvasTool('t');await wait(s=>!!s.editing_text);await keys('x');await page.keyboard.press('Control+ArrowUp');await keys('45 6');
-    await wait(s=>scriptText(s)?.content==='x45 6'&&scriptText(s).char_styles.slice(1).every(c=>c.script===1));
-    await page.keyboard.press('ArrowRight');await wait(s=>s.insertion_script===0);await page.keyboard.press('Enter');
-    const emptyLine=await wait(s=>scriptText(s)?.content==='x45 6\n'&&s.text_caret?.[0]<1);
-    assert(emptyLine.text_caret[1]>0);
-    await keys('hello world');await wait(s=>scriptText(s)?.content.endsWith('hello world'));
-    await page.keyboard.press('Escape');await control('New canvas');await wait(s=>s.shapes.length===0);
-    await focusCanvasTool('t');await wait(s=>!!s.editing_text);await keys('hello world');await wait(s=>scriptText(s)?.content==='hello world');
-    await page.keyboard.press('Escape');await wait(s=>s.editing_text===null);await control('tool_Select');
-    const word=(await state()).shapes.find(i=>i.shape.Text);
-    await page.mouse.move(word.bounds[0]+25,(word.bounds[1]+word.bounds[3])/2);await page.waitForTimeout(100);
-    await page.mouse.dblclick(word.bounds[0]+25,(word.bounds[1]+word.bounds[3])/2,{delay:80});await wait(s=>s.selected_text==='hello'&&s.cursor_mode===1);
-    await keys('X');await wait(s=>scriptText(s)?.content==='X world');
-    await page.keyboard.press('Escape');await control('New canvas');await wait(s=>s.shapes.length===0);
-    await focusCanvasTool('m');await wait(s=>!!s.editing_math&&s.math_input_focused);await keys('x+1');await wait(s=>mathText(s)?.source==='x+1');
-    await page.mouse.move(650,470);await page.waitForTimeout(100);await page.mouse.click(650,470,{delay:60});await wait(s=>s.editing_math===null&&s.shapes.length===1);
-    const equation=(await state()).shapes.find(i=>i.shape.Math);
-    await page.mouse.move((equation.bounds[0]+equation.bounds[2])/2,(equation.bounds[1]+equation.bounds[3])/2);await page.waitForTimeout(100);
-    await page.mouse.click((equation.bounds[0]+equation.bounds[2])/2,(equation.bounds[1]+equation.bounds[3])/2,{button:'right',delay:60});
-    await control('math_object_font');await control('math_object_font:Noto Sans');await wait(s=>mathText(s)?.font.family==='NotoSans');await snapshot(page,'math-font.png');
-    await page.keyboard.press('Control+z');await wait(s=>mathText(s)?.font.family==='GelPen');
-    await page.mouse.move(650,470);await page.waitForTimeout(100);
-    // A subsequent click can place a new Math; a toolbar switch closes it.
-    await page.mouse.click(650,470,{delay:60});await wait(s=>!!s.editing_math&&s.math_input_focused&&s.shapes.length===2);await keys('y');
-    await control('tool_Rectangle');await wait(s=>s.tool==='Rectangle'&&s.editing_math===null&&s.shapes.length===2);
-    await control('tool_Select');const editMath=(await state()).shapes.find(i=>i.shape.Math);
-    await page.mouse.move((editMath.bounds[0]+editMath.bounds[2])/2,(editMath.bounds[1]+editMath.bounds[3])/2);await page.waitForTimeout(100);await page.mouse.dblclick((editMath.bounds[0]+editMath.bounds[2])/2,(editMath.bounds[1]+editMath.bounds[3])/2,{delay:80});await wait(s=>!!s.editing_math&&s.tool==='Select');
-    const selectedForm=(await state()).math_form_rect;await page.mouse.move(selectedForm[0]+20,selectedForm[1]+20);await wait(s=>s.cursor_mode===2);
-    await page.mouse.move(500,200);await wait(s=>s.cursor_mode===0);await page.keyboard.press('Escape');await wait(s=>s.editing_math===null);
-    await control('New canvas');await wait(s=>s.shapes.length===0);await focusCanvasTool('t');await wait(s=>!!s.editing_text);await keys('save');
-    const saveCount=(await state()).png_save_requests;
-    await page.keyboard.press('Control+s');await wait(s=>s.png_save_requests===saveCount+1);
-    await page.keyboard.press('Escape');await wait(s=>s.editing_text===null);
-
-    // Separate browser context with a public, deterministic 1200x2000 PNG fixture.
-    const imageContext = await browser.newContext({viewport:{width:1280,height:720}});
-    const imageId='00000000-0000-4000-8000-000000000001';
-    const image={id:imageId,position:{x:200,y:150},width:160,height:120,source_width:1200,source_height:2000,format:'Png',data_base64:fs.readFileSync('work/e2e/fixtures/image-1200x2000.png').toString('base64'),rotation:0,crop:{x0:0,y0:0,x1:1,y1:1},style:{stroke_color:{r:0,g:0,b:0,a:255},stroke_width:2,fill_color:null,opacity:1}};
-    // ShapeStyle carries additional defaults, filled from the real Text shape.
-    image.style=text(before).style;
-    const fixture={id:'image-fixture',name:'Image',shapes:{[imageId]:{Image:image}},z_order:[imageId]};
-    await imageContext.addInitScript(fixture => localStorage.setItem('drafftink.user_settings.v1',JSON.stringify({restore_last_document:false,autosave_enabled:false,intro_json:JSON.stringify(fixture)})),fixture);
-    const imagePage=await imageContext.newPage();
-    imagePage.on('console',message=>logs.push(message.type()+': '+message.text()));
-    imagePage.on('pageerror',error=>logs.push('PAGEERROR: '+error));
-    await imagePage.goto('http://127.0.0.1:8888/?drafftink-test=1');
-    await imagePage.waitForFunction(() => window.__drafftinkTestState && JSON.parse(window.__drafftinkTestState).shapes.some(s=>s.shape.Image));
-    const imageState=async()=>JSON.parse(await imagePage.evaluate(()=>window.__drafftinkTestState));
-    const waitImage=async predicate=> { for(let i=0;i<100;i++){const state=await imageState();if(predicate(state.shapes.find(s=>s.shape.Image)))return state;await imagePage.waitForTimeout(100);}throw new Error('Image transform failed: '+JSON.stringify((await imageState()).shapes.map(s=>({bounds:s.bounds,rotation:s.shape.Image?.rotation,flip_x:s.shape.Image?.flip_x,flip_y:s.shape.Image?.flip_y})))); };
-    const initialImageMemory=(await imageState()).memory;
-    assert(initialImageMemory.image_cache_bytes>0 && initialImageMemory.image_cache_bytes<1200*2000*4/4);
-    const wasmMemory=await imagePage.evaluate(()=>window.drafftinkMemoryUsage());
-    assert(wasmMemory.wasm_bytes>0);
-    let item=(await imageState()).shapes.find(s=>s.shape.Image);
-    await imagePage.mouse.click((item.bounds[0]+item.bounds[2])/2,(item.bounds[1]+item.bounds[3])/2);
-    const handle=item.handles.find(h=>h.kind==='Corner(BottomRight)');
-    const fixed=item.handles.find(h=>h.kind==='Corner(TopLeft)');
-    await imagePage.mouse.move(handle.x,handle.y);await imagePage.mouse.down();await imagePage.mouse.move(fixed.x-100,fixed.y-80,{steps:20});await imagePage.mouse.up();
-    await waitImage(s=>s.shape.Image.flip_x && s.shape.Image.flip_y);
-    await snapshot(imagePage,'image-flipped.png');
-    await imagePage.keyboard.press('Control+z');await waitImage(s=>!s.shape.Image.flip_x && !s.shape.Image.flip_y);
-    await imagePage.keyboard.press('Control+Shift+z');await waitImage(s=>s.shape.Image.flip_x && s.shape.Image.flip_y);
-    item=(await imageState()).shapes.find(s=>s.shape.Image);
-    await imagePage.mouse.click((item.bounds[0]+item.bounds[2])/2,(item.bounds[1]+item.bounds[3])/2);
-    const corner=item.handles.find(h=>h.kind==='Corner(TopLeft)');
-    const cx=(item.bounds[0]+item.bounds[2])/2,cy=(item.bounds[1]+item.bounds[3])/2;
-    const sx=corner.x-12,sy=corner.y-12;
-    await imagePage.mouse.move(sx,sy);await imagePage.mouse.down();await imagePage.mouse.move(cx-(sy-cy),cy+(sx-cx),{steps:20});await imagePage.mouse.up();
-    await waitImage(s=>Math.abs(s.shape.Image.rotation-Math.PI/2)<0.02);
-    await snapshot(imagePage,'image-rotated.png');
-    fs.writeFileSync(path.join(evidence,'image-state.json'),JSON.stringify(await imageState(),null,2));
-    const finalImageMemory=(await imageState()).memory;
-    assert(finalImageMemory.image_cache_bytes<=finalImageMemory.image_cache_budget_bytes);
-    assert(finalImageMemory.render_target_allocations<=1,'Screen target must be reused across image manipulations');
-    fs.writeFileSync(path.join(evidence,'memory.json'),JSON.stringify({initial_image:initialImageMemory,after_image_manipulations:finalImageMemory,wasm:wasmMemory,original_rgba_bytes:1200*2000*4},null,2));
-    const imageControl=async name=> {
-      await imagePage.waitForFunction(name=>JSON.parse(window.__drafftinkTestState).controls[name],name);
-      const [x0,y0,x1,y1]=(await imageState()).controls[name];
-      await imagePage.mouse.click((x0+x1)/2,(y0+y1)/2);
-    };
-    await imageControl('New canvas');
-    await imagePage.waitForFunction(()=>JSON.parse(window.__drafftinkTestState).active_tab===1);
-    const emptyTab=await imageState();
-    assert.equal(emptyTab.shapes.length,0);
-    assert.equal(emptyTab.memory.image_cache_bytes,0,'Inactive canvas decoded pixels must be released');
-    await imageControl('Canvas 0');
-    await imagePage.waitForFunction(()=>JSON.parse(window.__drafftinkTestState).active_tab===0);
-    assert((await imageState()).shapes.some(s=>s.shape.Image?.id===imageId));
-    assert.equal((await imageState()).memory.parked_shapes_total,0,'Active document must not be cloned into its tab slot');
-    const imagePixels=await exportPixels(imagePage,'image-render-export.png');
-    await imageContext.close();
-    // Fullscreen is a DOM behavior check. Keep software-GPU readback checks
-    // before display-mode transitions in Chromium's headless compositor.
-    await page.bringToFront();
-    await page.keyboard.press('F11');
-    await page.waitForFunction(() => !!document.fullscreenElement);
-    await page.keyboard.press('F11'); await page.waitForFunction(() => !document.fullscreenElement);
+HOˆßJNÃBˆœËÜš]Qš[TÞ[˜Ê]š›Ú[Š]šY[˜ÙK	Ù˜Z[\™K\Ý]KšœÛÛ‰ÊK”ÓÓ‹œÝš[™ÚYžJ]ØZ]Ý]J
+K˜Ø]Ú
 
 
-    const captures=['math-font.png','text-fraction.png','text-root.png','presentation.png','image-flipped.png','image-rotated.png'].map(file=>inspectCapture(path.join(evidence,file)));
-    fs.writeFileSync(path.join(evidence,'capture-validation.json'),JSON.stringify({screen_captures:captures,gpu_exports:[textPixels,imagePixels]},null,2));
-    if(captures.some(c=>!c.valid)||!textPixels.valid||!imagePixels.valid)console.warn('CI WebGPU pixel evidence unavailable; interaction state tests passed. Local UI and native PNG metadata checks are separate evidence.');
-    fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, gpu_pixels_validated: textPixels.valid&&imagePixels.valid, scenarios: ['French dead caret and accents', 'Unicode expander ^4/^>/^< replacement', 'partial selected B/I/U', 'nested inline fraction', 'indexed root', 'presentation', 'fullscreen', 'Escape preserves text', 'image mirrors, corner rotation, Undo/Redo'] }, null, 2));
-    console.log('Chromium interaction checks passed.');
-  } catch (error) {
-    await page.screenshot({ path: path.join(evidence, 'failure.png') }).catch(() => {});
-    fs.writeFileSync(path.join(evidence, 'failure-state.json'), JSON.stringify(await state().catch(() => null), null, 2));
-    throw error;
-  } finally {
-    fs.writeFileSync(path.join(evidence, 'browser.log'), logs.join('\n'));
-    await browser.close();
-  }
-})().catch(error => { console.error(error); process.exitCode = 1; });
+HOˆ[
+K[ŠJNÃBˆ›ÝÈ\œ›ÜŽÃBˆHš[˜[HÃBˆœËÜš]Qš[TÞ[˜Ê]š›Ú[Š]šY[˜ÙK	Øœ›ÝÜÙ\‹›ÙÉÊKÙÜËš›Ú[Š	×‰ÊJNÃBˆ]ØZ]œ›ÝÜÙ\‹˜ÛÜÙJ
+NÃBˆCBŸJJ
+K˜Ø]Ú
+\œ›ÜˆOˆÈÛÛœÛÛK™\œ›ÜŠ\œ›ÜŠNÈ›ØÙ\ÜË™^]ÛÙHHNÈJNÃB
