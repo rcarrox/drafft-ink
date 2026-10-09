@@ -10,16 +10,30 @@ self.addEventListener('install', event => {
     event.waitUntil((async () => {
         const cache = await caches.open(CACHE);
         try {
-            // Integrity rejects a partially uploaded release or a host serving
-            // its home page instead of the requested JS/WASM. Never cache data APIs.
+            // Verify after fetching so diagnostics can distinguish offline/network,
+            // HTTP and stale/rewritten files (SRI reports all of these as Failed to fetch).
+            // Never cache an incomplete or mixed release.
             for (const asset of ASSETS) {
                 const url = new URL(asset.path, BASE).href;
                 try {
-                    const response = await fetch(url, {cache: 'reload', integrity: asset.integrity});
-                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                    await cache.put(url, response);
+                    const response = await fetch(url, {cache: 'reload'});
+                    if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`);
+                    const bytes = await response.clone().arrayBuffer();
+                    const digest = await crypto.subtle.digest('SHA-256', bytes);
+                    const actual = 'sha256-' + btoa(String.fromCharCode(...new Uint8Array(digest)));
+                    if (actual !== asset.integrity) throw new Error('empreinte différente (fichier ancien, modifié ou réécrit par le serveur)');
+                    let cached = response;
+                    if (asset.path.endsWith('.mjs') && !/javascript|ecmascript/i.test(response.headers.get('Content-Type') || '')) {
+                        const headers = new Headers(response.headers);
+                        headers.set('Content-Type', 'text/javascript; charset=utf-8');
+                        cached = new Response(bytes, {status: response.status, statusText: response.statusText, headers});
+                    }
+                    await cache.put(url, cached);
                 } catch (error) {
-                    throw new Error(`${asset.path} : ${error.message}`);
+                    const detail = error instanceof TypeError
+                        ? 'échec réseau (fichier absent, chemin incorrect ou déploiement FTP incomplet)'
+                        : error.message;
+                    throw new Error(`${asset.path} : ${detail}`);
                 }
             }
         } catch (error) {

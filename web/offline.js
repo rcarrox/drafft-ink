@@ -1,4 +1,33 @@
 /* Offline app shell only. Documents/fonts remain in their existing local stores. */
+// PDF.js stays unloaded until the user explicitly imports a PDF.
+let qursoPdfModule;
+window.drafftinkPdfPages = async file => {
+    window.drafftinkPdfPagesTruncated = false;
+    qursoPdfModule ||= import('./pdfjs/pdf.min.js');
+    const pdfjs = await qursoPdfModule;
+    pdfjs.GlobalWorkerOptions.workerSrc = new URL('./pdfjs/pdf.worker.min.js', location.href).href;
+    const pdf = await pdfjs.getDocument({data: new Uint8Array(await file.arrayBuffer()), useSystemFonts: true}).promise;
+    try {
+        const pages = [];
+        const canvas = document.createElement('canvas');
+        const count = Math.min(pdf.numPages, 20);
+        window.drafftinkPdfPagesTruncated = pdf.numPages > count;
+        if (pdf.numPages > count) console.warn(`PDF limité à ${count} pages pour préserver la mémoire du tableau.`);
+        for (let number = 1; number <= count; number++) {
+            const page = await pdf.getPage(number);
+            const base = page.getViewport({scale: 1});
+            const scale = Math.min(1.5, 2400 / Math.max(base.width, base.height));
+            const viewport = page.getViewport({scale});
+            canvas.width = Math.ceil(viewport.width);
+            canvas.height = Math.ceil(viewport.height);
+            await page.render({canvas, canvasContext: canvas.getContext('2d', {alpha: false}), viewport}).promise;
+            pages.push(await new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('PDF vers image impossible')), 'image/png')));
+            page.cleanup();
+        }
+        canvas.width = canvas.height = 0;
+        return pages;
+    } finally { await pdf.destroy(); }
+};
 (() => {
     if (!('serviceWorker' in navigator) || !window.isSecureContext) return;
     // Existing canvas diagnostic tests deliberately bypass caching; dedicated offline tests exercise it.

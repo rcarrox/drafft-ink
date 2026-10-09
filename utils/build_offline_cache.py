@@ -3,7 +3,7 @@ import argparse, base64, hashlib, json
 from pathlib import Path
 
 FILES = ['qlogo.svg', 'cursoreraser.svg', 'cursoreraserman.svg', 'cursorcrosshair.svg', 'cursordraw.svg', 'index.html', 'offline.js', 'favicon.svg', 'cursormouse.svg', 'cursortext.svg',
-         'cursormath.svg', 'pkg/drafftink_app.js', 'pkg/drafftink_app_bg.wasm']
+         'cursormath.svg', 'pdfjs/pdf.min.js', 'pdfjs/pdf.worker.min.js', 'pkg/drafftink_app.js', 'pkg/drafftink_app_bg.wasm']
 
 def build(root):
     root = Path(root)

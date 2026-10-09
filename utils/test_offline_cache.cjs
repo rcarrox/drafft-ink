@@ -40,6 +40,12 @@ const server=http.createServer((request,response)=>{
     await page.goto(url);await loaded();assert.equal(await page.title(),'Qurso🌿');
     await page.waitForFunction(()=>window.__offlineNoticeSeen===true,null,{timeout:60000});
     assert.equal(await page.evaluate(()=>navigator.serviceWorker.controller.scriptURL),url+'sw.js');
+    assert.deepEqual(await page.evaluate(async()=>{
+      const names=await caches.keys(),key=names.find(n=>n.startsWith('qraphtinc-offline:'));
+      const cache=await caches.open(key);
+      return [await cache.match(new URL('pdfjs/pdf.min.js',location.href))!==undefined,
+        await cache.match(new URL('pdfjs/pdf.worker.min.js',location.href))!==undefined];
+    }),[true,true]);
     await page.evaluate(async()=>{
       localStorage.setItem('offline-user-proof','preserved');
       const other=await caches.open('unrelated-site-cache');await other.put('/unrelated-proof',new Response('keep'));
