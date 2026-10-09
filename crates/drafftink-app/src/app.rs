@@ -1566,4 +1566,6632 @@ fn render_scene_to_png(
     let mut rgba_data = Vec::with_capacity((width * height * 4) as usize);
     for row in 0..height {
         let row_start = (row * bytes_per_row) as usize;
- 
+        let row_end = row_start + (width * 4) as usize;
+        rgba_data.extend_from_slice(&data[row_start..row_end]);
+    }
+
+    drop(data);
+    readback_buffer.unmap();
+
+    Some(PngRenderResult {
+        rgba_data,
+        width,
+        height,
+    })
+}
+
+/// Async PNG export for WASM - renders scene and triggers download when complete.
+/// Takes references and clones internally to avoid lifetime issues.
+#[cfg(target_arch = "wasm32")]
+pub fn spawn_png_export_async(
+    vello_renderer: &mut vello::Renderer,
+    device: &vello::wgpu::Device,
+    queue: &vello::wgpu::Queue,
+    scene: Scene,
+    width: u32,
+    height: u32,
+    filename: String,
+    is_copy: bool,
+    scene_json: Option<String>,
+) {
+    spawn_png_export_async_mode(
+        vello_renderer,
+        device,
+        queue,
+        scene,
+        width,
+        height,
+        filename,
+        is_copy,
+        scene_json,
+        false,
+    );
+}
+#[cfg(target_arch = "wasm32")]
+fn spawn_png_export_async_mode(
+    vello_renderer: &mut vello::Renderer,
+    device: &vello::wgpu::Device,
+    queue: &vello::wgpu::Queue,
+    scene: Scene,
+    width: u32,
+    height: u32,
+    filename: String,
+    is_copy: bool,
+    scene_json: Option<String>,
+    automatic: bool,
+) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    if width == 0 || height == 0 {
+        log::warn!("Cannot export empty scene");
+        return;
+    }
+
+    let busy_guard = PngBusyGuard::new();
+    log::info!("Starting async PNG export: {}x{}", width, height);
+
+    // Share the display renderer and scratch buffers; GPU submissions remain ordered.
+    // Create offscreen texture for rendering
+    let texture = device.create_texture(&vello::wgpu::TextureDescriptor {
+        label: Some("png export texture"),
+        size: vello::wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: vello::wgpu::TextureDimension::D2,
+        format: vello::wgpu::TextureFormat::Rgba8Unorm,
+        usage: vello::wgpu::TextureUsages::STORAGE_BINDING
+            | vello::wgpu::TextureUsages::COPY_SRC
+            | vello::wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+
+    let texture_view = texture.create_view(&vello::wgpu::TextureViewDescriptor::default());
+
+    // Render the scene
+    let params = RenderParams {
+        base_color: Color::WHITE,
+        width,
+        height,
+        antialiasing_method: AaConfig::Area,
+    };
+
+    if let Err(e) = vello_renderer.render_to_texture(device, queue, &scene, &texture_view, &params)
+    {
+        log::error!("Failed to render scene for PNG export: {:?}", e);
+        return;
+    }
+
+    // Create buffer to read back pixels
+    let bytes_per_row = (width * 4).next_multiple_of(256); // wgpu alignment requirement
+    let buffer_size = (bytes_per_row * height) as u64;
+
+    let readback_buffer = device.create_buffer(&vello::wgpu::BufferDescriptor {
+        label: Some("png readback buffer"),
+        size: buffer_size,
+        usage: vello::wgpu::BufferUsages::COPY_DST | vello::wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+
+    // Copy texture to buffer
+    let mut encoder = device.create_command_encoder(&vello::wgpu::CommandEncoderDescriptor {
+        label: Some("png copy encoder"),
+    });
+
+    encoder.copy_texture_to_buffer(
+        vello::wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: vello::wgpu::Origin3d::ZERO,
+            aspect: vello::wgpu::TextureAspect::All,
+        },
+        vello::wgpu::TexelCopyBufferInfo {
+            buffer: &readback_buffer,
+            layout: vello::wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(bytes_per_row),
+                rows_per_image: Some(height),
+            },
+        },
+        vello::wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+
+    queue.submit(std::iter::once(encoder.finish()));
+
+    // Use Arc<AtomicBool> for the callback (it's Send)
+    let mapped = Arc::new(AtomicBool::new(false));
+    let mapped_clone = mapped.clone();
+
+    // Start the async mapping - the callback will set mapped to true when done
+    {
+        let buffer_slice = readback_buffer.slice(..);
+        buffer_slice.map_async(vello::wgpu::MapMode::Read, move |result| {
+            if result.is_ok() {
+                mapped_clone.store(true, Ordering::SeqCst);
+            } else {
+                log::error!("Buffer mapping failed: {:?}", result);
+            }
+        });
+    }
+
+    // Spawn async task to poll and wait for mapping
+    // Move readback_buffer into the task so we can access it after mapping completes
+    wasm_bindgen_futures::spawn_local(async move {
+        let mut _busy_guard = busy_guard;
+        // Poll and yield until the callback fires
+        let mut attempts = 0u32;
+        const MAX_ATTEMPTS: u32 = 600; // ~10 seconds at 60fps
+
+        loop {
+            if mapped.load(Ordering::SeqCst) {
+                log::info!("Buffer mapping completed after {} frames", attempts);
+                break;
+            }
+
+            attempts += 1;
+            if attempts >= MAX_ATTEMPTS {
+                log::error!(
+                    "Timeout waiting for buffer mapping after {} frames",
+                    attempts
+                );
+                return;
+            }
+
+            // Yield to browser event loop using requestAnimationFrame
+            // This is crucial - Promise.resolve() creates a microtask that doesn't
+            // actually yield to the browser's task queue where WebGPU callbacks run
+            let _ = file_ops::yield_to_browser().await;
+        }
+
+        // Now that mapping is complete, we can access the data
+        let buffer_slice = readback_buffer.slice(..);
+        let data = buffer_slice.get_mapped_range();
+
+        // Remove row padding if any
+        let mut rgba_data = Vec::with_capacity((width * height * 4) as usize);
+        for row in 0..height {
+            let row_start = (row * bytes_per_row) as usize;
+            let row_end = row_start + (width * 4) as usize;
+            rgba_data.extend_from_slice(&data[row_start..row_end]);
+        }
+
+        drop(data);
+        readback_buffer.unmap();
+        readback_buffer.destroy();
+        drop(readback_buffer);
+
+        // Encode to PNG
+        let png_data = match encode_png(&rgba_data, width, height, scene_json.as_deref()) {
+            Some(data) => data,
+            None => {
+                log::error!("Failed to encode PNG");
+                return;
+            }
+        };
+
+        _busy_guard.0 = true;
+        // Either copy to clipboard or trigger download
+        if is_copy {
+            file_ops::copy_png_to_clipboard(png_data);
+        } else if automatic {
+            file_ops::export_png_automatic(&png_data, &filename, scene_json.as_deref());
+        } else {
+            file_ops::export_png(&png_data, &filename.trim_end_matches(".png"));
+            log::info!("PNG export complete: {} bytes", png_data.len());
+        }
+    });
+}
+
+/// MIME type keyword for embedded scene data in PNG text chunks.
+const PNG_METADATA_KEYWORD: &str = "application/vnd.drafftink+json";
+
+/// Encode RGBA pixel data to PNG bytes with optional embedded scene JSON.
+fn encode_png(
+    rgba_data: &[u8],
+    width: u32,
+    height: u32,
+    scene_json: Option<&str>,
+) -> Option<Vec<u8>> {
+    let mut png_data = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut png_data, width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+
+        // iTXt supports Unicode (formula placeholders, ≥/≤, superscripts and font names).
+        if let Some(json) = scene_json {
+            if let Err(e) =
+                encoder.add_itxt_chunk(PNG_METADATA_KEYWORD.to_string(), json.to_string())
+            {
+                log::warn!("Failed to add metadata chunk: {:?}", e);
+            }
+        }
+
+        let mut writer = match encoder.write_header() {
+            Ok(w) => w,
+            Err(e) => {
+                log::error!("Failed to write PNG header: {:?}", e);
+                return None;
+            }
+        };
+
+        if let Err(e) = writer.write_image_data(rgba_data) {
+            log::error!("Failed to write PNG data: {:?}", e);
+            return None;
+        }
+    }
+
+    Some(png_data)
+}
+
+/// Extract embedded scene JSON from PNG data, if present.
+pub fn extract_scene_from_png(png_data: &[u8]) -> Option<String> {
+    let decoder = png::Decoder::new(std::io::Cursor::new(png_data));
+    let reader = decoder.read_info().ok()?;
+
+    for chunk in &reader.info().utf8_text {
+        if chunk.keyword == PNG_METADATA_KEYWORD {
+            return chunk.get_text().ok();
+        }
+    }
+    for chunk in &reader.info().compressed_latin1_text {
+        if chunk.keyword == PNG_METADATA_KEYWORD {
+            return chunk.get_text().ok();
+        }
+    }
+    None
+}
+
+/// Parse a CSS color string like "#ff0000" or "rgb(255, 0, 0)".
+fn parse_color(s: &str) -> Option<Color> {
+    let s = s.trim();
+    if s.starts_with('#') && s.len() == 7 {
+        let r = u8::from_str_radix(&s[1..3], 16).ok()?;
+        let g = u8::from_str_radix(&s[3..5], 16).ok()?;
+        let b = u8::from_str_radix(&s[5..7], 16).ok()?;
+        Some(Color::from_rgba8(r, g, b, 255))
+    } else {
+        None
+    }
+}
+
+/// Application configuration.
+#[derive(Debug, Clone)]
+pub struct AppConfig {
+    pub title: String,
+    pub width: u32,
+    pub height: u32,
+    pub grid_style: GridStyle,
+    pub background_color: Color,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            title: "Qraphtinc".to_string(),
+            width: 1280,
+            height: 800,
+            grid_style: GridStyle::Lines,
+            background_color: Color::from_rgba8(250, 250, 250, 255),
+        }
+    }
+}
+
+/// Remote peer state for rendering cursors.
+#[derive(Debug, Clone)]
+pub struct RemotePeer {
+    pub peer_id: String,
+    pub awareness: AwarenessState,
+}
+
+/// A saved editing tab. The currently active tab's live edits live in
+/// [`AppState::canvas`]; this snapshot is refreshed whenever the user switches
+/// away, and restored when the tab becomes active again.
+struct TabState {
+    /// Tab label shown in the tab strip.
+    name: String,
+    /// The tab's document (authoritative only while the tab is inactive).
+    document: drafftink_core::canvas::CanvasDocument,
+    /// The tab's camera (pan/zoom), preserved across switches.
+    camera: drafftink_core::Camera,
+}
+
+/// Runtime state for the application.
+#[cfg(target_arch = "wasm32")]
+fn setup_browser_repaint(window: &std::sync::Arc<winit::window::Window>, ctx: &egui::Context) {
+    use wasm_bindgen::{JsCast, closure::Closure};
+    if let Some(browser) = web_sys::window() {
+        let window = window.clone();
+        let callback = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| window.request_redraw());
+        if browser
+            .add_event_listener_with_callback("drafftink-redraw", callback.as_ref().unchecked_ref())
+            .is_ok()
+        {
+            callback.forget();
+        }
+    }
+    ctx.set_request_repaint_callback(|info| {
+        file_ops::schedule_repaint(info.delay.as_millis().min(i32::MAX as u128) as i32)
+    });
+}
+#[cfg(target_arch = "wasm32")]
+fn apply_browser_cursor(state: &AppState) {
+    use wasm_bindgen::{JsCast, JsValue};
+    if let Some(browser) = web_sys::window() {
+        if let Ok(function) =
+            js_sys::Reflect::get(browser.as_ref(), &JsValue::from_str("drafftinkSetCursor"))
+                .and_then(|v| v.dyn_into::<js_sys::Function>())
+        {
+            let (kind, over_ui) = browser_cursor_kind(state);
+            let c = state.ui_state.settings.cursor_outline;
+            let color = format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2]);
+            let _ = function.call3(
+                browser.as_ref(),
+                &JsValue::from_f64(kind as f64),
+                &JsValue::from_str(&color),
+                &JsValue::from_bool(over_ui),
+            );
+        }
+    }
+}
+
+struct AppState {
+    // Windowing
+    window: Arc<Window>,
+    surface: RenderSurface<'static>,
+
+    // Rendering
+    vello_renderer: vello::Renderer,
+    render_target: Option<(u32, u32, vello::wgpu::Texture, vello::wgpu::TextureView)>,
+    render_target_allocations: u64,
+    shape_renderer: VelloRenderer,
+    /// Texture blitter for RGBA->surface format conversion (needed for WebGPU/WASM)
+    texture_blitter: vello::wgpu::util::TextureBlitter,
+
+    // egui
+    egui_ctx: egui::Context,
+    egui_state: egui_winit::State,
+    egui_renderer: egui_wgpu::Renderer,
+    ui_state: UiState,
+    ui_keyboard_pending: bool,
+    pending_png_save: Option<bool>,
+    last_png_signature: u64,
+    png_save_requests: u64,
+
+    // State
+    canvas: Canvas,
+    /// Open tabs; the active tab's live document/camera live in `canvas`.
+    tabs: Vec<TabState>,
+    /// Index of the active tab within `tabs`.
+    active_tab: usize,
+    input: InputState,
+    config: AppConfig,
+    /// Tool active before holding Space for temporary panning.
+    temporary_pan_tool: Option<ToolKind>,
+
+    // Event handling
+    event_handler: EventHandler,
+
+    // Text editing state (when editing a text shape)
+    text_edit_state: Option<TextEditState>,
+
+    // Collaboration
+    collab: CollaborationManager,
+    #[cfg(target_arch = "wasm32")]
+    websocket: Option<drafftink_core::sync::WasmWebSocket>,
+    #[cfg(not(target_arch = "wasm32"))]
+    websocket: Option<drafftink_core::sync::NativeWebSocket>,
+    /// Remote peers in the current room (for cursor rendering).
+    remote_peers: std::collections::HashMap<String, RemotePeer>,
+
+    // Local font request target selection (WASM / Chrome-Edge only).
+    #[cfg(target_arch = "wasm32")]
+    pending_local_font_targets: std::collections::HashMap<String, Vec<(String, ShapeId)>>,
+
+    // Auto-save (WASM only)
+    #[cfg(target_arch = "wasm32")]
+    last_autosave: web_time::Instant,
+    #[cfg(target_arch = "wasm32")]
+    last_doc_version: u64,
+
+    /// Flag to request a redraw on next frame
+    needs_redraw: bool,
+    last_redraw: FrameInstant,
+}
+
+/// Sync the document to CRDT, broadcast to peers, and flush outgoing
+/// messages to the websocket. No-op when not in a room.
+///
+/// Free function (rather than `&mut self` on `AppState`) so callers can
+/// invoke it inside closures that already hold disjoint borrows of other
+/// fields on `AppState` (e.g. inside the egui closure that borrows
+/// `state.egui_ctx`). Pass the fields directly to keep borrows fine-grained.
+#[cfg(not(target_arch = "wasm32"))]
+fn broadcast_doc_changes(
+    collab: &mut CollaborationManager,
+    document: &drafftink_core::canvas::CanvasDocument,
+    websocket: Option<&drafftink_core::sync::NativeWebSocket>,
+) {
+    if !collab.is_in_room() {
+        return;
+    }
+    collab.sync_to_crdt(document);
+    collab.broadcast_sync();
+    if let Some(ws) = websocket {
+        for msg in collab.take_outgoing() {
+            let _ = ws.send(&msg);
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn broadcast_doc_changes(
+    collab: &mut CollaborationManager,
+    document: &drafftink_core::canvas::CanvasDocument,
+    websocket: Option<&drafftink_core::sync::WasmWebSocket>,
+) {
+    if !collab.is_in_room() {
+        return;
+    }
+    collab.sync_to_crdt(document);
+    collab.broadcast_sync();
+    if let Some(ws) = websocket {
+        for msg in collab.take_outgoing() {
+            let _ = ws.send(&msg);
+        }
+    }
+}
+
+/// Place a freshly imported/pasted set of shapes onto the canvas, centered on a
+/// world-space point, as a single undoable operation that also selects the
+/// result and mirrors it to collaborators.
+///
+/// Factored out so the several paste/import entry points (internal clipboard,
+/// Excalidraw, Mermaid, and the async WASM path) share one implementation of
+/// the "recenter, add, select, broadcast" sequence rather than duplicating it.
+fn place_shapes_centered_at(
+    canvas: &mut Canvas,
+    collab: &mut CollaborationManager,
+    shapes: Vec<Shape>,
+    center_world: Point,
+) {
+    if shapes.is_empty() {
+        return;
+    }
+
+    // Recenter the group's bounding box on the requested point.
+    let bounds = shapes.iter().fold(
+        kurbo::Rect::new(f64::MAX, f64::MAX, f64::MIN, f64::MIN),
+        |acc, s| {
+            let b = s.bounds();
+            kurbo::Rect::new(
+                acc.x0.min(b.x0),
+                acc.y0.min(b.y0),
+                acc.x1.max(b.x1),
+                acc.y1.max(b.y1),
+            )
+        },
+    );
+    let offset = Vec2::new(
+        center_world.x - (bounds.x0 + bounds.x1) / 2.0,
+        center_world.y - (bounds.y0 + bounds.y1) / 2.0,
+    );
+
+    canvas.document.push_undo();
+    canvas.clear_selection();
+    for mut shape in shapes {
+        shape.transform(kurbo::Affine::translate(offset));
+        let new_id = shape.id();
+        canvas.document.add_shape(shape.clone());
+        canvas.add_to_selection(new_id);
+        if collab.is_in_room() {
+            let _ = collab.crdt_mut().add_shape(&shape);
+        }
+    }
+}
+
+/// Parse Excalidraw library text and lay its icons out as a grid document,
+/// returning the tab name and the document. Returns `None` if the text is not a
+/// recognizable Excalidraw library.
+fn build_library_document(
+    content: &str,
+    fallback_name: &str,
+) -> Option<(String, drafftink_core::canvas::CanvasDocument)> {
+    let items = drafftink_core::library_from_excalidrawlib(content)?;
+    let shapes = drafftink_core::library_layout_grid(&items);
+    let mut document = drafftink_core::canvas::CanvasDocument::new();
+    for shape in shapes {
+        document.add_shape(shape);
+    }
+    let name = if fallback_name.trim().is_empty() {
+        "Library".to_string()
+    } else {
+        fallback_name.to_string()
+    };
+    Some((name, document))
+}
+
+/// Move ownership into the outgoing tab; never deep-clone its Undo/Redo history.
+fn snapshot_active_tab(state: &mut AppState) {
+    let active = state.active_tab;
+    state.tabs[active].document = std::mem::take(&mut state.canvas.document);
+    state.tabs[active].camera = state.canvas.camera.clone();
+}
+
+/// Load the tab at `index` into the live canvas.
+fn load_tab_into_canvas(state: &mut AppState, index: usize) {
+    state.active_tab = index;
+    state.canvas.document = std::mem::take(&mut state.tabs[index].document);
+    state.canvas.camera = state.tabs[index].camera.clone();
+    state.canvas.clear_selection();
+    state.event_handler.editing_text = None;
+    state.text_edit_state = None;
+    state.ui_state.math_editor = None;
+    state.ui_state.math_editor_screen_pos = None;
+    state.ui_state.text_command_editor = None;
+    state.ui_state.inline_formula_draft = None;
+    state.ui_keyboard_pending = false;
+    state.needs_redraw = true;
+}
+
+/// Switch the active tab, preserving the outgoing tab's edits.
+fn switch_to_tab(state: &mut AppState, target: usize) {
+    if target == state.active_tab || target >= state.tabs.len() {
+        return;
+    }
+    snapshot_active_tab(state);
+    load_tab_into_canvas(state, target);
+}
+
+/// Append a new tab holding `document` and make it active.
+fn add_tab(state: &mut AppState, name: String, document: drafftink_core::canvas::CanvasDocument) {
+    snapshot_active_tab(state);
+    state.tabs.push(TabState {
+        name,
+        document,
+        camera: drafftink_core::Camera::new(),
+    });
+    let index = state.tabs.len() - 1;
+    load_tab_into_canvas(state, index);
+}
+
+/// Close the tab at `index`. The last remaining tab is never closed.
+fn close_tab(state: &mut AppState, index: usize) {
+    if state.tabs.len() <= 1 || index >= state.tabs.len() {
+        return;
+    }
+    // Preserve the active tab's edits unless we are removing it.
+    if index != state.active_tab {
+        snapshot_active_tab(state);
+    }
+    state.tabs.remove(index);
+
+    // Recompute the active tab so it still points at a live tab.
+    let new_active = if state.active_tab > index {
+        state.active_tab - 1
+    } else if state.active_tab == index {
+        index.min(state.tabs.len() - 1)
+    } else {
+        state.active_tab
+    };
+    load_tab_into_canvas(state, new_active);
+}
+
+/// Main application struct.
+pub struct App {
+    config: AppConfig,
+    state: Option<AppState>,
+    render_cx: Option<vello::util::RenderContext>,
+    /// Window waiting for async surface creation (WASM only)
+    pending_window: Option<Arc<Window>>,
+    /// Flag to indicate async init is in progress
+    #[cfg(target_arch = "wasm32")]
+    init_in_progress: std::cell::Cell<bool>,
+    /// Collaboration server URL to auto-connect to on startup (from CLI args).
+    startup_server: Option<String>,
+    /// Room to auto-join on startup (from CLI args).
+    startup_room: Option<String>,
+}
+
+impl App {
+    /// Create a new application with default configuration.
+    pub fn new() -> Self {
+        Self::with_config(AppConfig::default())
+    }
+
+    /// Create a new application with custom configuration.
+    pub fn with_config(config: AppConfig) -> Self {
+        Self {
+            config,
+            state: None,
+            render_cx: None,
+            pending_window: None,
+            #[cfg(target_arch = "wasm32")]
+            init_in_progress: std::cell::Cell::new(false),
+            startup_server: None,
+            startup_room: None,
+        }
+    }
+
+    /// Run the application, optionally auto-connecting to `server` and
+    /// auto-joining `room` on startup (native CLI args; `None` on the web).
+    pub async fn run(server: Option<String>, room: Option<String>) {
+        let event_loop = EventLoop::new().expect("Failed to create event loop");
+        let mut app = App::new();
+        app.startup_server = server;
+        app.startup_room = room;
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            use winit::platform::web::EventLoopExtWebSys;
+            event_loop.spawn_app(app);
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut app = app;
+            event_loop.run_app(&mut app).expect("Event loop error");
+        }
+    }
+
+    /// Finish initialization after surface is created.
+    fn finish_init(&mut self, window: Arc<Window>, surface: RenderSurface<'static>) {
+        let render_cx = self
+            .render_cx
+            .as_ref()
+            .expect("RenderContext not initialized");
+        let device = &render_cx.devices[surface.dev_id].device;
+
+        let vello_renderer = vello::Renderer::new(
+            device,
+            RendererOptions {
+                antialiasing_support: vello::AaSupport::area_only(),
+                ..Default::default()
+            },
+        )
+        .expect("Failed to create Vello renderer");
+
+        // Create texture blitter for RGBA->surface format conversion
+        // This is needed because Vello renders to Rgba8Unorm (for compute shader compatibility)
+        // but the surface format on WebGPU is typically Bgra8Unorm
+        let texture_blitter = vello::wgpu::util::TextureBlitter::new(device, surface.config.format);
+
+        // Initialize egui. Noto Sans is added to the UI fallback stack so
+        // Unicode superscripts/subscripts typed by text expanders render cleanly.
+        let egui_ctx = egui::Context::default();
+        {
+            let mut fonts = egui::FontDefinitions::default();
+            fonts.font_data.insert(
+                "math_symbols".into(),
+                egui::FontData::from_static(include_bytes!(
+                    "../../drafftink-render/assets/rex-xits.otf"
+                ))
+                .into(),
+            );
+            fonts.font_data.insert(
+                "math_gelpen".into(),
+                egui::FontData::from_static(include_bytes!(
+                    "../../drafftink-render/assets/GelPen.ttf"
+                ))
+                .into(),
+            );
+            fonts.families.insert(
+                egui::FontFamily::Name("math_gelpen".into()),
+                vec!["math_gelpen".into(), "math_symbols".into()],
+            );
+
+            fonts.font_data.insert(
+                "DrafftInk Noto Sans".to_string(),
+                egui::FontData::from_static(include_bytes!(
+                    "../../drafftink-render/assets/NotoSans-Regular.ttf"
+                ))
+                .into(),
+            );
+            fonts
+                .families
+                .entry(egui::FontFamily::Proportional)
+                .or_default()
+                .insert(0, "DrafftInk Noto Sans".to_string());
+            egui_ctx.set_fonts(fonts);
+        }
+        let egui_state = egui_winit::State::new(
+            egui_ctx.clone(),
+            egui::ViewportId::ROOT,
+            &window,
+            Some(window.scale_factor() as f32),
+            None,
+            None,
+        );
+        let egui_renderer = egui_wgpu::Renderer::new(
+            device,
+            surface.config.format,
+            egui_wgpu::RendererOptions::default(),
+        );
+
+        let mut canvas = Canvas::new();
+        canvas.set_viewport_size(surface.config.width as f64, surface.config.height as f64);
+
+        // Load intro as default for native (WASM handles this in load_document_async)
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            static INTRO_JSON: &str = include_str!("../assets/intro.json");
+            if let Ok(doc) = drafftink_core::canvas::CanvasDocument::from_json(INTRO_JSON) {
+                canvas.document = doc;
+            }
+        }
+
+        log::info!(
+            "DrafftInk initialized - {}x{}",
+            surface.config.width,
+            surface.config.height
+        );
+        log::info!(
+            "Keyboard shortcuts: V=Select, H=Pan, R=Rectangle, E=Ellipse, L=Line, A=Arrow, P=Pen"
+        );
+
+        self.state = Some(AppState {
+            window: window.clone(),
+            surface,
+            vello_renderer,
+            render_target: None,
+            render_target_allocations: 0,
+            shape_renderer: VelloRenderer::new(),
+            texture_blitter,
+            egui_ctx,
+            egui_state,
+            egui_renderer,
+            ui_state: UiState::default(),
+            ui_keyboard_pending: false,
+            pending_png_save: None,
+            last_png_signature: 0,
+            png_save_requests: 0,
+            canvas,
+            tabs: vec![TabState {
+                name: "Canvas".to_string(),
+                document: drafftink_core::canvas::CanvasDocument::new(),
+                camera: drafftink_core::Camera::new(),
+            }],
+            active_tab: 0,
+            input: InputState::new(),
+            config: self.config.clone(),
+            temporary_pan_tool: None,
+            event_handler: EventHandler::new(),
+            text_edit_state: None,
+            collab: CollaborationManager::new(),
+            websocket: None,
+            remote_peers: std::collections::HashMap::new(),
+            #[cfg(target_arch = "wasm32")]
+            pending_local_font_targets: Default::default(),
+            #[cfg(target_arch = "wasm32")]
+            last_autosave: web_time::Instant::now(),
+            #[cfg(target_arch = "wasm32")]
+            last_doc_version: 0,
+            needs_redraw: true,
+            last_redraw: FrameInstant::now(),
+        });
+
+        #[cfg(target_arch = "wasm32")]
+        if let Some(state) = self.state.as_ref() {
+            setup_browser_repaint(&state.window, &state.egui_ctx);
+            if let (Some(family), Some(ps)) = (
+                &state.ui_state.settings.default_math_font.custom,
+                &state.ui_state.settings.default_math_font.postscript,
+            ) {
+                file_ops::restore_local_font_async(family.clone(), ps.clone());
+            }
+            #[cfg(target_arch = "wasm32")]
+            file_ops::query_local_fonts_async();
+            let ps = state.ui_state.current_text_postscript.clone();
+            if !ps.is_empty() {
+                file_ops::restore_local_font_async(
+                    state
+                        .ui_state
+                        .current_text_font
+                        .custom
+                        .clone()
+                        .unwrap_or_default(),
+                    ps.clone(),
+                );
+            }
+            if ps != "GoogleSans-Medium" {
+                file_ops::restore_local_font_async(
+                    "Google Sans".into(),
+                    "GoogleSans-Medium".into(),
+                );
+            }
+        }
+
+        self.pending_window = None;
+
+        // Try to restore last saved document on WASM
+        #[cfg(target_arch = "wasm32")]
+        {
+            if let Some(ref state) = self.state {
+                file_ops::try_load_last_document(&state.ui_state.settings);
+            }
+        }
+
+        // Setup drag-drop handlers on WASM
+        #[cfg(target_arch = "wasm32")]
+        if let Some(ref state) = self.state {
+            let vw = state.canvas.viewport_size.width;
+            let vh = state.canvas.viewport_size.height;
+            let cox = state.canvas.camera.offset.x;
+            let coy = state.canvas.camera.offset.y;
+            let cz = state.canvas.camera.zoom;
+            file_ops::setup_drag_drop_handlers(vw, vh, cox, coy, cz);
+        }
+
+        // Auto-join room from URL if specified (WASM only)
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.try_auto_join_room();
+        }
+
+        // Pre-populate collaboration fields from startup CLI args (native only).
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(state) = self.state.as_mut() {
+            if let Some(server) = self.startup_server.as_ref() {
+                state.ui_state.server_url = server.clone();
+            }
+            if let Some(room) = self.startup_room.as_ref() {
+                state.ui_state.room_input = room.clone();
+            }
+        }
+
+        // Auto-connect (and optionally join a room) from startup args (native only).
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.startup_server.is_some() {
+            self.try_auto_join_room_native();
+        }
+
+        // Request initial redraw
+        window.request_redraw();
+    }
+
+    /// Auto-connect to the startup server and queue a room join, driven by
+    /// native CLI args (`--server`/`--room`). Mirrors the WASM URL-param path.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn try_auto_join_room_native(&mut self) {
+        use drafftink_core::sync::ConnectionState;
+
+        let Some(server_url) = self.startup_server.clone() else {
+            return;
+        };
+        let room = self.startup_room.clone();
+        let Some(state) = self.state.as_mut() else {
+            return;
+        };
+
+        log::info!("Auto-connecting to {}", server_url);
+        let mut ws = drafftink_core::sync::NativeWebSocket::new();
+        match ws.connect(&server_url) {
+            Ok(()) => {
+                log::info!("WebSocket connecting to {}", server_url);
+                state.websocket = Some(ws);
+                state.ui_state.connection_state = ConnectionState::Connecting;
+                if let Some(room) = room {
+                    log::info!("Queuing auto-join for room '{}'", room);
+                    state.collab.join_room(&room);
+                }
+            }
+            Err(e) => {
+                log::error!("WebSocket connect failed: {}", e);
+                state.ui_state.connection_state = ConnectionState::Error;
+            }
+        }
+    }
+
+    /// Try to auto-join a room from URL parameters (WASM only).
+    #[cfg(target_arch = "wasm32")]
+    fn try_auto_join_room(&mut self) {
+        use crate::web::{get_server_url, get_url_params};
+        use drafftink_core::sync::ConnectionState;
+
+        let params = get_url_params();
+
+        let room = match params.room {
+            Some(r) => r,
+            None => return,
+        };
+
+        let state = match self.state.as_mut() {
+            Some(s) => s,
+            None => return,
+        };
+
+        // Get server URL from params or origin
+        let server_url = get_server_url(params.server.as_deref())
+            .unwrap_or_else(|| state.ui_state.server_url.clone());
+
+        log::info!("Auto-joining room '{}' via {}", room, server_url);
+
+        // Update UI state
+        state.ui_state.server_url = server_url.clone();
+        state.ui_state.room_input = room.clone();
+
+        // Connect to WebSocket
+        let mut ws = drafftink_core::sync::WasmWebSocket::new();
+        match ws.connect(&server_url) {
+            Ok(()) => {
+                log::info!("WebSocket connecting to {}", server_url);
+                state.websocket = Some(ws);
+                state.ui_state.connection_state = ConnectionState::Connecting;
+
+                // Queue the join request (will be sent once connected)
+                state.collab.join_room(&room);
+            }
+            Err(e) => {
+                log::error!("WebSocket connect failed: {}", e);
+                state.ui_state.connection_state = ConnectionState::Error;
+            }
+        }
+    }
+}
+
+impl Default for App {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ApplicationHandler for App {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.state.is_some() || self.pending_window.is_some() {
+            return;
+        }
+
+        log::info!("Creating window...");
+
+        // Create window attributes - native gets fixed size, WASM will use viewport
+        #[cfg(not(target_arch = "wasm32"))]
+        let window_attrs = Window::default_attributes()
+            .with_title(&self.config.title)
+            .with_inner_size(LogicalSize::new(self.config.width, self.config.height));
+
+        // On WASM, attach canvas to DOM and use full viewport
+        #[cfg(target_arch = "wasm32")]
+        let window_attrs = {
+            use wasm_bindgen::JsCast;
+            use winit::platform::web::WindowAttributesExtWebSys;
+
+            let web_window = web_sys::window().expect("No window");
+            let document = web_window.document().expect("No document");
+
+            // Get actual viewport dimensions
+            let viewport_width = web_window
+                .inner_width()
+                .ok()
+                .and_then(|v| v.as_f64())
+                .unwrap_or(self.config.width as f64);
+            let viewport_height = web_window
+                .inner_height()
+                .ok()
+                .and_then(|v| v.as_f64())
+                .unwrap_or(self.config.height as f64);
+
+            // Create canvas
+            let canvas = document
+                .get_element_by_id("drafftink-canvas")
+                .and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok())
+                .or_else(|| {
+                    let app_div = document.get_element_by_id("app")?;
+                    let canvas = document.create_element("canvas").ok()?;
+                    canvas.set_id("drafftink-canvas");
+                    app_div.append_child(&canvas).ok()?;
+                    canvas.dyn_into::<web_sys::HtmlCanvasElement>().ok()
+                })
+                .expect("Failed to create canvas");
+
+            // Set canvas to fill viewport with actual pixel dimensions
+            // Account for device pixel ratio for sharp rendering
+            let dpr = web_window.device_pixel_ratio();
+            let physical_width = (viewport_width * dpr) as u32;
+            let physical_height = (viewport_height * dpr) as u32;
+
+            canvas.set_width(physical_width);
+            canvas.set_height(physical_height);
+            let style = canvas.style();
+            let _ = style.set_property("width", "100%");
+            let _ = style.set_property("height", "100%");
+            let _ = style.set_property("display", "block");
+            let _ = style.set_property("position", "fixed");
+            let _ = style.set_property("top", "0");
+            let _ = style.set_property("left", "0");
+
+            log::info!(
+                "Canvas created: {}x{} (physical: {}x{}, dpr: {})",
+                viewport_width,
+                viewport_height,
+                physical_width,
+                physical_height,
+                dpr
+            );
+
+            // Use viewport size for window, not fixed config size
+            Window::default_attributes()
+                .with_title(&self.config.title)
+                .with_canvas(Some(canvas))
+        };
+
+        let window = Arc::new(
+            event_loop
+                .create_window(window_attrs)
+                .expect("Failed to create window"),
+        );
+
+        log::info!("Window created, initializing renderer...");
+
+        let size = window.inner_size();
+        let (width, height) = if size.width == 0 || size.height == 0 {
+            (self.config.width, self.config.height)
+        } else {
+            (size.width, size.height)
+        };
+
+        log::info!("Surface size: {}x{}", width, height);
+
+        // On native, block on async surface creation
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let render_cx = self
+                .render_cx
+                .get_or_insert_with(vello::util::RenderContext::new);
+
+            let surface = pollster::block_on(render_cx.create_surface(
+                window.clone(),
+                width,
+                height,
+                PresentMode::AutoVsync,
+            ))
+            .expect("Failed to create surface");
+
+            // Transmute lifetime to 'static - safe because App owns everything
+            let surface: RenderSurface<'static> = unsafe { std::mem::transmute(surface) };
+            self.finish_init(window, surface);
+        }
+
+        // On WASM, store window for later async initialization
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.pending_window = Some(window);
+        }
+    }
+
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        _window_id: WindowId,
+        event: WindowEvent,
+    ) {
+        // On WASM, handle async initialization
+        #[cfg(target_arch = "wasm32")]
+        if self.state.is_none() {
+            if let Some(window) = self.pending_window.clone() {
+                if !self.init_in_progress.get() {
+                    self.init_in_progress.set(true);
+
+                    // Get actual viewport size from browser
+                    let web_window = web_sys::window().expect("No window");
+                    let dpr = web_window.device_pixel_ratio();
+                    let viewport_width = web_window
+                        .inner_width()
+                        .ok()
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(self.config.width as f64);
+                    let viewport_height = web_window
+                        .inner_height()
+                        .ok()
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(self.config.height as f64);
+
+                    let width = (viewport_width * dpr) as u32;
+                    let height = (viewport_height * dpr) as u32;
+
+                    // Get raw pointer to self for async callback
+                    let self_ptr = self as *mut Self;
+                    let window_clone = window.clone();
+
+                    wasm_bindgen_futures::spawn_local(async move {
+                        log::info!("Creating surface asynchronously...");
+
+                        // Create a new RenderContext for the async operation
+                        let mut render_cx = vello::util::RenderContext::new();
+
+                        match render_cx
+                            .create_surface(
+                                window_clone.clone(),
+                                width,
+                                height,
+                                PresentMode::AutoVsync,
+                            )
+                            .await
+                        {
+                            Ok(surface) => {
+                                log::info!("Surface created successfully");
+
+                                // Transmute lifetime to 'static
+                                let surface: RenderSurface<'static> =
+                                    unsafe { std::mem::transmute(surface) };
+
+                                // SAFETY: We're on the same thread (WASM is single-threaded)
+                                // and the App is kept alive by the event loop
+                                let app = unsafe { &mut *self_ptr };
+                                app.render_cx = Some(render_cx);
+                                app.finish_init(window_clone, surface);
+                            }
+                            Err(e) => {
+                                log::error!("Failed to create surface: {:?}", e);
+                                let app = unsafe { &mut *self_ptr };
+                                app.init_in_progress.set(false);
+                            }
+                        }
+                    });
+                }
+
+                // Request redraw to keep the event loop running
+                window.request_redraw();
+            }
+            return;
+        }
+
+        let Some(state) = &mut self.state else {
+            return;
+        };
+
+        // Process input events through WinitInputHelper
+        state.input.process_window_event(&event);
+        state.event_handler.text_font = state.ui_state.current_text_font.clone();
+        if let WindowEvent::KeyboardInput { event, .. } = &event {
+            if event.state == ElementState::Pressed && !event.repeat {
+                if state.input.ctrl()
+                    && matches!(&event.logical_key, Key::Character(c) if c.eq_ignore_ascii_case("p"))
+                {
+                    state.ui_state.presentation_mode = !state.ui_state.presentation_mode;
+                    state.needs_redraw = true;
+                    state.window.request_redraw();
+                    return;
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                if matches!(event.logical_key, Key::Named(NamedKey::F11)) {
+                    use winit::window::Fullscreen;
+                    let fullscreen = state
+                        .window
+                        .fullscreen()
+                        .is_none()
+                        .then(|| Fullscreen::Borderless(None));
+                    state.window.set_fullscreen(fullscreen);
+                    return;
+                }
+            }
+        }
+
+        if let WindowEvent::KeyboardInput { event, .. } = &event {
+            // French layouts expose ^ as a dead key. When the inline math
+            // editor has focus, translate it explicitly into the structured
+            // exponent marker. Ctrl+ArrowUp / Ctrl+ArrowDown are layout-
+            // independent exponent/subscript shortcuts.
+            if event.state == ElementState::Pressed
+                && (state.ui_state.math_editor.is_some()
+                    || state.ui_state.inline_formula_draft.is_some()
+                    || state.ui_state.text_command_editor.is_some())
+            {
+                let math_marker = match &event.logical_key {
+                    Key::Dead(Some('^')) => Some('^'),
+                    Key::Dead(None)
+                        if matches!(
+                            event.physical_key,
+                            PhysicalKey::Code(KeyCode::BracketLeft)
+                        ) =>
+                    {
+                        Some('^')
+                    }
+                    Key::Character(c) if c == "^" => Some('^'),
+                    _ if state.input.ctrl()
+                        && !state.input.alt()
+                        && matches!(event.physical_key, PhysicalKey::Code(KeyCode::ArrowUp)) =>
+                    {
+                        Some('^')
+                    }
+                    _ if state.input.ctrl()
+                        && !state.input.alt()
+                        && matches!(event.physical_key, PhysicalKey::Code(KeyCode::ArrowDown)) =>
+                    {
+                        Some('_')
+                    }
+                    _ if state.input.ctrl()
+                        && !state.input.alt()
+                        && state.input.shift()
+                        && matches!(event.physical_key, PhysicalKey::Code(KeyCode::Equal)) =>
+                    {
+                        Some('^')
+                    }
+                    _ if state.input.ctrl()
+                        && !state.input.alt()
+                        && matches!(event.physical_key, PhysicalKey::Code(KeyCode::Equal)) =>
+                    {
+                        Some('_')
+                    }
+                    _ => None,
+                };
+
+                if state.ui_state.math_dead_caret {
+                    if let Some(text) = event.text.as_ref().filter(|text| !text.is_empty()) {
+                        state.ui_state.math_dead_caret = false;
+                        let text = crate::math_input::dead_caret_text(text);
+                        if !text.is_empty() {
+                            state
+                                .egui_state
+                                .egui_input_mut()
+                                .events
+                                .push(egui::Event::Text(text));
+                        }
+                        state.needs_redraw = true;
+                        state.window.request_redraw();
+                        return;
+                    }
+                }
+                if let Some(marker) = math_marker {
+                    state.ui_state.math_dead_caret = matches!(event.logical_key, Key::Dead(_));
+                    state
+                        .egui_state
+                        .egui_input_mut()
+                        .events
+                        .push(egui::Event::Text(marker.to_string()));
+                    state.needs_redraw = true;
+                    state.window.request_redraw();
+                    return;
+                }
+            }
+        }
+
+        if let WindowEvent::KeyboardInput { event, .. } = &event {
+            if event.state == ElementState::Pressed
+                && !event.repeat
+                && state.input.ctrl()
+                && matches!(&event.logical_key,Key::Character(c) if c.eq_ignore_ascii_case("s"))
+            {
+                if state.input.shift() {
+                    file_ops::save_document(&state.canvas.document, &state.canvas.document.name);
+                } else {
+                    state.pending_png_save = Some(false);
+                }
+                state.needs_redraw = true;
+                state.window.request_redraw();
+                return;
+            }
+        }
+
+        // Egui-winit has no system clipboard backend on WASM. Route the
+        // browser clipboard through TextEdit so selection/caret are respected.
+        #[cfg(target_arch = "wasm32")]
+        if let WindowEvent::KeyboardInput { event, .. } = &event {
+            if event.state == ElementState::Pressed
+                && !event.repeat
+                && state.input.ctrl()
+                && !state.input.alt()
+                && (state.ui_state.math_editor.is_some()
+                    || state.ui_state.text_command_editor.is_some()
+                    || state.ui_state.inline_formula_draft.is_some())
+            {
+                if let Key::Character(key) = &event.logical_key {
+                    let action = match key.to_ascii_lowercase().as_str() {
+                        "c" => Some(egui::Event::Copy),
+                        "x" => Some(egui::Event::Cut),
+                        "v" => {
+                            file_ops::request_clipboard_text_for_math();
+                            None
+                        }
+                        _ => None,
+                    };
+                    if matches!(key.to_ascii_lowercase().as_str(), "c" | "x" | "v") {
+                        if let Some(action) = action {
+                            state.egui_state.egui_input_mut().events.push(action);
+                        }
+                        state.needs_redraw = true;
+                        state.window.request_redraw();
+                        return;
+                    }
+                }
+            }
+        }
+        // A marquee started on the canvas owns motion and release, even over
+        // floating panels. Keep egui's pointer at the canvas press position
+        // until release so crossing a menu cannot activate or drag a control.
+        let canvas_selection_pointer = state.event_handler.is_selecting()
+            && matches!(
+                &event,
+                WindowEvent::CursorMoved { .. }
+                    | WindowEvent::MouseInput {
+                        state: ElementState::Released,
+                        button: MouseButton::Left,
+                        ..
+                    }
+            );
+        let egui_consumed = if !canvas_selection_pointer
+            || matches!(
+                &event,
+                WindowEvent::MouseInput {
+                    state: ElementState::Released,
+                    ..
+                }
+            ) {
+            state
+                .egui_state
+                .on_window_event(&state.window, &event)
+                .consumed
+        } else {
+            false
+        };
+
+        // If egui wants this event exclusively, don't process it for canvas
+        // Check both: if egui consumed the event OR if the pointer is over an egui area
+        let pointer = state.input.mouse_position();
+        let scale = state.egui_ctx.pixels_per_point();
+        let pointer_over_ui = state
+            .egui_ctx
+            .layer_id_at(egui::Pos2::new(
+                pointer.x as f32 / scale,
+                pointer.y as f32 / scale,
+            ))
+            .is_some_and(|layer| layer.order != egui::Order::Background);
+        if matches!(
+            event,
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                ..
+            }
+        ) && pointer_over_ui
+        {
+            state.ui_keyboard_pending = true;
+        }
+        let returning_to_text = matches!(
+            &event,
+            WindowEvent::KeyboardInput { .. } | WindowEvent::Ime(_)
+        ) && state.text_edit_state.is_some()
+            && state.ui_state.text_command_editor.is_none()
+            && !state.ui_keyboard_pending
+            && state.egui_ctx.memory(|m| m.focused().is_none());
+        let egui_wants_input = !canvas_selection_pointer
+            && !returning_to_text
+            && (egui_consumed
+                || match &event {
+                    WindowEvent::KeyboardInput { .. } | WindowEvent::Ime(_) => {
+                        state.ui_keyboard_pending || state.egui_ctx.wants_keyboard_input()
+                    }
+                    _ => pointer_over_ui || state.egui_ctx.wants_pointer_input(),
+                });
+
+        match event {
+            WindowEvent::CloseRequested => {
+                event_loop.exit();
+            }
+
+            WindowEvent::Resized(size) => {
+                if size.width == 0 || size.height == 0 {
+                    return;
+                }
+
+                state
+                    .canvas
+                    .set_viewport_size(size.width as f64, size.height as f64);
+
+                if let Some(render_cx) = self.render_cx.as_mut() {
+                    render_cx.resize_surface(&mut state.surface, size.width, size.height);
+                }
+
+                state.needs_redraw = true;
+                state.window.request_redraw();
+            }
+
+            WindowEvent::RedrawRequested => {
+                // Update laser trail (fade out)
+                let elapsed = state.last_redraw.elapsed().as_secs_f64();
+                state.last_redraw = FrameInstant::now();
+                let edge_panning = auto_pan_drag(state, elapsed.min(0.05));
+                state.event_handler.update_laser_trail(elapsed);
+
+                // Check for pending document from async file load
+                if let Some(doc) = file_ops::take_pending_document() {
+                    let restored_name = doc.name.clone();
+                    state.canvas.document = doc;
+                    state.tabs[state.active_tab].name = if restored_name.trim().is_empty() {
+                        "Canvas".to_string()
+                    } else {
+                        restored_name
+                    };
+                    state.tabs[state.active_tab].document = state.canvas.document.persisted_copy();
+                    state.canvas.clear_selection();
+                    #[cfg(target_arch = "wasm32")]
+                    if let (Some(family), Some(ps)) = (
+                        &state.ui_state.settings.default_math_font.custom,
+                        &state.ui_state.settings.default_math_font.postscript,
+                    ) {
+                        file_ops::restore_local_font_async(family.clone(), ps.clone());
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    file_ops::query_local_fonts_async();
+                    state.needs_redraw = true;
+                }
+
+                // Check for a pending Excalidraw library loaded into a new tab.
+                if let Some((name, document)) = file_ops::take_pending_library() {
+                    add_tab(state, name, document);
+                }
+
+                // Check for pending document list (WASM)
+                #[cfg(target_arch = "wasm32")]
+                if let Some(docs) = file_ops::take_pending_document_list() {
+                    state.ui_state.recent_documents = docs;
+                }
+
+                #[cfg(target_arch = "wasm32")]
+                if let Some((name, json)) = file_ops::take_pending_intro_json() {
+                    state.ui_state.settings.intro_name = name;
+                    state.ui_state.settings.intro_json = json;
+                    crate::settings::save_settings(&state.ui_state.settings);
+                }
+
+                #[cfg(target_arch = "wasm32")]
+                if let Some(folder_name) = file_ops::take_pending_export_folder() {
+                    state.ui_state.settings.export_folder_name = folder_name;
+                    crate::settings::save_settings(&state.ui_state.settings);
+                }
+
+                #[cfg(target_arch = "wasm32")]
+                if let Some(fonts) = file_ops::take_pending_local_fonts() {
+                    state.ui_state.local_fonts = fonts;
+                    state.ui_state.local_fonts_loading = false;
+                    let ps = state.ui_state.current_text_postscript.clone();
+                    if !ps.is_empty() {
+                        file_ops::restore_local_font_async(
+                            state
+                                .ui_state
+                                .current_text_font
+                                .custom
+                                .clone()
+                                .unwrap_or_default(),
+                            ps.clone(),
+                        );
+                    }
+                    if ps != "GoogleSans-Medium" {
+                        file_ops::restore_local_font_async(
+                            "Google Sans".into(),
+                            "GoogleSans-Medium".into(),
+                        );
+                    }
+                    fn used_fonts(
+                        shape: &Shape,
+                        fonts: &[(String, String)],
+                        result: &mut std::collections::HashSet<(String, String)>,
+                    ) {
+                        match shape {
+                            Shape::Text(text) => {
+                                if let Some(family) = text.custom_font.as_ref() {
+                                    if let Some(ps) = text.custom_font_postscript.as_ref() {
+                                        result.insert((family.clone(), ps.clone()));
+                                    } else if let Some((_, ps)) =
+                                        fonts.iter().find(|(name, _)| name == family)
+                                    {
+                                        result.insert((family.clone(), ps.clone()));
+                                    }
+                                }
+                            }
+                            Shape::Math(math) => {
+                                if let Some(family) = &math.font.custom {
+                                    if let Some(ps) = &math.font.postscript {
+                                        result.insert((family.clone(), ps.clone()));
+                                    } else if let Some((_, ps)) =
+                                        fonts.iter().find(|(name, _)| name == family)
+                                    {
+                                        result.insert((family.clone(), ps.clone()));
+                                    }
+                                }
+                            }
+                            Shape::Group(group) => {
+                                for child in group.children() {
+                                    used_fonts(child, fonts, result);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    let mut restore = std::collections::HashSet::new();
+                    for doc in std::iter::once(&state.canvas.document)
+                        .chain(state.tabs.iter().map(|tab| &tab.document))
+                    {
+                        for shape in doc.shapes_ordered() {
+                            used_fonts(shape, &state.ui_state.local_fonts, &mut restore);
+                        }
+                    }
+                    for (family, ps) in restore {
+                        file_ops::restore_local_font_async(family, ps);
+                    }
+                    state.needs_redraw = true;
+                }
+
+                #[cfg(target_arch = "wasm32")]
+                while let Some((family, postscript, bytes)) =
+                    file_ops::take_pending_local_font_bytes()
+                {
+                    if postscript == "GoogleSans-Medium" && !state.ui_state.math_input_font_ready {
+                        let mut fonts = egui::FontDefinitions::default();
+                        fonts.font_data.insert(
+                            "math_symbols".into(),
+                            egui::FontData::from_static(include_bytes!(
+                                "../../drafftink-render/assets/rex-xits.otf"
+                            ))
+                            .into(),
+                        );
+                        fonts.font_data.insert(
+                            "math_gelpen".into(),
+                            egui::FontData::from_static(include_bytes!(
+                                "../../drafftink-render/assets/GelPen.ttf"
+                            ))
+                            .into(),
+                        );
+                        fonts.families.insert(
+                            egui::FontFamily::Name("math_gelpen".into()),
+                            vec!["math_gelpen".into(), "math_symbols".into()],
+                        );
+
+                        fonts.font_data.insert(
+                            "noto_sans".into(),
+                            egui::FontData::from_static(include_bytes!(
+                                "../../drafftink-render/assets/NotoSans-Regular.ttf"
+                            ))
+                            .into(),
+                        );
+                        fonts
+                            .families
+                            .entry(egui::FontFamily::Proportional)
+                            .or_default()
+                            .insert(0, "noto_sans".into());
+                        fonts.font_data.insert(
+                            "math_medium".into(),
+                            egui::FontData::from_owned(bytes.clone()).into(),
+                        );
+                        fonts.families.insert(
+                            egui::FontFamily::Name("math_medium".into()),
+                            vec!["math_medium".into(), "noto_sans".into()],
+                        );
+                        state.egui_ctx.set_fonts(fonts);
+                        state.ui_state.math_input_font_ready = true;
+                    }
+                    let canonical =
+                        state
+                            .shape_renderer
+                            .register_custom_font(&family, &postscript, bytes);
+                    if state.ui_state.current_text_postscript == postscript {
+                        state.ui_state.current_text_font.custom = Some(canonical.clone());
+                    }
+                    let targets = state
+                        .pending_local_font_targets
+                        .remove(&postscript)
+                        .unwrap_or_default();
+                    for (doc_id, id) in targets {
+                        let doc = if state.canvas.document.id == doc_id {
+                            Some(&mut state.canvas.document)
+                        } else {
+                            state
+                                .tabs
+                                .iter_mut()
+                                .find(|tab| tab.document.id == doc_id)
+                                .map(|tab| &mut tab.document)
+                        };
+                        if let Some(Shape::Text(text)) = doc.and_then(|doc| doc.get_shape_mut(id)) {
+                            text.custom_font = Some(canonical.clone());
+                            text.custom_font_postscript = Some(postscript.clone());
+                            text.invalidate_cache();
+                        }
+                    }
+                    state.ui_state.font_error.clear();
+                    state.needs_redraw = true;
+                }
+                #[cfg(target_arch = "wasm32")]
+                if let Some(error) = file_ops::take_font_error() {
+                    state.ui_state.font_error = error;
+                    state.needs_redraw = true;
+                }
+
+                // Check for pending pasted image (WASM)
+                #[cfg(target_arch = "wasm32")]
+                if let Some(image_shape) = file_ops::take_pending_image() {
+                    state.canvas.document.push_undo();
+                    state.canvas.clear_selection();
+                    let new_id = image_shape.id();
+                    state.canvas.document.add_shape(image_shape.clone());
+                    state.canvas.add_to_selection(new_id);
+                    if state.collab.is_in_room() {
+                        let _ = state.collab.crdt_mut().add_shape(&image_shape);
+                    }
+                    state.needs_redraw = true;
+                }
+
+                // Check for pending imported shapes from clipboard text
+                // (Excalidraw or Mermaid) resolved by the async WASM reader.
+                #[cfg(target_arch = "wasm32")]
+                if let Some((shapes, cursor_world)) = file_ops::take_pending_excalidraw_shapes() {
+                    place_shapes_centered_at(
+                        &mut state.canvas,
+                        &mut state.collab,
+                        shapes,
+                        cursor_world,
+                    );
+                    log::info!("Imported shapes from clipboard text");
+                    state.needs_redraw = true;
+                }
+
+                // Check for pending dropped images (WASM)
+                #[cfg(target_arch = "wasm32")]
+                for image_shape in file_ops::take_pending_dropped_images() {
+                    state.canvas.document.push_undo();
+                    state.canvas.clear_selection();
+                    let new_id = image_shape.id();
+                    state.canvas.document.add_shape(image_shape.clone());
+                    state.canvas.add_to_selection(new_id);
+                    if state.collab.is_in_room() {
+                        let _ = state.collab.crdt_mut().add_shape(&image_shape);
+                    }
+                    state.needs_redraw = true;
+                }
+
+                // Check for pending dropped document (PNG with embedded scene)
+                #[cfg(target_arch = "wasm32")]
+                if let Some(json) = file_ops::take_pending_dropped_document() {
+                    use drafftink_core::canvas::CanvasDocument;
+                    match CanvasDocument::from_json(&json) {
+                        Ok(doc) => {
+                            log::info!("Loaded document from dropped PNG");
+                            state.canvas.document = doc;
+                            state.canvas.clear_selection();
+                            state.canvas.camera.reset();
+                            state.needs_redraw = true;
+                        }
+                        Err(e) => log::error!("Failed to parse embedded document: {}", e),
+                    }
+                }
+
+                // Check for pending clipboard text paste (WASM async)
+                #[cfg(target_arch = "wasm32")]
+                if let Some(clipboard_text) = file_ops::take_pending_clipboard_text() {
+                    if let Some(text_id) = state.event_handler.editing_text {
+                        if let Some(edit_state) = &mut state.text_edit_state {
+                            // Capture state before paste
+                            let old_text = edit_state.text();
+
+                            let (font_cx, layout_cx) = state.shape_renderer.contexts_mut();
+                            let _ = edit_state.handle_key(
+                                TextKey::Paste(clipboard_text),
+                                TextModifiers::default(),
+                                font_cx,
+                                layout_cx,
+                            );
+                            let new_text = edit_state.text();
+                            if let Some(Shape::Text(text)) =
+                                state.canvas.document.get_shape_mut(text_id)
+                            {
+                                text.content = new_text;
+                                text.sync_spans_after_edit(&old_text);
+                                text.set_inserted_script(&old_text, edit_state.script_value());
+                            }
+                        }
+                    }
+                }
+
+                // Check for pending math clipboard paste (WASM async)
+                #[cfg(target_arch = "wasm32")]
+                if let Some(clipboard_text) = file_ops::take_pending_math_clipboard() {
+                    if state.ui_state.math_editor.is_some()
+                        || state.ui_state.text_command_editor.is_some()
+                        || state.ui_state.inline_formula_draft.is_some()
+                    {
+                        state
+                            .egui_state
+                            .egui_input_mut()
+                            .events
+                            .push(egui::Event::Paste(clipboard_text));
+                    }
+                }
+
+                // Poll WebSocket events
+                if let Some(ref mut ws) = state.websocket {
+                    let events = ws.poll_events();
+                    state.ui_state.connection_state = ws.state();
+
+                    for event in events {
+                        match event {
+                            SyncEvent::Connected => {
+                                log::info!("WebSocket connected");
+                                state.collab.enable();
+                            }
+                            SyncEvent::Disconnected => {
+                                log::info!("WebSocket disconnected");
+                                state.collab.set_room(None);
+                                state.collab.disable();
+                                state.ui_state.current_room = None;
+                                state.ui_state.peer_count = 0;
+                                state.remote_peers.clear();
+                            }
+                            SyncEvent::JoinedRoom {
+                                room,
+                                peer_count,
+                                initial_sync,
+                            } => {
+                                log::info!("Joined room: {} ({} peers)", room, peer_count);
+                                state.ui_state.current_room = Some(room.clone());
+                                state.ui_state.peer_count = peer_count;
+
+                                // Update collaboration manager state
+                                state.collab.set_room(Some(room));
+
+                                // Import initial state if provided
+                                if let Some(data) = initial_sync {
+                                    if state.collab.import_updates(&data) {
+                                        state.collab.sync_from_crdt(&mut state.canvas.document);
+                                        log::info!("Imported initial sync data");
+                                    }
+                                }
+
+                                // Broadcast our current state
+                                state.collab.sync_to_crdt(&state.canvas.document);
+                                state.collab.broadcast_sync();
+                                for msg in state.collab.take_outgoing() {
+                                    let _ = ws.send(&msg);
+                                }
+                            }
+                            SyncEvent::PeerJoined { peer_id } => {
+                                log::info!("Peer joined: {}", peer_id);
+                                state.ui_state.peer_count += 1;
+                            }
+                            SyncEvent::PeerLeft { peer_id } => {
+                                log::info!("Peer left: {}", peer_id);
+                                state.ui_state.peer_count =
+                                    state.ui_state.peer_count.saturating_sub(1);
+                                state.remote_peers.remove(&peer_id);
+                            }
+                            SyncEvent::SyncReceived { from, data } => {
+                                log::debug!("Sync from {}: {} bytes", from, data.len());
+                                if state.collab.import_updates(&data) {
+                                    state.collab.sync_from_crdt(&mut state.canvas.document);
+                                    state.needs_redraw = true;
+                                }
+                            }
+                            SyncEvent::AwarenessReceived {
+                                from,
+                                peer_id: _,
+                                state: awareness,
+                            } => {
+                                state.remote_peers.insert(
+                                    from.clone(),
+                                    RemotePeer {
+                                        peer_id: from,
+                                        awareness,
+                                    },
+                                );
+                            }
+                            SyncEvent::Error { message } => {
+                                log::error!("Sync error: {}", message);
+                            }
+                        }
+                    }
+
+                    // Send any pending outgoing messages
+                    if state.collab.has_outgoing() {
+                        for msg in state.collab.take_outgoing() {
+                            let _ = ws.send(&msg);
+                        }
+                    }
+                }
+
+                // Sync UI state with canvas
+                state.ui_state.current_tool = state.canvas.tool_manager.current_tool;
+                state.ui_state.selection_count = state.canvas.selection.len();
+                state.ui_state.zoom_level = state.canvas.camera.zoom;
+                state.ui_state.grid_style = state.config.grid_style;
+
+                state.ui_state.math_editor_screen_pos = state
+                    .ui_state
+                    .math_editor
+                    .as_ref()
+                    .and_then(|editor| {
+                        let shape_id = editor.shape_id;
+                        state.canvas.document.get_shape(shape_id).and_then(|shape| match shape {
+                            Shape::Math(math) => {
+                                let p = if state.canvas.document.is_pinned(shape_id) {
+                                    math.position
+                                } else {
+                                    state.canvas.camera.world_to_screen(math.position)
+                                };
+                                Some(egui::Pos2::new(p.x as f32, p.y as f32))
+                            }
+                            _ => None,
+                        })
+                    });
+
+                // Update UI state from first selected shape's style
+                if let Some(&shape_id) = state.canvas.selection.first() {
+                    if let Some(shape) = state.canvas.document.get_shape(shape_id) {
+                        state.ui_state.update_from_style(shape.style());
+                        // Older line/arrow documents store their pattern on the
+                        // shape itself; mirror that into the shared outline picker.
+                        if shape.style().stroke_style == drafftink_core::shapes::StrokeStyle::Solid
+                        {
+                            match shape {
+                                Shape::Line(line) => {
+                                    state.ui_state.stroke_style = line.stroke_style
+                                }
+                                Shape::Arrow(arrow) => {
+                                    state.ui_state.stroke_style = arrow.stroke_style
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+
+                // Sync current style to tool manager for preview shapes.
+                // Geometric tools always start in Architect mode.
+                let mut tool_style = state.ui_state.to_shape_style();
+                // Highlighter strokes are stored as freehand paths with the
+                // highlighter's widened, 50%-alpha style. Do not feed that
+                // derived style back into the regular pen, even when a selected
+                // non-highlighter object comes first in a multi-selection.
+                if state.canvas.tool_manager.current_tool == ToolKind::Freehand
+                    && tool_style.stroke_color.a == 128
+                    && tool_style.stroke_width >= 12.0
+                {
+                    tool_style.stroke_width = 2.0;
+                    tool_style.stroke_color.a = 255;
+                }
+                if matches!(
+                    state.canvas.tool_manager.current_tool,
+                    ToolKind::Rectangle | ToolKind::Ellipse | ToolKind::Line | ToolKind::Arrow
+                ) {
+                    tool_style.sloppiness = drafftink_core::shapes::Sloppiness::Architect;
+                }
+                state.canvas.tool_manager.current_style = tool_style;
+                state.canvas.tool_manager.corner_radius = state.ui_state.corner_radius as f64;
+
+                // Get selected shape properties for the right panel
+                let selection_count = state.canvas.selection.len();
+                state.ui_state.selection_pinned = state.canvas.selection.first().is_some_and(|id| state.canvas.document.is_pinned(*id));
+                state.ui_state.pin_background = state.canvas.selection.first().and_then(|id| state.canvas.document.pinned_shapes.get(id))
+                    .map(|pin| egui::Color32::from_rgba_unmultiplied(pin.background.r, pin.background.g, pin.background.b, pin.background.a))
+                    .unwrap_or(egui::Color32::WHITE);
+                let mut selected_props = if selection_count >= 1 {
+                    let shape_id = state.canvas.selection[0];
+                    if let Some(shape) = state.canvas.document.get_shape(shape_id) {
+                        SelectedShapeProps::from_shape_with_count(shape, selection_count)
+                    } else {
+                        SelectedShapeProps::default()
+                    }
+                } else {
+                    SelectedShapeProps::default()
+                };
+
+                // If a drawing tool is active (not Select/Pan/Text), show the panel
+                // for setting properties of shapes that will be created
+                use drafftink_core::tools::ToolKind;
+                let current_tool = state.canvas.tool_manager.current_tool;
+                let is_drawing_tool = matches!(
+                    current_tool,
+                    ToolKind::Rectangle
+                        | ToolKind::Ellipse
+                        | ToolKind::Line
+                        | ToolKind::Arrow
+                        | ToolKind::Freehand
+                        | ToolKind::Highlighter
+                        | ToolKind::Text
+                );
+
+                if is_drawing_tool && !selected_props.has_selection {
+                    selected_props = SelectedShapeProps::for_tool(
+                        current_tool,
+                        &state.ui_state,
+                        state.canvas.tool_manager.calligraphy_mode,
+                        state.canvas.tool_manager.pressure_simulation,
+                    );
+                }
+
+                // Update peer info for presence panel
+                state.ui_state.peers = state
+                    .remote_peers
+                    .values()
+                    .map(|peer| {
+                        crate::ui::PeerInfo {
+                            peer_id: peer.peer_id.clone(),
+                            name: peer.awareness.user.as_ref().map(|u| u.name.clone()),
+                            color: peer
+                                .awareness
+                                .user
+                                .as_ref()
+                                .map(|u| u.color.clone())
+                                .unwrap_or_else(|| "#6366f1".to_string()), // Default indigo
+                            has_cursor: peer.awareness.cursor.is_some(),
+                        }
+                    })
+                    .collect();
+
+                // Configurable silent autosave to IndexedDB.
+                #[cfg(target_arch = "wasm32")]
+                {
+                    if state.ui_state.settings.autosave_enabled
+                        && state.last_autosave.elapsed().as_secs()
+                            >= state.ui_state.settings.autosave_interval_secs.max(1)
+                    {
+                        file_ops::autosave_document(&state.canvas.document);
+                        if state.pending_png_save.is_none() {
+                            state.pending_png_save = Some(true);
+                        }
+                        state.last_autosave = web_time::Instant::now();
+                    }
+                }
+
+                if let Some(Shape::Math(math)) = state
+                    .canvas
+                    .selection
+                    .first()
+                    .and_then(|id| state.canvas.document.get_shape(*id))
+                {
+                    state.ui_state.math_font = math.font.clone();
+                }
+                // Capture text selection state BEFORE egui processing
+                // (mouse events may clear it during egui run)
+                let text_selection_state: Option<(
+                    drafftink_core::shapes::ShapeId,
+                    std::ops::Range<usize>,
+                )> = if let (Some(text_id), Some(edit_state)) =
+                    (state.event_handler.editing_text, &state.text_edit_state)
+                {
+                    edit_state.selection_range().map(|r| (text_id, r))
+                } else {
+                    None
+                };
+
+                // Run egui and get any actions
+                let egui_input = state.egui_state.take_egui_input(&state.window);
+                // Browser canvas focus is not always accompanied by an initial
+                // Winit Focused event. Without this egui accepts typing but hides
+                // its caret. Read the actual document focus on the WASM target.
+                #[cfg(target_arch = "wasm32")]
+                let egui_input = {
+                    let mut input = egui_input;
+                    input.focused = web_sys::window()
+                        .and_then(|w| w.document())
+                        .and_then(|d| d.has_focus().ok())
+                        .unwrap_or(input.focused);
+                    input
+                };
+
+                // Sync the tab strip metadata for the UI to render.
+                state.ui_state.tab_names = state.tabs.iter().map(|t| t.name.clone()).collect();
+                state.ui_state.active_tab = state.active_tab;
+                let mut deferred_action: Option<UiAction> = None;
+                let mut tab_action: Option<UiAction> = None;
+                let mut ui_action_taken = false;
+                if let Some(editor) = state.ui_state.text_command_editor.as_ref() {
+                    position_text_command_panel(state, editor.text_id);
+                }
+                let frame_ctx = state.egui_ctx.clone();
+                let egui_output = frame_ctx.run(egui_input, |ctx| {
+                    if let Some(action) = render_ui(ctx, &mut state.ui_state, &selected_props) {
+                        ui_action_taken = true;
+                        match action.clone() {
+                            UiAction::SetGeometry(kind) => {
+                                finish_math_editor(state);
+                                state.ui_state.geometry = kind;
+                                state.canvas.tool_manager.geometry = kind;
+                                state.canvas.set_tool(ToolKind::Ellipse);
+                                state.ui_state.current_tool = ToolKind::Ellipse;
+                                state.ui_state.sloppiness =
+                                    drafftink_core::shapes::Sloppiness::Architect;
+                            }
+                            UiAction::SetTool(tool) => {
+                                finish_math_editor(state);
+                                state.ui_state.text_command_editor = None;
+                                if tool != ToolKind::Text {
+                                    if state.event_handler.editing_text.is_some() {
+                                        state.event_handler.exit_text_edit(&mut state.canvas);
+                                        state.text_edit_state = None;
+                                    }
+                                    let selected_text = state
+                                        .canvas
+                                        .selection
+                                        .first()
+                                        .and_then(|id| state.canvas.document.get_shape(*id))
+                                        .is_some_and(|shape| matches!(shape, Shape::Text(_)));
+                                    if selected_text {
+                                        state.canvas.clear_selection();
+                                    }
+                                } else {
+                                    let selected_non_text = state
+                                        .canvas
+                                        .selection
+                                        .first()
+                                        .and_then(|id| state.canvas.document.get_shape(*id))
+                                        .is_some_and(|shape| !matches!(shape, Shape::Text(_)));
+                                    if selected_non_text {
+                                        state.canvas.clear_selection();
+                                    }
+                                }
+
+                                let previous_tool = state.canvas.tool_manager.current_tool;
+                                state.canvas.set_tool(tool);
+                                state.ui_state.current_tool = tool;
+                                if tool == ToolKind::Freehand
+                                    && previous_tool == ToolKind::Highlighter
+                                {
+                                    state.ui_state.stroke_width = 2.0;
+                                    state.ui_state.stroke_color = egui::Color32::from_rgba_unmultiplied(
+                                        state.ui_state.stroke_color.r(),
+                                        state.ui_state.stroke_color.g(),
+                                        state.ui_state.stroke_color.b(),
+                                        255,
+                                    );
+                                    state.canvas.tool_manager.current_style =
+                                        state.ui_state.to_shape_style();
+                                }
+                                if matches!(
+                                    tool,
+                                    ToolKind::Rectangle
+                                        | ToolKind::Ellipse
+                                        | ToolKind::Line
+                                        | ToolKind::Arrow
+                                ) {
+                                    state.ui_state.sloppiness =
+                                        drafftink_core::shapes::Sloppiness::Architect;
+                                }
+                            }
+                            UiAction::SetEraserMode(mode) => {
+                                state.ui_state.eraser_mode = mode;
+                                state.event_handler.eraser_mode = mode;
+                            }
+                            UiAction::SetStrokeColor(color) => {
+                                // Update UI state
+                                state.ui_state.stroke_color = color;
+
+                                // Use captured text selection state (before mouse events cleared it)
+                                let mut applied_to_text_range = false;
+                                if let Some((text_id, byte_range)) = &text_selection_state {
+                                    if let Some(Shape::Text(text)) =
+                                        state.canvas.document.get_shape_mut(*text_id)
+                                    {
+                                        // Convert byte range to char indices
+                                        let start_char =
+                                            text.content[..byte_range.start].chars().count();
+                                        let end_char =
+                                            text.content[..byte_range.end].chars().count();
+                                        let style = state.ui_state.to_shape_style();
+                                        text.apply_color_to_range(
+                                            start_char,
+                                            end_char,
+                                            style.stroke_color,
+                                        );
+                                        applied_to_text_range = true;
+                                        log::info!(
+                                            "Applied color to char range {}..{}",
+                                            start_char,
+                                            end_char
+                                        );
+                                    }
+                                }
+
+                                // If not applied to text range, apply to whole shapes
+                                if !applied_to_text_range {
+                                    let style = state.ui_state.to_shape_style();
+                                    for &shape_id in &state.canvas.selection.clone() {
+                                        if let Some(shape) =
+                                            state.canvas.document.get_shape_mut(shape_id)
+                                        {
+                                            shape.style_mut().stroke_color = style.stroke_color;
+                                        }
+                                    }
+                                }
+
+                                // Sync property changes
+                                let has_changes =
+                                    applied_to_text_range || !state.canvas.selection.is_empty();
+                                if has_changes {
+                                    broadcast_doc_changes(
+                                        &mut state.collab,
+                                        &state.canvas.document,
+                                        state.websocket.as_ref(),
+                                    );
+                                }
+                            }
+                            UiAction::SetFillColor(color) => {
+                                state.ui_state.fill_color = color;
+                                let style = state.ui_state.to_shape_style();
+                                let has_selection = !state.canvas.selection.is_empty();
+                                for &shape_id in &state.canvas.selection.clone() {
+                                    if let Some(shape) =
+                                        state.canvas.document.get_shape_mut(shape_id)
+                                    {
+                                        shape.style_mut().fill_color = style.fill_color;
+                                    }
+                                }
+                                // Sync property changes
+                                if has_selection {
+                                    broadcast_doc_changes(
+                                        &mut state.collab,
+                                        &state.canvas.document,
+                                        state.websocket.as_ref(),
+                                    );
+                                }
+                            }
+                            UiAction::TogglePinned => {
+                                // Finish active Text editing while the anchor is
+                                // still in its current coordinate space.
+                                if state.event_handler.editing_text.is_some_and(|id| state.canvas.selection.contains(&id)) {
+                                    state.event_handler.exit_text_edit(&mut state.canvas);
+                                    state.text_edit_state = None;
+                                }
+                                toggle_selected_pinning(state);
+                            }
+                            UiAction::SetPinnedBackground(color) => {
+                                if !state.canvas.selection.is_empty() {
+                                    state.canvas.document.push_undo();
+                                    let background = drafftink_core::shapes::SerializableColor::new(color.r(), color.g(), color.b(), color.a());
+                                    for &id in &state.canvas.selection.clone() {
+                                        if let Some(pinned) = state.canvas.document.pinned_shapes.get_mut(&id) {
+                                            pinned.background = background;
+                                        }
+                                    }
+                                    state.ui_state.pin_background = color;
+                                }
+                            }
+                            UiAction::SetOutlinePattern(pattern) => {
+                                state.ui_state.stroke_style = pattern;
+                                if !state.canvas.selection.is_empty() {
+                                    state.canvas.document.push_undo();
+                                }
+                                for &id in &state.canvas.selection.clone() {
+                                    if let Some(shape) = state.canvas.document.get_shape_mut(id) {
+                                        shape.style_mut().stroke_style = pattern;
+                                        match shape {
+                                            Shape::Line(line) => line.stroke_style = pattern,
+                                            Shape::Arrow(arrow) => arrow.stroke_style = pattern,
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                            }
+                            UiAction::SetStrokeWidth(width) => {
+                                state.ui_state.stroke_width = width;
+                                let has_selection = !state.canvas.selection.is_empty();
+                                for &shape_id in &state.canvas.selection.clone() {
+                                    if let Some(shape) =
+                                        state.canvas.document.get_shape_mut(shape_id)
+                                    {
+                                        shape.style_mut().stroke_width = width as f64;
+                                    }
+                                }
+                                // Sync property changes
+                                if has_selection {
+                                    broadcast_doc_changes(
+                                        &mut state.collab,
+                                        &state.canvas.document,
+                                        state.websocket.as_ref(),
+                                    );
+                                }
+                            }
+                            UiAction::SaveLocal => {
+                                // Save with current document name
+                                file_ops::save_document(
+                                    &state.canvas.document,
+                                    &state.canvas.document.name,
+                                );
+                            }
+                            UiAction::SaveLocalAs => {
+                                // Open save dialog
+                                state.ui_state.save_name_input = state.canvas.document.name.clone();
+                                state.ui_state.save_dialog_open = true;
+                            }
+                            UiAction::ShowOpenDialog => {
+                                // Open document selection dialog
+                                state.ui_state.open_dialog_open = true;
+                                #[cfg(target_arch = "wasm32")]
+                                {
+                                    file_ops::list_documents_async();
+                                }
+                            }
+                            UiAction::ShowOpenRecentDialog => {
+                                // Open recent documents dialog
+                                state.ui_state.open_recent_dialog_open = true;
+                                #[cfg(target_arch = "wasm32")]
+                                {
+                                    file_ops::list_documents_async();
+                                }
+                            }
+                            UiAction::SaveLocalWithName(name) => {
+                                // Save with specified name
+                                state.canvas.document.name = name.clone();
+                                #[cfg(target_arch = "wasm32")]
+                                {
+                                    // For WASM, save with name as ID
+                                    let doc_id = state.canvas.document.id.clone();
+                                    state.canvas.document.id = name.clone();
+                                    file_ops::save_document(&state.canvas.document, &name);
+                                    state.canvas.document.id = doc_id; // Restore original ID
+                                }
+                                #[cfg(not(target_arch = "wasm32"))]
+                                {
+                                    file_ops::save_document(&state.canvas.document, &name);
+                                }
+                                // Add to recent documents if not already there
+                                if !state.ui_state.recent_documents.contains(&name) {
+                                    state.ui_state.recent_documents.insert(0, name);
+                                    if state.ui_state.recent_documents.len() > 10 {
+                                        state.ui_state.recent_documents.truncate(10);
+                                    }
+                                }
+                            }
+                            UiAction::LoadLocal(name) => {
+                                // Load document by name from local storage
+                                #[cfg(not(target_arch = "wasm32"))]
+                                {
+                                    file_ops::load_document_by_name(&name);
+                                }
+                                #[cfg(target_arch = "wasm32")]
+                                {
+                                    file_ops::load_document_by_name_async(&name);
+                                }
+                            }
+                            UiAction::SaveDocument => {
+                                file_ops::save_document(
+                                    &state.canvas.document,
+                                    &state.canvas.document.name,
+                                );
+                            }
+                            UiAction::LoadDocument => {
+                                #[cfg(not(target_arch = "wasm32"))]
+                                {
+                                    file_ops::load_document();
+                                }
+                                #[cfg(target_arch = "wasm32")]
+                                {
+                                    file_ops::load_document_async();
+                                }
+                            }
+                            UiAction::DownloadDocument => {
+                                // Download as file (WASM: triggers browser download, Native: same as save)
+                                #[cfg(target_arch = "wasm32")]
+                                file_ops::download_document(
+                                    &state.canvas.document,
+                                    &state.canvas.document.name,
+                                );
+                                #[cfg(not(target_arch = "wasm32"))]
+                                file_ops::save_document(
+                                    &state.canvas.document,
+                                    &state.canvas.document.name,
+                                );
+                            }
+                            UiAction::UploadDocument => {
+                                // Upload from file (WASM: triggers file picker, Native: same as load)
+                                #[cfg(target_arch = "wasm32")]
+                                file_ops::upload_document_async();
+                                #[cfg(not(target_arch = "wasm32"))]
+                                {
+                                    file_ops::load_document();
+                                }
+                            }
+                            UiAction::ImportMermaidFromClipboard => {
+                                // Import a Mermaid diagram from the clipboard as
+                                // native, editable shapes, centered in the
+                                // current viewport.
+                                let center_world =
+                                    state.canvas.camera.screen_to_world(kurbo::Point::new(
+                                        state.canvas.viewport_size.width / 2.0,
+                                        state.canvas.viewport_size.height / 2.0,
+                                    ));
+                                #[cfg(not(target_arch = "wasm32"))]
+                                {
+                                    let text = arboard::Clipboard::new()
+                                        .ok()
+                                        .and_then(|mut cb| cb.get_text().ok());
+                                    match text
+                                        .as_deref()
+                                        .and_then(drafftink_core::shapes_from_mermaid)
+                                    {
+                                        Some(shapes) => {
+                                            place_shapes_centered_at(
+                                                &mut state.canvas,
+                                                &mut state.collab,
+                                                shapes,
+                                                center_world,
+                                            );
+                                            log::info!("Imported Mermaid diagram from clipboard");
+                                        }
+                                        None => log::info!(
+                                            "Clipboard did not contain a recognized Mermaid diagram"
+                                        ),
+                                    }
+                                }
+                                #[cfg(target_arch = "wasm32")]
+                                file_ops::paste_shapes_from_clipboard_async(center_world);
+                            }
+                            UiAction::SwitchTab(_)
+                            | UiAction::NewCanvas
+                            | UiAction::RenameTab(_, _)
+                            | UiAction::CloseTab(_)
+                            | UiAction::LoadLibrary => {
+                                // Tab operations need exclusive access to the
+                                // whole AppState, which the egui closure cannot
+                                // hold; handle them after the egui run.
+                                tab_action = Some(action.clone());
+                            }
+                            UiAction::ClearDocument => {
+                                if !state.canvas.document.is_empty() {
+                                    state.canvas.document.push_undo();
+                                    state.canvas.document.clear();
+                                    state.canvas.clear_selection();
+                                    log::info!("Document cleared");
+                                    // Sync changes to collaborators
+                                    broadcast_doc_changes(
+                                        &mut state.collab,
+                                        &state.canvas.document,
+                                        state.websocket.as_ref(),
+                                    );
+                                }
+                            }
+                            UiAction::ShowIntro => {
+                                let intro = state.ui_state.settings.intro_json.clone();
+                                if !intro.trim().is_empty() {
+                                    if let Ok(doc) =
+                                        drafftink_core::canvas::CanvasDocument::from_json(&intro)
+                                    {
+                                        state.canvas.document = doc;
+                                        state.canvas.clear_selection();
+                                        state.canvas.camera.reset();
+                                        log::info!("Loaded configured intro document");
+                                    }
+                                }
+                            }
+                            UiAction::ExportPng | UiAction::CopyPng => {
+                                // Deferred - handled after egui run (needs render_cx access)
+                                deferred_action = Some(action);
+                            }
+                            UiAction::ToggleGrid => {
+                                state.config.grid_style = state.config.grid_style.next();
+                                state.ui_state.grid_style = state.config.grid_style;
+                            }
+                            UiAction::ZoomIn => {
+                                let center = kurbo::Point::new(
+                                    state.canvas.viewport_size.width / 2.0,
+                                    state.canvas.viewport_size.height / 2.0,
+                                );
+                                state.canvas.camera.zoom_at(center, 1.25);
+                                state.ui_state.zoom_level = state.canvas.camera.zoom;
+                            }
+                            UiAction::ZoomOut => {
+                                let center = kurbo::Point::new(
+                                    state.canvas.viewport_size.width / 2.0,
+                                    state.canvas.viewport_size.height / 2.0,
+                                );
+                                state.canvas.camera.zoom_at(center, 0.8);
+                                state.ui_state.zoom_level = state.canvas.camera.zoom;
+                            }
+                            UiAction::ZoomReset => {
+                                state.canvas.camera.zoom = drafftink_core::camera::BASE_ZOOM;
+                                state.ui_state.zoom_level = drafftink_core::camera::BASE_ZOOM;
+                            }
+                            UiAction::CenterCanvas => {
+                                // Reset camera offset to default (origin at top-left)
+                                state.canvas.camera.offset = kurbo::Vec2::ZERO;
+                            }
+                            UiAction::ToggleGridSnap => {
+                                state.ui_state.grid_snap_enabled =
+                                    !state.ui_state.grid_snap_enabled;
+                            }
+                            UiAction::ToggleSmartSnap => {
+                                state.ui_state.smart_snap_enabled =
+                                    !state.ui_state.smart_snap_enabled;
+                            }
+                            UiAction::ToggleAngleSnap => {
+                                state.ui_state.angle_snap_enabled =
+                                    !state.ui_state.angle_snap_enabled;
+                                log::info!(
+                                    "Angle snap: {}",
+                                    if state.ui_state.angle_snap_enabled {
+                                        "ON"
+                                    } else {
+                                        "OFF"
+                                    }
+                                );
+                            }
+                            UiAction::SetFontSize(size) => {
+                                use drafftink_core::shapes::Shape;
+                                for &shape_id in &state.canvas.selection.clone() {
+                                    if let Some(Shape::Text(text)) =
+                                        state.canvas.document.get_shape_mut(shape_id)
+                                    {
+                                        text.font_size = size as f64;
+                                    }
+                                }
+                            }
+                            UiAction::SetDefaultMathFont(font) => {
+                                state.ui_state.settings.default_math_font = font.clone();
+                                crate::settings::save_settings(&state.ui_state.settings);
+                                request_math_font(&font);
+                            }
+                            UiAction::SetMathFont(font) => {
+                                state.canvas.document.push_undo();
+                                for id in &state.canvas.selection {
+                                    if let Some(Shape::Math(math)) =
+                                        state.canvas.document.get_shape_mut(*id)
+                                    {
+                                        math.font = font.clone();
+                                        math.invalidate_cache();
+                                    }
+                                }
+                                state.ui_state.math_font = font.clone();
+                                request_math_font(&font);
+                            }
+                            UiAction::SetMathFontSize(size) => {
+                                use drafftink_core::shapes::Shape;
+                                for &shape_id in &state.canvas.selection.clone() {
+                                    if let Some(Shape::Math(math)) =
+                                        state.canvas.document.get_shape_mut(shape_id)
+                                    {
+                                        math.font_size = size as f64;
+                                        math.invalidate_cache();
+                                    }
+                                }
+                            }
+                            UiAction::SetDefaultFont(family, postscript) => {
+                                state.ui_state.settings.default_font = family.clone();
+                                state.ui_state.settings.default_font_postscript =
+                                    postscript.clone();
+                                state.ui_state.settings.last_text_font = None;
+                                state.ui_state.settings.last_text_postscript = None;
+                                state.ui_state.current_text_font =
+                                    drafftink_core::shapes::TextFont::from_name(
+                                        &family,
+                                        &postscript,
+                                    );
+                                state.ui_state.current_text_postscript = postscript.clone();
+                                #[cfg(target_arch = "wasm32")]
+                                if !postscript.is_empty() {
+                                    file_ops::load_local_font_async(family, postscript);
+                                }
+                            }
+                            UiAction::InsertTextSymbol(symbol) => {
+                                if let (Some(id), Some(editor)) = (
+                                    state.event_handler.editing_text,
+                                    state.text_edit_state.as_mut(),
+                                ) {
+                                    let old = editor.text();
+                                    let (fonts, layouts) = state.shape_renderer.contexts_mut();
+                                    editor.handle_key(
+                                        TextKey::Character(symbol),
+                                        TextModifiers::default(),
+                                        fonts,
+                                        layouts,
+                                    );
+                                    if let Some(Shape::Text(text)) =
+                                        state.canvas.document.get_shape_mut(id)
+                                    {
+                                        text.content = editor.text();
+                                        text.sync_spans_after_edit(&old);
+                                    }
+                                }
+                            }
+                            UiAction::EditTextCommand(source, finished, exit_text) => {
+                                update_text_command(state, source, finished, exit_text);
+                            }
+                            UiAction::OpenInlineFormula(kind) => {
+                                if let (Some(id), Some(editor)) = (
+                                    state.event_handler.editing_text,
+                                    state.text_edit_state.as_ref(),
+                                ) {
+                                    let range = editor.selection_range().unwrap_or_else(|| {
+                                        let p = editor.cursor_byte_offset();
+                                        p..p
+                                    });
+                                    let defaults: [&str; 4] = match kind.as_str() {
+                                        "Fraction" => ["1", "2", "", ""],
+                                        "Racine" => ["x", "", "", ""],
+                                        "Racine n-ième" => ["x", "3", "", ""],
+                                        "Somme" | "Produit" => ["i", "i", "1", "n"],
+                                        "Intégrale" => ["x", "x", "0", "1"],
+                                        _ => ["sin(x)/x", "x", "0", ""],
+                                    };
+                                    let mut draft = crate::ui::InlineFormulaDraft {
+                                        text_id: id,
+                                        range: range.clone(),
+                                        kind,
+                                        parts: defaults.map(str::to_string),
+                                        active_field: 0,
+                                        request_focus: true,
+                                    };
+                                    if let Some(Shape::Text(text)) =
+                                        state.canvas.document.get_shape(id)
+                                    {
+                                        let at = text.content[..range.start].chars().count();
+                                        if let Some(formula) = text
+                                            .formulas
+                                            .iter()
+                                            .find(|f| f.at == at && range.end > range.start)
+                                        {
+                                            draft.kind = formula.kind.clone();
+                                            draft.parts = formula.parts.clone();
+                                        }
+                                    }
+                                    state.ui_state.inline_formula_error.clear();
+                                    state.ui_state.inline_formula_draft = Some(draft);
+                                }
+                            }
+                            UiAction::CommitInlineFormula(latex, kind, parts, exit_text) => {
+                                if state.shape_renderer.formula_is_valid(&latex) {
+                                    state.canvas.document.push_undo();
+                                    if let Some(draft) = state.ui_state.inline_formula_draft.take()
+                                    {
+                                        if state.event_handler.editing_text == Some(draft.text_id) {
+                                            if let Some(editor) = state.text_edit_state.as_mut() {
+                                                let old = editor.text();
+                                                let at = old[..draft.range.start].chars().count();
+                                                let (fonts, layouts) =
+                                                    state.shape_renderer.contexts_mut();
+                                                editor.driver(fonts, layouts).select_byte_range(
+                                                    draft.range.start,
+                                                    draft.range.end,
+                                                );
+                                                editor.handle_key(
+                                                    TextKey::Character("\u{fffc}".into()),
+                                                    TextModifiers::default(),
+                                                    fonts,
+                                                    layouts,
+                                                );
+                                                if let Some(Shape::Text(text)) = state
+                                                    .canvas
+                                                    .document
+                                                    .get_shape_mut(draft.text_id)
+                                                {
+                                                    text.content = editor.text();
+                                                    text.sync_spans_after_edit(&old);
+                                                    text.formulas.retain(|f| f.at != at);
+                                                    text.formulas.push(
+                                                        drafftink_core::shapes::InlineFormula {
+                                                            at,
+                                                            math: drafftink_core::shapes::Math::new(
+                                                                Point::ZERO,
+                                                                latex,
+                                                            ),
+                                                            kind,
+                                                            parts,
+                                                        },
+                                                    );
+                                                    text.invalidate_cache();
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if exit_text {
+                                        state.event_handler.exit_text_edit(&mut state.canvas);
+                                        state.text_edit_state = None;
+                                    }
+                                } else {
+                                    state.ui_state.inline_formula_error =
+                                        "Expression incomplète ou invalide : vérifiez les champs."
+                                            .into();
+                                }
+                            }
+                            UiAction::SetLaserColor(color) => {
+                                state.ui_state.settings.laser_color =
+                                    [color.r(), color.g(), color.b()];
+                                crate::settings::save_settings(&state.ui_state.settings);
+                            }
+                            UiAction::SetLaserPermanent(permanent) => {
+                                state.ui_state.settings.laser_permanent = permanent;
+                                crate::settings::save_settings(&state.ui_state.settings);
+                            }
+                            UiAction::ResetFloatingPanels => {
+                                state.ui_state.settings.panel_positions.clear();
+                                ctx.memory_mut(|memory| memory.reset_areas());
+                                crate::settings::save_settings(&state.ui_state.settings);
+                            }
+                            UiAction::SetFontFamily(family_idx) => {
+                                use drafftink_core::shapes::{FontFamily, Shape};
+                                let family = match family_idx {
+                                    0 => FontFamily::GelPen,
+                                    1 => FontFamily::NotoSans,
+                                    2 => FontFamily::GelPenSerif,
+                                    3 => FontFamily::VanillaExtract,
+                                    _ => FontFamily::XitsMath,
+                                };
+                                state.ui_state.current_text_font.family = family;
+                                state.ui_state.current_text_font.custom = None;
+                                state.ui_state.current_text_font.postscript = None;
+                                state.ui_state.current_text_postscript.clear();
+                                state.ui_state.settings.last_text_font =
+                                    Some(state.ui_state.current_text_font.clone());
+                                state.ui_state.settings.last_text_postscript = Some(String::new());
+                                crate::settings::save_settings(&state.ui_state.settings);
+                                for &shape_id in &state.canvas.selection.clone() {
+                                    if let Some(Shape::Text(text)) =
+                                        state.canvas.document.get_shape_mut(shape_id)
+                                    {
+                                        text.font_family = family;
+                                        text.custom_font = None;
+                                        text.custom_font_postscript = None;
+                                        text.invalidate_cache();
+                                    }
+                                }
+                            }
+                            UiAction::ScanLocalFonts => {
+                                #[cfg(target_arch = "wasm32")]
+                                if let (Some(family), Some(ps)) = (
+                                    &state.ui_state.settings.default_math_font.custom,
+                                    &state.ui_state.settings.default_math_font.postscript,
+                                ) {
+                                    file_ops::restore_local_font_async(family.clone(), ps.clone());
+                                }
+                                #[cfg(target_arch = "wasm32")]
+                                file_ops::query_local_fonts_async();
+                                #[cfg(not(target_arch = "wasm32"))]
+                                {
+                                    state.ui_state.local_fonts_loading = false;
+                                }
+                            }
+                            UiAction::SetLocalFont(family, postscript) => {
+                                let preference = drafftink_core::shapes::TextFont::from_name(
+                                    &family,
+                                    &postscript,
+                                );
+                                state.ui_state.current_text_font = preference.clone();
+                                state.ui_state.current_text_postscript = postscript.clone();
+                                state.ui_state.settings.last_text_font = Some(preference.clone());
+                                state.ui_state.settings.last_text_postscript =
+                                    Some(postscript.clone());
+                                crate::settings::save_settings(&state.ui_state.settings);
+                                if !state.canvas.selection.is_empty() {
+                                    state.canvas.document.push_undo();
+                                }
+                                for &id in &state.canvas.selection.clone() {
+                                    if let Some(Shape::Text(text)) =
+                                        state.canvas.document.get_shape_mut(id)
+                                    {
+                                        preference.apply(text);
+                                    }
+                                }
+                                #[cfg(target_arch = "wasm32")]
+                                {
+                                    let doc_id = state.canvas.document.id.clone();
+                                    state
+                                        .pending_local_font_targets
+                                        .entry(postscript.clone())
+                                        .or_default()
+                                        .extend(
+                                            state
+                                                .canvas
+                                                .selection
+                                                .iter()
+                                                .map(|id| (doc_id.clone(), *id)),
+                                        );
+                                    file_ops::load_local_font_async(family, postscript);
+                                }
+                            }
+                            UiAction::SetFontWeight(weight_idx) => {
+                                use drafftink_core::shapes::{FontWeight, Shape};
+                                let weight = match weight_idx {
+                                    0 => FontWeight::Light,
+                                    1 => FontWeight::Regular,
+                                    3 => FontWeight::Medium,
+                                    _ => FontWeight::Heavy,
+                                };
+                                state.ui_state.current_text_font.weight = weight;
+                                state.ui_state.settings.last_text_font =
+                                    Some(state.ui_state.current_text_font.clone());
+                                crate::settings::save_settings(&state.ui_state.settings);
+                                for &shape_id in &state.canvas.selection.clone() {
+                                    if let Some(Shape::Text(text)) =
+                                        state.canvas.document.get_shape_mut(shape_id)
+                                    {
+                                        text.font_weight = weight;
+                                    }
+                                }
+                            }
+                            UiAction::SetCornerRadius(radius) => {
+                                use drafftink_core::shapes::Shape;
+                                // Update UI state (for new shapes)
+                                state.ui_state.corner_radius = radius;
+                                let has_selection = !state.canvas.selection.is_empty();
+                                // Apply to selected shapes
+                                for &shape_id in &state.canvas.selection.clone() {
+                                    if let Some(Shape::Rectangle(rect)) =
+                                        state.canvas.document.get_shape_mut(shape_id)
+                                    {
+                                        rect.corner_radius = radius as f64;
+                                    }
+                                }
+                                // Sync property changes
+                                if has_selection {
+                                    broadcast_doc_changes(
+                                        &mut state.collab,
+                                        &state.canvas.document,
+                                        state.websocket.as_ref(),
+                                    );
+                                }
+                            }
+                            UiAction::SetExportScale(scale) => {
+                                state.ui_state.export_scale = scale;
+                                log::info!("Export scale: {}x", scale);
+                            }
+                            UiAction::SetSloppiness(level) => {
+                                use drafftink_core::shapes::Sloppiness;
+                                let sloppiness = match level {
+                                    0 => Sloppiness::Architect,
+                                    1 => Sloppiness::Artist,
+                                    2 => Sloppiness::Cartoonist,
+                                    _ => Sloppiness::Drunk,
+                                };
+                                // Update UI state (for new shapes)
+                                state.ui_state.sloppiness = sloppiness;
+                                let has_selection = !state.canvas.selection.is_empty();
+                                // Apply to selected shapes
+                                for &shape_id in &state.canvas.selection.clone() {
+                                    if let Some(shape) =
+                                        state.canvas.document.get_shape_mut(shape_id)
+                                    {
+                                        shape.style_mut().sloppiness = sloppiness;
+                                    }
+                                }
+                                log::info!("Sloppiness: {:?}", sloppiness);
+                                // Sync property changes
+                                if has_selection {
+                                    broadcast_doc_changes(
+                                        &mut state.collab,
+                                        &state.canvas.document,
+                                        state.websocket.as_ref(),
+                                    );
+                                }
+                            }
+                            UiAction::SetFillPattern(level) => {
+                                use drafftink_core::shapes::FillPattern;
+                                let fill_pattern = match level {
+                                    0 => FillPattern::Solid,
+                                    1 => FillPattern::Hachure,
+                                    2 => FillPattern::ZigZag,
+                                    3 => FillPattern::CrossHatch,
+                                    4 => FillPattern::Dots,
+                                    5 => FillPattern::Dashed,
+                                    _ => FillPattern::ZigZagLine,
+                                };
+                                state.ui_state.fill_pattern = fill_pattern;
+                                let has_selection = !state.canvas.selection.is_empty();
+                                for &shape_id in &state.canvas.selection.clone() {
+                                    if let Some(shape) =
+                                        state.canvas.document.get_shape_mut(shape_id)
+                                    {
+                                        shape.style_mut().fill_pattern = fill_pattern;
+                                    }
+                                }
+                                log::info!("Fill pattern: {:?}", fill_pattern);
+                                if has_selection {
+                                    broadcast_doc_changes(
+                                        &mut state.collab,
+                                        &state.canvas.document,
+                                        state.websocket.as_ref(),
+                                    );
+                                }
+                            }
+                            UiAction::SetPathStyle(level) => {
+                                use drafftink_core::shapes::PathStyle;
+                                let path_style = match level {
+                                    0 => PathStyle::Direct,
+                                    1 => PathStyle::Flowing,
+                                    _ => PathStyle::Angular,
+                                };
+                                // Always update UI state for new shapes
+                                state.ui_state.path_style = level;
+                                let has_selection = !state.canvas.selection.is_empty();
+                                // Apply to selected lines/arrows
+                                for &shape_id in &state.canvas.selection.clone() {
+                                    if let Some(shape) =
+                                        state.canvas.document.get_shape_mut(shape_id)
+                                    {
+                                        match shape {
+                                            Shape::Line(line) => {
+                                                line.path_style = path_style;
+                                                // Angular recomputes path, clear intermediate points
+                                                if path_style == PathStyle::Angular {
+                                                    line.intermediate_points.clear();
+                                                }
+                                            }
+                                            Shape::Arrow(arrow) => {
+                                                arrow.path_style = path_style;
+                                                if path_style == PathStyle::Angular {
+                                                    arrow.intermediate_points.clear();
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                log::info!("PathStyle: {:?}", path_style);
+                                // Sync property changes
+                                if has_selection {
+                                    broadcast_doc_changes(
+                                        &mut state.collab,
+                                        &state.canvas.document,
+                                        state.websocket.as_ref(),
+                                    );
+                                }
+                            }
+                            UiAction::SetStrokeStyle(level) => {
+                                use drafftink_core::shapes::StrokeStyle;
+                                let stroke_style = match level {
+                                    0 => StrokeStyle::Solid,
+                                    1 => StrokeStyle::Dashed,
+                                    _ => StrokeStyle::Dotted,
+                                };
+                                let has_selection = !state.canvas.selection.is_empty();
+                                // Apply to selected lines/arrows
+                                for &shape_id in &state.canvas.selection.clone() {
+                                    if let Some(shape) =
+                                        state.canvas.document.get_shape_mut(shape_id)
+                                    {
+                                        match shape {
+                                            Shape::Line(line) => {
+                                                line.stroke_style = stroke_style;
+                                                line.style.stroke_style = stroke_style;
+                                            }
+                                            Shape::Arrow(arrow) => {
+                                                arrow.stroke_style = stroke_style;
+                                                arrow.style.stroke_style = stroke_style;
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                log::info!("StrokeStyle: {:?}", stroke_style);
+                                // Sync property changes
+                                if has_selection {
+                                    broadcast_doc_changes(
+                                        &mut state.collab,
+                                        &state.canvas.document,
+                                        state.websocket.as_ref(),
+                                    );
+                                }
+                            }
+                            UiAction::SetArrowHead(is_start, level) => {
+                                use drafftink_core::shapes::ArrowHeadStyle;
+                                let head = match level {
+                                    0 => ArrowHeadStyle::None,
+                                    2 => ArrowHeadStyle::Filled,
+                                    _ => ArrowHeadStyle::Open,
+                                };
+                                let has_selection = !state.canvas.selection.is_empty();
+                                if has_selection {
+                                    state.canvas.document.push_undo();
+                                }
+                                for &shape_id in &state.canvas.selection.clone() {
+                                    if let Some(Shape::Arrow(arrow)) =
+                                        state.canvas.document.get_shape_mut(shape_id)
+                                    {
+                                        if is_start {
+                                            arrow.start_head = head;
+                                        } else {
+                                            arrow.end_head = head;
+                                        }
+                                    }
+                                }
+                                if has_selection {
+                                    broadcast_doc_changes(
+                                        &mut state.collab,
+                                        &state.canvas.document,
+                                        state.websocket.as_ref(),
+                                    );
+                                }
+                            }
+                            UiAction::Undo => {
+                                if state.canvas.document.undo() {
+                                    state.canvas.clear_selection();
+                                    log::info!("Undo performed");
+                                    // Sync changes to collaborators
+                                    broadcast_doc_changes(
+                                        &mut state.collab,
+                                        &state.canvas.document,
+                                        state.websocket.as_ref(),
+                                    );
+                                } else {
+                                    log::info!("Nothing to undo");
+                                }
+                            }
+                            UiAction::Redo => {
+                                if state.canvas.document.redo() {
+                                    state.canvas.clear_selection();
+                                    log::info!("Redo performed");
+                                    // Sync changes to collaborators
+                                    broadcast_doc_changes(
+                                        &mut state.collab,
+                                        &state.canvas.document,
+                                        state.websocket.as_ref(),
+                                    );
+                                } else {
+                                    log::info!("Nothing to redo");
+                                }
+                            }
+                            // Collaboration actions
+                            UiAction::Connect(url) => {
+                                log::info!("Connect requested to: {}", url);
+                                #[cfg(target_arch = "wasm32")]
+                                let mut ws = drafftink_core::sync::WasmWebSocket::new();
+                                #[cfg(not(target_arch = "wasm32"))]
+                                let mut ws = drafftink_core::sync::NativeWebSocket::new();
+
+                                match ws.connect(&url) {
+                                    Ok(()) => {
+                                        log::info!("WebSocket connecting to {}", url);
+                                        state.websocket = Some(ws);
+                                        state.ui_state.connection_state =
+                                            ConnectionState::Connecting;
+                                    }
+                                    Err(e) => {
+                                        log::error!("WebSocket connect failed: {}", e);
+                                        state.ui_state.connection_state = ConnectionState::Error;
+                                    }
+                                }
+                            }
+                            UiAction::Disconnect => {
+                                log::info!("Disconnect requested");
+                                if let Some(ref mut ws) = state.websocket {
+                                    ws.disconnect();
+                                }
+                                state.websocket = None;
+                                state.collab.set_room(None);
+                                state.collab.disable();
+                                state.remote_peers.clear();
+                                state.ui_state.connection_state = ConnectionState::Disconnected;
+                                state.ui_state.current_room = None;
+                            }
+                            UiAction::JoinRoom(room) => {
+                                log::info!("Join room requested: {}", room);
+                                state.collab.join_room(&room);
+                                // Send queued messages
+                                if let Some(ref ws) = state.websocket {
+                                    for msg in state.collab.take_outgoing() {
+                                        let _ = ws.send(&msg);
+                                    }
+                                }
+                            }
+                            UiAction::LeaveRoom => {
+                                log::info!("Leave room requested");
+                                state.collab.leave_room();
+                                // Send queued messages
+                                if let Some(ref ws) = state.websocket {
+                                    for msg in state.collab.take_outgoing() {
+                                        let _ = ws.send(&msg);
+                                    }
+                                }
+                                state.collab.set_room(None);
+                                state.remote_peers.clear();
+                                state.ui_state.current_room = None;
+                            }
+                            UiAction::SetUserName(name) => {
+                                log::info!("Set user name: {}", name);
+                                let color = state.ui_state.user_color.clone();
+                                state.collab.set_user_info(name, color);
+                                // Send awareness update
+                                if let Some(ref ws) = state.websocket {
+                                    for msg in state.collab.take_outgoing() {
+                                        let _ = ws.send(&msg);
+                                    }
+                                }
+                            }
+                            UiAction::SetUserColor(color) => {
+                                log::info!("Set user color: {}", color);
+                                let name = state.ui_state.user_name.clone();
+                                state.collab.set_user_info(name, color);
+                                // Send awareness update
+                                if let Some(ref ws) = state.websocket {
+                                    for msg in state.collab.take_outgoing() {
+                                        let _ = ws.send(&msg);
+                                    }
+                                }
+                            }
+                            UiAction::SetBgColor(color) => {
+                                state.ui_state.bg_color = color;
+                                // Convert egui Color32 to peniko Color for renderer
+                                state.config.background_color =
+                                    Color::from_rgba8(color.r(), color.g(), color.b(), color.a());
+                            }
+                            UiAction::BringToFront => {
+                                if !state.canvas.selection.is_empty() {
+                                    state.canvas.document.push_undo();
+                                    for &id in &state.canvas.selection.clone() {
+                                        state.canvas.document.bring_to_front(id);
+                                        // Sync to CRDT if connected
+                                        if state.collab.is_in_room() {
+                                            let _ = state
+                                                .collab
+                                                .crdt_mut()
+                                                .bring_to_front(&id.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                            UiAction::SendToBack => {
+                                if !state.canvas.selection.is_empty() {
+                                    state.canvas.document.push_undo();
+                                    // Send in reverse order to maintain relative order
+                                    for &id in state.canvas.selection.clone().iter().rev() {
+                                        state.canvas.document.send_to_back(id);
+                                        // Sync to CRDT if connected
+                                        if state.collab.is_in_room() {
+                                            let _ = state
+                                                .collab
+                                                .crdt_mut()
+                                                .send_to_back(&id.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                            UiAction::BringForward => {
+                                if !state.canvas.selection.is_empty() {
+                                    state.canvas.document.push_undo();
+                                    // Bring forward in reverse order (frontmost first) to avoid conflicts
+                                    let mut selection = state.canvas.selection.clone();
+                                    // Sort by z-order (back to front)
+                                    selection.sort_by_key(|id| {
+                                        state
+                                            .canvas
+                                            .document
+                                            .z_order
+                                            .iter()
+                                            .position(|z| z == id)
+                                            .unwrap_or(0)
+                                    });
+                                    for &id in selection.iter().rev() {
+                                        state.canvas.document.bring_forward(id);
+                                        // Sync to CRDT if connected
+                                        if state.collab.is_in_room() {
+                                            let _ = state
+                                                .collab
+                                                .crdt_mut()
+                                                .bring_forward(&id.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                            UiAction::SendBackward => {
+                                if !state.canvas.selection.is_empty() {
+                                    state.canvas.document.push_undo();
+                                    // Send backward in order (backmost first) to avoid conflicts
+                                    let mut selection = state.canvas.selection.clone();
+                                    // Sort by z-order (back to front)
+                                    selection.sort_by_key(|id| {
+                                        state
+                                            .canvas
+                                            .document
+                                            .z_order
+                                            .iter()
+                                            .position(|z| z == id)
+                                            .unwrap_or(0)
+                                    });
+                                    for &id in &selection {
+                                        state.canvas.document.send_backward(id);
+                                        // Sync to CRDT if connected
+                                        if state.collab.is_in_room() {
+                                            let _ = state
+                                                .collab
+                                                .crdt_mut()
+                                                .send_backward(&id.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                            UiAction::ZoomToFit => {
+                                // Fit to selection if any, otherwise fit to all shapes
+                                let bounds = if state.canvas.selection.is_empty() {
+                                    state.canvas.document.bounds()
+                                } else {
+                                    // Calculate bounds of selected shapes
+                                    let mut result: Option<kurbo::Rect> = None;
+                                    for &id in &state.canvas.selection {
+                                        if let Some(shape) = state.canvas.document.get_shape(id) {
+                                            let b = shape.bounds();
+                                            result = Some(match result {
+                                                Some(r) => r.union(b),
+                                                None => b,
+                                            });
+                                        }
+                                    }
+                                    result
+                                };
+                                if let Some(bounds) = bounds {
+                                    state.canvas.camera.fit_to_bounds(
+                                        bounds,
+                                        state.canvas.viewport_size,
+                                        50.0,
+                                    );
+                                }
+                            }
+                            UiAction::Duplicate => {
+                                if !state.canvas.selection.is_empty() {
+                                    state.canvas.document.push_undo();
+                                    let mut new_selection = Vec::new();
+                                    for &id in &state.canvas.selection.clone() {
+                                        if let Some(shape) = state.canvas.document.get_shape(id) {
+                                            let mut new_shape = shape.clone();
+                                            // Generate a new unique ID for the duplicate
+                                            new_shape.regenerate_id();
+                                            // Offset slightly down-right
+                                            new_shape.transform(kurbo::Affine::translate(
+                                                kurbo::Vec2::new(20.0, 20.0),
+                                            ));
+                                            let new_id = new_shape.id();
+                                            state.canvas.document.add_shape(new_shape.clone());
+                                            new_selection.push(new_id);
+                                            // Sync to CRDT
+                                            if state.collab.is_in_room() {
+                                                let _ =
+                                                    state.collab.crdt_mut().add_shape(&new_shape);
+                                            }
+                                        }
+                                    }
+                                    // Select the new shapes
+                                    state.canvas.clear_selection();
+                                    for id in new_selection {
+                                        state.canvas.add_to_selection(id);
+                                    }
+                                }
+                            }
+                            UiAction::CopyShapes => {
+                                if !state.canvas.selection.is_empty() {
+                                    let shapes: Vec<Shape> = state
+                                        .canvas
+                                        .selection
+                                        .iter()
+                                        .filter_map(|&id| {
+                                            state.canvas.document.get_shape(id).cloned()
+                                        })
+                                        .collect();
+                                    if let Ok(json) = serde_json::to_string(&shapes) {
+                                        state.ui_state.clipboard_shapes = Some(json);
+                                        log::info!("Copied {} shapes to clipboard", shapes.len());
+                                    }
+                                }
+                            }
+                            UiAction::CutShapes => {
+                                if !state.canvas.selection.is_empty() {
+                                    let shapes: Vec<Shape> = state
+                                        .canvas
+                                        .selection
+                                        .iter()
+                                        .filter_map(|&id| {
+                                            state.canvas.document.get_shape(id).cloned()
+                                        })
+                                        .collect();
+                                    if let Ok(json) = serde_json::to_string(&shapes) {
+                                        state.ui_state.clipboard_shapes = Some(json);
+                                        log::info!("Cut {} shapes to clipboard", shapes.len());
+                                        // Delete the shapes
+                                        state.canvas.document.push_undo();
+                                        for &id in &state.canvas.selection.clone() {
+                                            state.canvas.document.remove_shape(id);
+                                            if state.collab.is_in_room() {
+                                                let _ = state
+                                                    .collab
+                                                    .crdt_mut()
+                                                    .remove_shape(&id.to_string());
+                                            }
+                                        }
+                                        state.canvas.clear_selection();
+                                    }
+                                }
+                            }
+                            UiAction::PasteShapes => {
+                                if let Some(json) = &state.ui_state.clipboard_shapes.clone() {
+                                    if let Ok(shapes) = serde_json::from_str::<Vec<Shape>>(json) {
+                                        // Center pasted shapes in the current
+                                        // viewport so cross-tab pastes are visible.
+                                        let center =
+                                            state.canvas.camera.screen_to_world(kurbo::Point::new(
+                                                state.canvas.viewport_size.width / 2.0,
+                                                state.canvas.viewport_size.height / 2.0,
+                                            ));
+                                        let shapes: Vec<Shape> = shapes
+                                            .into_iter()
+                                            .map(|mut s| {
+                                                s.regenerate_id();
+                                                s
+                                            })
+                                            .collect();
+                                        place_shapes_centered_at(
+                                            &mut state.canvas,
+                                            &mut state.collab,
+                                            shapes,
+                                            center,
+                                        );
+                                        log::info!("Pasted shapes from clipboard");
+                                    }
+                                }
+                            }
+                            UiAction::AlignLeft => {
+                                if state.canvas.selection.len() >= 2 {
+                                    state.canvas.document.push_undo();
+                                    // Find leftmost x
+                                    let min_x = state
+                                        .canvas
+                                        .selection
+                                        .iter()
+                                        .filter_map(|&id| state.canvas.document.get_shape(id))
+                                        .map(|s| s.bounds().x0)
+                                        .fold(f64::INFINITY, f64::min);
+                                    // Align all shapes to left
+                                    for &id in &state.canvas.selection {
+                                        if let Some(shape) = state.canvas.document.get_shape_mut(id)
+                                        {
+                                            let bounds = shape.bounds();
+                                            let delta = min_x - bounds.x0;
+                                            shape.transform(kurbo::Affine::translate(
+                                                kurbo::Vec2::new(delta, 0.0),
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                            UiAction::AlignRight => {
+                                if state.canvas.selection.len() >= 2 {
+                                    state.canvas.document.push_undo();
+                                    let max_x = state
+                                        .canvas
+                                        .selection
+                                        .iter()
+                                        .filter_map(|&id| state.canvas.document.get_shape(id))
+                                        .map(|s| s.bounds().x1)
+                                        .fold(f64::NEG_INFINITY, f64::max);
+                                    for &id in &state.canvas.selection {
+                                        if let Some(shape) = state.canvas.document.get_shape_mut(id)
+                                        {
+                                            let bounds = shape.bounds();
+                                            let delta = max_x - bounds.x1;
+                                            shape.transform(kurbo::Affine::translate(
+                                                kurbo::Vec2::new(delta, 0.0),
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                            UiAction::AlignTop => {
+                                if state.canvas.selection.len() >= 2 {
+                                    state.canvas.document.push_undo();
+                                    let min_y = state
+                                        .canvas
+                                        .selection
+                                        .iter()
+                                        .filter_map(|&id| state.canvas.document.get_shape(id))
+                                        .map(|s| s.bounds().y0)
+                                        .fold(f64::INFINITY, f64::min);
+                                    for &id in &state.canvas.selection {
+                                        if let Some(shape) = state.canvas.document.get_shape_mut(id)
+                                        {
+                                            let bounds = shape.bounds();
+                                            let delta = min_y - bounds.y0;
+                                            shape.transform(kurbo::Affine::translate(
+                                                kurbo::Vec2::new(0.0, delta),
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                            UiAction::AlignBottom => {
+                                if state.canvas.selection.len() >= 2 {
+                                    state.canvas.document.push_undo();
+                                    let max_y = state
+                                        .canvas
+                                        .selection
+                                        .iter()
+                                        .filter_map(|&id| state.canvas.document.get_shape(id))
+                                        .map(|s| s.bounds().y1)
+                                        .fold(f64::NEG_INFINITY, f64::max);
+                                    for &id in &state.canvas.selection {
+                                        if let Some(shape) = state.canvas.document.get_shape_mut(id)
+                                        {
+                                            let bounds = shape.bounds();
+                                            let delta = max_y - bounds.y1;
+                                            shape.transform(kurbo::Affine::translate(
+                                                kurbo::Vec2::new(0.0, delta),
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                            UiAction::AlignCenterH => {
+                                if state.canvas.selection.len() >= 2 {
+                                    state.canvas.document.push_undo();
+                                    // Calculate combined bounds center Y
+                                    let mut combined: Option<kurbo::Rect> = None;
+                                    for &id in &state.canvas.selection {
+                                        if let Some(shape) = state.canvas.document.get_shape(id) {
+                                            let b = shape.bounds();
+                                            combined = Some(match combined {
+                                                Some(r) => r.union(b),
+                                                None => b,
+                                            });
+                                        }
+                                    }
+                                    if let Some(bounds) = combined {
+                                        let center_y = bounds.center().y;
+                                        for &id in &state.canvas.selection {
+                                            if let Some(shape) =
+                                                state.canvas.document.get_shape_mut(id)
+                                            {
+                                                let shape_center_y = shape.bounds().center().y;
+                                                let delta = center_y - shape_center_y;
+                                                shape.transform(kurbo::Affine::translate(
+                                                    kurbo::Vec2::new(0.0, delta),
+                                                ));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            UiAction::AlignCenterV => {
+                                if state.canvas.selection.len() >= 2 {
+                                    state.canvas.document.push_undo();
+                                    // Calculate combined bounds center X
+                                    let mut combined: Option<kurbo::Rect> = None;
+                                    for &id in &state.canvas.selection {
+                                        if let Some(shape) = state.canvas.document.get_shape(id) {
+                                            let b = shape.bounds();
+                                            combined = Some(match combined {
+                                                Some(r) => r.union(b),
+                                                None => b,
+                                            });
+                                        }
+                                    }
+                                    if let Some(bounds) = combined {
+                                        let center_x = bounds.center().x;
+                                        for &id in &state.canvas.selection {
+                                            if let Some(shape) =
+                                                state.canvas.document.get_shape_mut(id)
+                                            {
+                                                let shape_center_x = shape.bounds().center().x;
+                                                let delta = center_x - shape_center_x;
+                                                shape.transform(kurbo::Affine::translate(
+                                                    kurbo::Vec2::new(delta, 0.0),
+                                                ));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            UiAction::ShowShortcuts => {
+                                state.ui_state.shortcuts_modal_open =
+                                    !state.ui_state.shortcuts_modal_open;
+                            }
+                            UiAction::SaveSettings => {
+                                state.ui_state.settings.sanitize();
+                                crate::settings::save_settings(&state.ui_state.settings);
+                                log::info!("Settings saved");
+                            }
+                            UiAction::ImportIntroJson => {
+                                #[cfg(target_arch = "wasm32")]
+                                file_ops::import_intro_json_async();
+                            }
+                            UiAction::ClearIntro => {
+                                state.ui_state.settings.intro_json.clear();
+                                state.ui_state.settings.intro_name.clear();
+                                crate::settings::save_settings(&state.ui_state.settings);
+                            }
+                            UiAction::ChooseExportFolder => {
+                                #[cfg(target_arch = "wasm32")]
+                                file_ops::choose_export_directory();
+                            }
+                            UiAction::ToggleCalligraphy => {
+                                state.canvas.tool_manager.calligraphy_mode =
+                                    !state.canvas.tool_manager.calligraphy_mode;
+                                log::info!(
+                                    "Calligraphy mode: {}",
+                                    state.canvas.tool_manager.calligraphy_mode
+                                );
+                            }
+                            UiAction::TogglePressureSimulation => {
+                                state.canvas.tool_manager.pressure_simulation =
+                                    !state.canvas.tool_manager.pressure_simulation;
+                                log::info!(
+                                    "Pressure simulation: {}",
+                                    state.canvas.tool_manager.pressure_simulation
+                                );
+                            }
+                            UiAction::FlipHorizontal => {
+                                if !state.canvas.selection.is_empty() {
+                                    state.canvas.document.push_undo();
+                                    state.canvas.flip_selected_horizontal();
+                                    log::info!("Flipped selection horizontally");
+                                }
+                            }
+                            UiAction::FlipVertical => {
+                                if !state.canvas.selection.is_empty() {
+                                    state.canvas.document.push_undo();
+                                    state.canvas.flip_selected_vertical();
+                                    log::info!("Flipped selection vertically");
+                                }
+                            }
+                            UiAction::SetOpacity(opacity) => {
+                                if !state.canvas.selection.is_empty() {
+                                    state.canvas.document.push_undo();
+                                    for &id in &state.canvas.selection {
+                                        if let Some(shape) = state.canvas.document.get_shape_mut(id)
+                                        {
+                                            shape.style_mut().opacity = opacity as f64;
+                                        }
+                                    }
+                                    log::info!("Set opacity to {}%", (opacity * 100.0) as i32);
+                                }
+                            }
+                            UiAction::PreviewMath(shape_id, source, latex) => {
+                                if let Some(Shape::Math(math)) =
+                                    state.canvas.document.get_shape_mut(shape_id)
+                                {
+                                    math.set_formula(source, latex);
+                                }
+                            }
+                            UiAction::FinishMath(
+                                shape_id,
+                                original_source,
+                                original_latex,
+                                is_new,
+                                source,
+                                latex,
+                            ) => {
+                                // Commit the field contents even when typing and Escape
+                                // are delivered within the same animation frame.
+                                if let Some(Shape::Math(math)) =
+                                    state.canvas.document.get_shape_mut(shape_id)
+                                {
+                                    math.set_formula(source, latex);
+                                }
+                                let current =
+                                    state.canvas.document.get_shape(shape_id).and_then(|shape| {
+                                        match shape {
+                                            Shape::Math(math) => {
+                                                Some((math.source.clone(), math.latex.clone()))
+                                            }
+                                            _ => None,
+                                        }
+                                    });
+
+                                if let Some((current_source, current_latex)) = current {
+                                    if current_source.trim().is_empty() {
+                                        state.canvas.remove_shape(shape_id);
+                                    } else if !is_new
+                                        && (current_source != original_source
+                                            || current_latex != original_latex)
+                                    {
+                                        // Build one clean undo step for the entire inline edit.
+                                        if let Some(Shape::Math(math)) =
+                                            state.canvas.document.get_shape_mut(shape_id)
+                                        {
+                                            math.set_formula(
+                                                original_source.clone(),
+                                                original_latex.clone(),
+                                            );
+                                        }
+                                        state.canvas.document.push_undo();
+                                        if let Some(Shape::Math(math)) =
+                                            state.canvas.document.get_shape_mut(shape_id)
+                                        {
+                                            math.set_formula(current_source, current_latex);
+                                        }
+                                    }
+                                }
+                            }
+                            UiAction::CancelMath(
+                                shape_id,
+                                original_source,
+                                original_latex,
+                                is_new,
+                            ) => {
+                                if is_new {
+                                    state.canvas.remove_shape(shape_id);
+                                } else if let Some(Shape::Math(math)) =
+                                    state.canvas.document.get_shape_mut(shape_id)
+                                {
+                                    math.set_formula(original_source, original_latex);
+                                }
+                            }
+                        }
+                    }
+                });
+
+                state.ui_keyboard_pending = false;
+                #[cfg(target_arch = "wasm32")]
+                for command in &egui_output.platform_output.commands {
+                    if let egui::OutputCommand::CopyText(text) = command {
+                        file_ops::copy_text_to_clipboard(text);
+                    }
+                }
+                state
+                    .egui_state
+                    .handle_platform_output(&state.window, egui_output.platform_output);
+                let egui_primitives = state
+                    .egui_ctx
+                    .tessellate(egui_output.shapes, egui_output.pixels_per_point);
+
+                // Handle tab operations, which need exclusive access to the
+                // whole AppState (unavailable inside the egui closure).
+                if let Some(action) = tab_action {
+                    match action {
+                        UiAction::SwitchTab(i) => switch_to_tab(state, i),
+                        UiAction::NewCanvas => {
+                            let mut n = state.tabs.len() + 1;
+                            let mut name = format!("Canvas {}", n);
+                            while state.tabs.iter().any(|tab| tab.name == name) {
+                                n += 1;
+                                name = format!("Canvas {}", n);
+                            }
+                            let mut document = drafftink_core::canvas::CanvasDocument::new();
+                            document.name = name.clone();
+                            add_tab(state, name, document);
+                        }
+                        UiAction::RenameTab(i, name) => {
+                            if i < state.tabs.len() {
+                                let clean = name.trim().to_string();
+                                if !clean.is_empty() {
+                                    state.tabs[i].name = clean.clone();
+                                    state.tabs[i].document.name = clean.clone();
+                                    if i == state.active_tab {
+                                        state.canvas.document.name = clean;
+                                        #[cfg(target_arch = "wasm32")]
+                                        file_ops::autosave_document(&state.canvas.document);
+                                    }
+                                }
+                            }
+                        }
+                        UiAction::CloseTab(i) => close_tab(state, i),
+                        UiAction::LoadLibrary => file_ops::load_excalidrawlib_async(),
+                        _ => {}
+                    }
+                    state.needs_redraw = true;
+                }
+
+                // Handle deferred actions that need render_cx access
+                if let Some(action) = deferred_action {
+                    if let Some(render_cx) = self.render_cx.as_ref() {
+                        let device_handle = &render_cx.devices[state.surface.dev_id];
+
+                        let export_scale = state.ui_state.export_scale as f64;
+
+                        match action {
+                            UiAction::ExportPng => {
+                                // Build export scene (selection or full document) with scale
+                                let (scene, bounds) = if state.canvas.selection.is_empty() {
+                                    state
+                                        .shape_renderer
+                                        .build_export_scene_with_pins(
+                                            &state.canvas.document,
+                                            export_scale,
+                                            Some(state.canvas.camera.transform().inverse()),
+                                        )
+                                } else {
+                                    state.shape_renderer.build_export_scene_selection_with_pins(
+                                        &state.canvas.document,
+                                        &state.canvas.selection,
+                                        export_scale,
+                                        Some(state.canvas.camera.transform().inverse()),
+                                    )
+                                };
+                                if let Some(bounds) = bounds {
+                                    let width = bounds.width().ceil() as u32;
+                                    let height = bounds.height().ceil() as u32;
+                                    let device = &device_handle.device;
+                                    let queue = &device_handle.queue;
+
+                                    log::info!(
+                                        "Exporting PNG at {}x scale: {}x{}",
+                                        state.ui_state.export_scale,
+                                        width,
+                                        height
+                                    );
+
+                                    #[cfg(not(target_arch = "wasm32"))]
+                                    {
+                                        if let Some(result) = render_scene_to_png(
+                                            device,
+                                            queue,
+                                            &mut state.vello_renderer,
+                                            &scene,
+                                            width,
+                                            height,
+                                        ) {
+                                            let scene_json = state.canvas.document.to_json().ok();
+                                            if let Some(png_data) = encode_png(
+                                                &result.rgba_data,
+                                                result.width,
+                                                result.height,
+                                                scene_json.as_deref(),
+                                            ) {
+                                                file_ops::export_png(
+                                                    &png_data,
+                                                    &state.canvas.document.name,
+                                                );
+                                            }
+                                        }
+                                    }
+
+                                    #[cfg(target_arch = "wasm32")]
+                                    {
+                                        let filename =
+                                            format!("{}.png", state.canvas.document.name);
+                                        let scene_json = state.canvas.document.to_json().ok();
+                                        spawn_png_export_async(
+                                            &mut state.vello_renderer,
+                                            device,
+                                            queue,
+                                            scene,
+                                            width,
+                                            height,
+                                            filename,
+                                            false,
+                                            scene_json,
+                                        );
+                                    }
+                                } else {
+                                    log::info!("Nothing to export - document is empty");
+                                }
+                            }
+                            UiAction::CopyPng => {
+                                // Build export scene (selection or full document) with scale
+                                let (scene, bounds) = if state.canvas.selection.is_empty() {
+                                    state
+                                        .shape_renderer
+                                        .build_export_scene_with_pins(
+                                            &state.canvas.document,
+                                            export_scale,
+                                            Some(state.canvas.camera.transform().inverse()),
+                                        )
+                                } else {
+                                    state.shape_renderer.build_export_scene_selection_with_pins(
+                                        &state.canvas.document,
+                                        &state.canvas.selection,
+                                        export_scale,
+                                        Some(state.canvas.camera.transform().inverse()),
+                                    )
+                                };
+
+                                if let Some(bounds) = bounds {
+                                    let width = bounds.width().ceil() as u32;
+                                    let height = bounds.height().ceil() as u32;
+                                    let device = &device_handle.device;
+                                    let queue = &device_handle.queue;
+
+                                    log::info!(
+                                        "Copying PNG at {}x scale: {}x{}",
+                                        state.ui_state.export_scale,
+                                        width,
+                                        height
+                                    );
+
+                                    #[cfg(not(target_arch = "wasm32"))]
+                                    {
+                                        if let Some(result) = render_scene_to_png(
+                                            device,
+                                            queue,
+                                            &mut state.vello_renderer,
+                                            &scene,
+                                            width,
+                                            height,
+                                        ) {
+                                            file_ops::copy_png_to_clipboard(
+                                                &result.rgba_data,
+                                                result.width,
+                                                result.height,
+                                            );
+                                        }
+                                    }
+
+                                    #[cfg(target_arch = "wasm32")]
+                                    {
+                                        spawn_png_export_async(
+                                            &mut state.vello_renderer,
+                                            device,
+                                            queue,
+                                            scene,
+                                            width,
+                                            height,
+                                            "selection.png".to_string(),
+                                            true,
+                                            None, // No metadata for clipboard copy
+                                        );
+                                    }
+                                } else {
+                                    log::info!("Nothing to copy - selection is empty");
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                // Build Vello scene
+                let viewport_size = Size::new(
+                    state.canvas.viewport_size.width,
+                    state.canvas.viewport_size.height,
+                );
+                // Get selection rectangle if active
+                let selection_rect = state.event_handler.selection_rect().map(|sr| sr.to_rect());
+
+                // Get snap point for guides
+                let snap_point = state.event_handler.last_snap.as_ref().map(|s| s.point);
+
+                // Get angle snap info for visualization
+                let angle_snap_info = state
+                    .event_handler
+                    .last_angle_snap
+                    .as_ref()
+                    .filter(|_| state.ui_state.angle_snap_enabled)
+                    .map(|angle_snap| AngleSnapInfo {
+                        start_point: state
+                            .event_handler
+                            .line_start_point
+                            .unwrap_or(kurbo::Point::ZERO),
+                        end_point: angle_snap.point,
+                        angle_degrees: angle_snap.angle_degrees,
+                        is_snapped: angle_snap.snapped,
+                    });
+
+                // Get rotation info for helper lines
+                let rotation_info = state.event_handler.rotation_state.as_ref().map(|rs| {
+                    drafftink_render::RotationInfo {
+                        center: rs.center,
+                        angle: rs.angle,
+                        snapped: rs.snapped,
+                    }
+                });
+
+                // Get eraser cursor info
+                let eraser_cursor = if state.canvas.tool_manager.current_tool == ToolKind::Eraser {
+                    state
+                        .event_handler
+                        .eraser_path()
+                        .last()
+                        .map(|p| (*p, state.event_handler.eraser_radius))
+                } else {
+                    None
+                };
+
+                // Get laser pointer info
+                let laser_pointer =
+                    if state.canvas.tool_manager.current_tool == ToolKind::LaserPointer {
+                        state
+                            .event_handler
+                            .laser_position
+                            .map(|pos| (pos, state.event_handler.laser_trail.clone()))
+                    } else {
+                        None
+                    };
+
+                let smart_guides = state.event_handler.smart_guides.clone();
+
+                if let Some(automatic) = state.pending_png_save.take() {
+                    if let Some(render_cx) = self.render_cx.as_ref() {
+                        save_canvas_png(state, render_cx, automatic);
+                    }
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    state.ui_state.save_status = file_ops::save_status();
+                }
+
+                let render_ctx = RenderContext::new(&state.canvas, viewport_size)
+                    .with_scale_factor(state.window.scale_factor())
+                    .with_background(state.config.background_color)
+                    .with_grid(state.config.grid_style)
+                    .with_selection_rect(selection_rect)
+                    .with_selection_color(Color::from_rgba8(
+                        state.ui_state.settings.accent_color[0],
+                        state.ui_state.settings.accent_color[1],
+                        state.ui_state.settings.accent_color[2],
+                        255,
+                    ))
+                    .with_editing_shape(state.event_handler.editing_text)
+                    .with_snap_point(snap_point)
+                    .with_angle_snap(angle_snap_info)
+                    .with_rotation_info(rotation_info)
+                    .with_smart_guides(smart_guides)
+                    .with_eraser_cursor(eraser_cursor)
+                    .with_laser_pointer(laser_pointer)
+                    .with_laser_color(Color::from_rgba8(
+                        state.ui_state.settings.laser_color[0],
+                        state.ui_state.settings.laser_color[1],
+                        state.ui_state.settings.laser_color[2],
+                        255,
+                    ));
+
+                // Inactive canvases keep encoded sources, not decoded images/text/GPU layouts.
+                state
+                    .shape_renderer
+                    .retain_open_document_caches(std::iter::once(&state.canvas.document));
+                state.shape_renderer.build_scene(&render_ctx);
+                #[cfg(target_arch = "wasm32")]
+                if let Some(window) = web_sys::window() {
+                    use wasm_bindgen::JsValue;
+                    if window
+                        .location()
+                        .search()
+                        .unwrap_or_default()
+                        .contains("drafftink-test=1")
+                    {
+                        let shapes: Vec<_> = state.canvas.document.shapes_ordered().map(|shape| {
+                            let bounds=shape.bounds();
+                            let to_screen=|p| if state.canvas.document.is_pinned(shape.id()) { p } else { state.canvas.camera.world_to_screen(p) };
+                            let top_left=to_screen(Point::new(bounds.x0,bounds.y0));
+                            let bottom_right=to_screen(Point::new(bounds.x1,bounds.y1));
+                            let handles:Vec<_>=drafftink_core::selection::get_handles(shape).into_iter().map(|handle| {
+                                let p=to_screen(handle.position);
+                                serde_json::json!({"kind":format!("{:?}",handle.kind),"x":p.x,"y":p.y})
+                            }).collect();
+                            serde_json::json!({"id":shape.id(),"shape":shape,"pinned":state.canvas.document.is_pinned(shape.id()),"bounds":[top_left.x,top_left.y,bottom_right.x,bottom_right.y],"handles":handles})
+                        }).collect();
+
+                        let status = serde_json::json!({"shapes":shapes,"presentation":state.ui_state.presentation_mode,"tool":format!("{:?}",state.ui_state.current_tool),"editing_text":state.event_handler.editing_text,"inline_dialog":state.ui_state.inline_formula_draft.is_some(),"inline_error":state.ui_state.inline_formula_error,"zoom":state.canvas.camera.zoom,"camera_offset":[state.canvas.camera.offset.x,state.canvas.camera.offset.y],"cursor_mode":browser_cursor_kind(state).0,"png_save_requests":state.png_save_requests,"active_tab":state.active_tab,"tabs":state.tabs.len(),"memory":{"parked_shapes_total":state.tabs.iter().map(|tab|tab.document.len()).sum::<usize>(),"image_cache_bytes":state.shape_renderer.image_cache_bytes(),"image_cache_budget_bytes":32*1024*1024,"path_cache_payload_bytes":state.shape_renderer.path_cache_bytes(),"history_payload_bytes":state.canvas.document.history_memory_bytes(),"render_target_allocations":state.render_target_allocations,"render_target_bytes":state.surface.config.width as u64*state.surface.config.height as u64*4},"geometry":format!("{:?}",state.ui_state.geometry),"context_properties":state.ui_state.context_properties,"properties_visible":!state.ui_state.context_rects.is_empty(),"selected_text":state.text_edit_state.as_ref().and_then(|e|e.editor().selected_text()).map(|s|s.to_string()),"insertion_script":state.text_edit_state.as_ref().map(|e|e.script_value()),"text_caret":state.text_edit_state.as_ref().and_then(|e|e.cursor_geometry(1.5)).map(|r|[r.x0,r.y0,r.x1,r.y1]),"editing_math":state.ui_state.math_editor.as_ref().map(|e| e.shape_id),"math_form_rect":state.ui_state.math_editor_rect.map(|r|[r.min.x,r.min.y,r.max.x,r.max.y]),"math_input_focused":state.ui_state.math_editor.as_ref().is_some_and(|e|state.egui_ctx.memory(|m|m.focused()==Some(egui::Id::new(("math_source",e.shape_id))))),"command_editor":state.ui_state.text_command_editor.as_ref().map(|e| &e.source),"selected_count":state.canvas.selection.len(),"accent_color":state.ui_state.settings.accent_color,"selection_rect":selection_rect.map(|r|[r.x0,r.y0,r.x1,r.y1]),"controls":state.ui_state.test_controls});
+                        let status = {
+                            let mut status = status;
+                            status["laser_permanent"] = state.ui_state.settings.laser_permanent.into();
+                            status["laser_palette_open"] = state.ui_state.laser_color_open.into();
+                            status["eraser_mode"] = format!("{:?}", state.ui_state.eraser_mode).into();
+                            status
+                        };
+                        let _ = js_sys::Reflect::set(
+                            window.as_ref(),
+                            &JsValue::from_str("__drafftinkTestState"),
+                            &JsValue::from_str(&status.to_string()),
+                        );
+                    }
+                }
+
+                // Render text in edit mode (with cursor and selection)
+                if let Some(text_id) = state.event_handler.editing_text {
+                    if let Some(Shape::Text(text)) = state.canvas.document.get_shape(text_id) {
+                        let camera_transform = if state.canvas.document.is_pinned(text_id) {
+                            kurbo::Affine::IDENTITY
+                        } else {
+                            state.canvas.camera.transform()
+                        };
+
+                        // Ensure edit state exists
+                        if state.text_edit_state.is_none() {
+                            let mut edit_state =
+                                TextEditState::new(&text.content, text.font_size as f32);
+                            edit_state.cursor_reset();
+                            state.text_edit_state = Some(edit_state);
+                        }
+
+                        // Update cursor blinking
+                        if let Some(edit_state) = &mut state.text_edit_state {
+                            edit_state.cursor_blink();
+                            state.shape_renderer.render_text_editing(
+                                text,
+                                edit_state,
+                                camera_transform,
+                                state.event_handler.text_edit_anchor,
+                            );
+                        }
+                    }
+                }
+
+                if let Some(editor) = state.ui_state.text_command_editor.as_ref() {
+                    let id = editor.text_id;
+                    let previous = state.ui_state.text_command_pos;
+                    position_text_command_panel(state, id);
+                    if previous != state.ui_state.text_command_pos {
+                        state.window.request_redraw();
+                    }
+                }
+
+                // Render remote peer cursors
+                {
+                    let camera = &state.canvas.camera;
+                    for peer in state.remote_peers.values() {
+                        if let Some(ref cursor) = peer.awareness.cursor {
+                            let world_pos = Point::new(cursor.x, cursor.y);
+                            let screen_pos = camera.world_to_screen(world_pos);
+
+                            // Get peer color (or use a default)
+                            let color = peer
+                                .awareness
+                                .user
+                                .as_ref()
+                                .and_then(|u| parse_color(&u.color))
+                                .unwrap_or(Color::from_rgba8(59, 130, 246, 255)); // Default blue
+
+                            // Get peer name (or use "Anonymous")
+                            // Draw cursor pointer
+                            state.shape_renderer.draw_cursor(screen_pos, color);
+                        }
+                    }
+                }
+
+                let scene = state.shape_renderer.take_scene();
+
+                // Render
+                let Some(render_cx) = self.render_cx.as_ref() else {
+                    return;
+                };
+
+                let device_handle = &render_cx.devices[state.surface.dev_id];
+                let device = &device_handle.device;
+                let queue = &device_handle.queue;
+
+                let surface_texture = match state.surface.surface.get_current_texture() {
+                    Ok(t) => t,
+                    Err(e) => {
+                        log::warn!("Failed to get surface texture: {:?}", e);
+                        return;
+                    }
+                };
+
+                let width = state.surface.config.width;
+                let height = state.surface.config.height;
+
+                let params = RenderParams {
+                    base_color: state.config.background_color,
+                    width,
+                    height,
+                    antialiasing_method: AaConfig::Area,
+                };
+
+                // Create an intermediate texture with StorageBinding usage for Vello.
+                // IMPORTANT: Must use Rgba8Unorm format because:
+                // 1. Vello's compute shaders require StorageBinding usage
+                // 2. WebGPU only supports StorageBinding for Rgba8Unorm (not Bgra8Unorm)
+                // 3. We copy to the surface texture afterward (which may be Bgra8Unorm)
+                // Reuse the screen target; create a replacement only when its size changes.
+                if state
+                    .render_target
+                    .as_ref()
+                    .is_none_or(|target| target.0 != width || target.1 != height)
+                {
+                    let render_texture = device.create_texture(&vello::wgpu::TextureDescriptor {
+                        label: Some("vello render texture"),
+                        size: vello::wgpu::Extent3d {
+                            width,
+                            height,
+                            depth_or_array_layers: 1,
+                        },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: vello::wgpu::TextureDimension::D2,
+                        format: vello::wgpu::TextureFormat::Rgba8Unorm,
+                        usage: vello::wgpu::TextureUsages::STORAGE_BINDING
+                            | vello::wgpu::TextureUsages::COPY_SRC
+                            | vello::wgpu::TextureUsages::TEXTURE_BINDING,
+                        view_formats: &[],
+                    });
+
+                    let render_texture_view =
+                        render_texture.create_view(&vello::wgpu::TextureViewDescriptor::default());
+
+                    state.render_target =
+                        Some((width, height, render_texture, render_texture_view));
+                    state.render_target_allocations += 1;
+                }
+                let render_texture_view = &state.render_target.as_ref().unwrap().3;
+
+                // Render Vello to the intermediate texture
+                if let Err(e) = state.vello_renderer.render_to_texture(
+                    device,
+                    queue,
+                    &scene,
+                    &render_texture_view,
+                    &params,
+                ) {
+                    log::error!("Failed to render: {:?}", e);
+                    return;
+                }
+
+                state.shape_renderer.recycle_scene(scene);
+
+                let surface_view = surface_texture
+                    .texture
+                    .create_view(&vello::wgpu::TextureViewDescriptor::default());
+
+                // Blit the RGBA intermediate texture to the surface texture (which may be BGRA)
+                {
+                    let mut blit_encoder =
+                        device.create_command_encoder(&vello::wgpu::CommandEncoderDescriptor {
+                            label: Some("blit encoder"),
+                        });
+
+                    state.texture_blitter.copy(
+                        device,
+                        &mut blit_encoder,
+                        &render_texture_view,
+                        &surface_view,
+                    );
+
+                    queue.submit(std::iter::once(blit_encoder.finish()));
+                }
+
+                // Update egui textures
+                for (id, image_delta) in &egui_output.textures_delta.set {
+                    state
+                        .egui_renderer
+                        .update_texture(device, queue, *id, image_delta);
+                }
+
+                // Render egui on top
+                let screen_descriptor = egui_wgpu::ScreenDescriptor {
+                    size_in_pixels: [width, height],
+                    pixels_per_point: egui_output.pixels_per_point,
+                };
+
+                {
+                    let mut egui_encoder =
+                        device.create_command_encoder(&vello::wgpu::CommandEncoderDescriptor {
+                            label: Some("egui encoder"),
+                        });
+
+                    state.egui_renderer.update_buffers(
+                        device,
+                        queue,
+                        &mut egui_encoder,
+                        &egui_primitives,
+                        &screen_descriptor,
+                    );
+
+                    let render_pass =
+                        egui_encoder.begin_render_pass(&vello::wgpu::RenderPassDescriptor {
+                            label: Some("egui render pass"),
+                            color_attachments: &[Some(vello::wgpu::RenderPassColorAttachment {
+                                view: &surface_view,
+                                resolve_target: None,
+                                ops: vello::wgpu::Operations {
+                                    load: vello::wgpu::LoadOp::Load, // Keep Vello content
+                                    store: vello::wgpu::StoreOp::Store,
+                                },
+                                depth_slice: None,
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                        });
+
+                    // Use forget_lifetime to satisfy egui-wgpu's 'static requirement
+                    let mut render_pass = render_pass.forget_lifetime();
+                    state.egui_renderer.render(
+                        &mut render_pass,
+                        &egui_primitives,
+                        &screen_descriptor,
+                    );
+                    drop(render_pass);
+
+                    queue.submit(std::iter::once(egui_encoder.finish()));
+                }
+
+                // Free egui textures
+                for id in &egui_output.textures_delta.free {
+                    state.egui_renderer.free_texture(id);
+                }
+                surface_texture.present();
+                #[cfg(target_arch = "wasm32")]
+                {
+                    // Keep the splash visible until a real WebGPU frame has been presented.
+                    let _ = js_sys::eval("if(window.drafftinkLoadingDone){window.drafftinkLoadingDone();}");
+                }
+
+                if state.event_handler.editing_text.is_some() {
+                    state
+                        .egui_ctx
+                        .request_repaint_after(std::time::Duration::from_millis(500));
+                }
+                if edge_panning {
+                    state
+                        .egui_ctx
+                        .request_repaint_after(std::time::Duration::from_millis(16));
+                }
+                if !state.event_handler.laser_trail.is_empty() {
+                    state
+                        .egui_ctx
+                        .request_repaint_after(std::time::Duration::from_millis(16));
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    if state.ui_state.settings.autosave_enabled {
+                        let interval = std::time::Duration::from_secs(
+                            state.ui_state.settings.autosave_interval_secs.max(1),
+                        );
+                        state.egui_ctx.request_repaint_after(
+                            interval.saturating_sub(state.last_autosave.elapsed()),
+                        );
+                    }
+                    apply_browser_cursor(&state);
+                }
+                // Request redraw if needed
+                if state.needs_redraw
+                    || ui_action_taken
+                    || state.egui_ctx.has_requested_repaint()
+                    || (cfg!(not(target_arch = "wasm32")) && state.ui_state.math_editor.is_some())
+                {
+                    state.needs_redraw = false;
+                    state.window.request_redraw();
+                }
+            }
+
+            WindowEvent::CursorMoved { position, .. } => {
+                let point = Point::new(position.x, position.y);
+
+                // Skip canvas processing if egui wants the pointer
+                if egui_wants_input {
+                    state.window.set_cursor(CursorIcon::Default);
+                    state.needs_redraw = true;
+                    state.window.request_redraw();
+                    return;
+                }
+
+                let world_point = state.canvas.camera.screen_to_world(point);
+                if state.canvas.tool_manager.current_tool == ToolKind::LaserPointer
+                    && state.ui_state.settings.laser_permanent
+                {
+                    state.event_handler.update_laser_pointer(world_point);
+                    state.needs_redraw = true;
+                }
+
+                // Update cursor based on hover position (only when not dragging)
+                if !state.input.is_drawing() {
+                    use drafftink_core::selection::{Corner, HandleKind};
+                    let cursor = match state
+                        .event_handler
+                        .get_cursor_for_position(&state.canvas, world_point)
+                    {
+                        Some(Some(HandleKind::Corner(Corner::TopLeft | Corner::BottomRight))) => {
+                            CursorIcon::NwseResize
+                        }
+                        Some(Some(HandleKind::Corner(Corner::TopRight | Corner::BottomLeft))) => {
+                            CursorIcon::NeswResize
+                        }
+                        Some(Some(HandleKind::Edge(
+                            drafftink_core::selection::Edge::Top
+                            | drafftink_core::selection::Edge::Bottom,
+                        ))) => CursorIcon::NsResize,
+                        Some(Some(HandleKind::Edge(_))) => CursorIcon::EwResize,
+                        Some(Some(
+                            HandleKind::Endpoint(_)
+                            | HandleKind::IntermediatePoint(_)
+                            | HandleKind::SegmentMidpoint(_),
+                        )) => CursorIcon::Crosshair,
+                        Some(Some(HandleKind::Rotate)) => CursorIcon::Grab,
+                        Some(None) => CursorIcon::Move,
+                        None => CursorIcon::Default,
+                    };
+                    state.window.set_cursor(cursor);
+                }
+
+                // Broadcast cursor position to collaborators (throttled)
+                if state.collab.is_in_room() {
+                    // Simple throttling: only send every ~100ms (every 6 frames at 60fps)
+                    static mut CURSOR_FRAME: u32 = 0;
+                    unsafe {
+                        CURSOR_FRAME = CURSOR_FRAME.wrapping_add(1);
+                        if CURSOR_FRAME % 6 == 0 {
+                            state.collab.set_cursor(world_point.x, world_point.y);
+                            if let Some(ref ws) = state.websocket {
+                                for msg in state.collab.take_outgoing() {
+                                    let _ = ws.send(&msg);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Handle dragging (manipulation or shape drawing).
+                // SPACE keeps InputState active while the temporary Pan tool is held.
+                if state.input.is_drawing() {
+                    // Handle text selection dragging first
+                    if let Some(text_id) = state.event_handler.editing_text {
+                        if let Some(Shape::Text(text)) = state.canvas.document.get_shape(text_id) {
+                            // Convert drag position to text-local coordinates
+                            let edit_point = if state.canvas.document.is_pinned(text_id) { state.canvas.camera.world_to_screen(world_point) } else { world_point };
+                            let local = text.editing_local_point(edit_point);
+                            let local_x = local.x as f32;
+                            let local_y = local.y as f32;
+
+                            // Extend selection during drag using new API
+                            if let Some(edit_state) = &mut state.text_edit_state {
+                                let (font_cx, layout_cx) = state.shape_renderer.contexts_mut();
+                                edit_state.handle_mouse_drag(local_x, local_y, font_cx, layout_cx);
+                            }
+                        }
+                    } else if state.event_handler.is_manipulating() {
+                        // Check if we're manipulating a shape (handle drag or move)
+                        state.event_handler.handle_drag(
+                            &mut state.canvas,
+                            world_point,
+                            &state.input,
+                            state.ui_state.grid_snap_enabled,
+                            state.ui_state.smart_snap_enabled,
+                            state.ui_state.angle_snap_enabled,
+                        );
+
+                        // Sync during manipulation (throttled)
+                        {
+                            static mut DRAG_SYNC_FRAME: u32 = 0;
+                            unsafe {
+                                DRAG_SYNC_FRAME = DRAG_SYNC_FRAME.wrapping_add(1);
+                                // Sync every 10 frames (~6 times per second at 60fps)
+                                if DRAG_SYNC_FRAME % 10 == 0 {
+                                    broadcast_doc_changes(
+                                        &mut state.collab,
+                                        &state.canvas.document,
+                                        state.websocket.as_ref(),
+                                    );
+                                }
+                            }
+                        }
+                    } else if state.event_handler.is_selecting() {
+                        // Marquee selection in progress
+                        state.event_handler.handle_drag(
+                            &mut state.canvas,
+                            world_point,
+                            &state.input,
+                            state.ui_state.grid_snap_enabled,
+                            state.ui_state.smart_snap_enabled,
+                            state.ui_state.angle_snap_enabled,
+                        );
+                    } else if state.canvas.tool_manager.current_tool == ToolKind::Pan {
+                        // Pan with left mouse + pan tool
+                        let delta = state.input.cursor_diff();
+                        state.canvas.camera.pan(delta);
+                    } else if matches!(
+                        state.canvas.tool_manager.current_tool,
+                        ToolKind::Eraser | ToolKind::LaserPointer
+                    ) {
+                        // Eraser and laser pointer handle their own drag
+                        state.event_handler.handle_drag(
+                            &mut state.canvas,
+                            world_point,
+                            &state.input,
+                            state.ui_state.grid_snap_enabled,
+                            state.ui_state.smart_snap_enabled,
+                            state.ui_state.angle_snap_enabled,
+                        );
+                    } else if state.canvas.tool_manager.is_active() {
+                        // Drawing a new shape or freehand
+                        state.event_handler.handle_drag(
+                            &mut state.canvas,
+                            world_point,
+                            &state.input,
+                            state.ui_state.grid_snap_enabled,
+                            state.ui_state.smart_snap_enabled,
+                            state.ui_state.angle_snap_enabled,
+                        );
+
+                        // Note: We don't sync preview shapes during drawing
+                        // They only get synced when finalized on mouse release
+                    }
+                }
+
+                // Middle mouse button always pans
+                if state.input.is_button_pressed(MouseButton::Middle) {
+                    let delta = state.input.cursor_diff();
+                    state.canvas.camera.pan(delta);
+                }
+
+                state.needs_redraw = true;
+                state.window.request_redraw();
+            }
+
+            WindowEvent::MouseInput {
+                state: btn_state,
+                button,
+                ..
+            } => {
+                if btn_state == ElementState::Pressed
+                    && button == MouseButton::Left
+                    && state.ui_state.math_editor.is_some()
+                {
+                    let p = state.input.mouse_position();
+                    let scale = state.egui_ctx.pixels_per_point() as f64;
+                    let p = egui::Pos2::new((p.x / scale) as f32, (p.y / scale) as f32);
+                    let p = state
+                        .egui_state
+                        .egui_input_mut()
+                        .events
+                        .iter()
+                        .rev()
+                        .find_map(|event| {
+                            if let egui::Event::PointerButton {
+                                pos, pressed: true, ..
+                            } = event
+                            {
+                                Some(*pos)
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or(p);
+                    let outside = state
+                        .ui_state
+                        .math_editor_rect
+                        .is_none_or(|r| !r.contains(p));
+                    if outside {
+                        finish_math_editor(state);
+                    }
+                    state.needs_redraw = true;
+                    state.window.request_redraw();
+                    // Egui already received this event; never forward a field
+                    // click to the canvas, even if hover arrived this same frame.
+                    if !egui_wants_input || !outside {
+                        return;
+                    }
+                }
+                // Skip canvas processing if egui wants the pointer
+                if egui_wants_input {
+                    state.needs_redraw = true;
+                    state.window.request_redraw();
+                    return;
+                }
+
+                if btn_state == ElementState::Pressed {
+                    state.ui_state.text_command_editor = None;
+                }
+                let mouse_btn = match button {
+                    MouseButton::Left => MouseButton::Left,
+                    MouseButton::Right => MouseButton::Right,
+                    MouseButton::Middle => MouseButton::Middle,
+                    _ => return,
+                };
+
+                let position = state.input.mouse_position();
+                if mouse_btn == MouseButton::Right && btn_state == ElementState::Pressed {
+                    if let Some(id) = shape_ids_at_screen(&state.canvas, position).first().copied() {
+                        if !state.canvas.selection.contains(&id) {
+                            state.canvas.clear_selection();
+                            state.canvas.selection.push(id);
+                        }
+                        state.ui_state.context_properties = true;
+                        state.needs_redraw = true;
+                        state.window.request_redraw();
+                    }
+                    return;
+                }
+
+                match btn_state {
+                    ElementState::Pressed => {
+                        if mouse_btn == MouseButton::Left {
+                            let world_point = state.canvas.camera.screen_to_world(position);
+
+                            // Handle text editing cursor positioning
+                            if let Some(text_id) = state.event_handler.editing_text {
+                                // Check if click is still on the text being edited
+                                let hits = shape_ids_at_screen(&state.canvas, position);
+                                let clicked_on_editing =
+                                    hits.first().map(|&id| id == text_id).unwrap_or(false);
+
+                                if clicked_on_editing {
+                                    if let Some(Shape::Text(text)) =
+                                        state.canvas.document.get_shape(text_id)
+                                    {
+                                        // Convert click to text-local coordinates
+                                        let edit_point = if state.canvas.document.is_pinned(text_id) { state.canvas.camera.world_to_screen(world_point) } else { world_point };
+                                        let local = text.editing_local_point(edit_point);
+                                        let local_x = local.x as f32;
+                                        let local_y = local.y as f32;
+
+                                        // Ensure edit state exists
+                                        if state.text_edit_state.is_none() {
+                                            let mut edit_state = TextEditState::new(
+                                                &text.content,
+                                                text.font_size as f32,
+                                            );
+                                            edit_state.cursor_reset();
+                                            state.text_edit_state = Some(edit_state);
+                                        }
+
+                                        // Position cursor at click location using new API
+                                        if let Some(edit_state) = &mut state.text_edit_state {
+                                            let (font_cx, layout_cx) =
+                                                state.shape_renderer.contexts_mut();
+                                            if state.input.is_double_click() {
+                                                edit_state.handle_double_click(
+                                                    local_x, local_y, font_cx, layout_cx,
+                                                );
+                                            } else {
+                                                edit_state.handle_mouse_down(
+                                                    local_x,
+                                                    local_y,
+                                                    state.input.shift(),
+                                                    font_cx,
+                                                    layout_cx,
+                                                );
+                                            }
+                                        }
+                                    }
+                                    if state.input.is_double_click() {
+                                        select_text_word_at(state, world_point);
+                                        select_formula_at(state, world_point);
+                                        open_selected_text_command(state);
+                                    }
+                                    // Handled click on editing text
+                                } else {
+                                    // Clicked outside editing text - exit edit mode
+                                    state.event_handler.exit_text_edit(&mut state.canvas);
+                                    state.text_edit_state = None;
+                                    // Continue with normal press handling
+                                    state.event_handler.handle_press(
+                                        &mut state.canvas,
+                                        world_point,
+                                        &state.input,
+                                        state.ui_state.grid_snap_enabled,
+                                    );
+                                }
+                            } else {
+                                state.event_handler.handle_press(
+                                    &mut state.canvas,
+                                    world_point,
+                                    &state.input,
+                                    state.ui_state.grid_snap_enabled,
+                                );
+
+                                // Check if we just entered text edit mode
+                                if let Some(text_id) = state.event_handler.editing_text {
+                                    if let Some(Shape::Text(text)) =
+                                        state.canvas.document.get_shape(text_id)
+                                    {
+                                        let mut edit_state = TextEditState::new(
+                                            &text.content,
+                                            text.font_size as f32,
+                                        );
+                                        edit_state.cursor_reset();
+                                        // Move cursor to end of text
+                                        let (font_cx, layout_cx) =
+                                            state.shape_renderer.contexts_mut();
+                                        let mut drv = edit_state.driver(font_cx, layout_cx);
+                                        drv.move_to_text_end();
+                                        state.text_edit_state = Some(edit_state);
+                                        log::info!(
+                                            "Entered text edit mode for shape {:?}, content: '{}'",
+                                            text_id,
+                                            text.content
+                                        );
+                                    }
+                                }
+
+                                if state.input.is_double_click() {
+                                    select_text_word_at(state, world_point);
+                                    select_formula_at(state, world_point);
+                                    open_selected_text_command(state);
+                                }
+
+                                // Check if we need to open math editor
+                                if let Some(math_id) = state.event_handler.pending_math_edit.take()
+                                {
+                                    if let Some(Shape::Math(math)) =
+                                        state.canvas.document.get_shape(math_id)
+                                    {
+                                        state.ui_state.math_editor = Some(MathEditorState {
+                                            shape_id: math_id,
+                                            input: math.edit_source().to_string(),
+                                            original_source: math.source.clone(),
+                                            original_latex: math.latex.clone(),
+                                            is_new: false,
+                                        });
+                                        log::info!(
+                                            "Opening inline math editor for shape {:?}",
+                                            math_id
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    ElementState::Released => {
+                        if mouse_btn == MouseButton::Left {
+                            // Handle text editing mouse release
+                            if let Some(edit_state) = &mut state.text_edit_state {
+                                edit_state.handle_mouse_up();
+                            }
+
+                            let world_point = state.canvas.camera.screen_to_world(position);
+                            let mut current_style = state.ui_state.to_shape_style();
+                            if state.canvas.tool_manager.current_tool == ToolKind::Freehand
+                                && current_style.stroke_color.a == 128
+                                && current_style.stroke_width >= 12.0
+                            {
+                                current_style.stroke_width = 2.0;
+                                current_style.stroke_color.a = 255;
+                            }
+                            state.event_handler.handle_release(
+                                &mut state.canvas,
+                                world_point,
+                                &state.input,
+                                &current_style,
+                                state.ui_state.grid_snap_enabled,
+                                state.ui_state.angle_snap_enabled,
+                            );
+
+                            // A newly placed math object opens its formula editor immediately.
+                            if let Some(math_id) = state.event_handler.pending_math_edit.take() {
+                                if let Some(Shape::Math(math)) =
+                                    state.canvas.document.get_shape_mut(math_id)
+                                {
+                                    math.font = state.ui_state.settings.default_math_font.clone();
+                                    state.ui_state.math_font = math.font.clone();
+                                    state.ui_state.math_editor = Some(MathEditorState {
+                                        shape_id: math_id,
+                                        input: math.edit_source().to_string(),
+                                        original_source: String::new(),
+                                        original_latex: String::new(),
+                                        is_new: true,
+                                    });
+                                }
+                            }
+
+                            // Broadcast document changes to collaborators
+                            broadcast_doc_changes(
+                                &mut state.collab,
+                                &state.canvas.document,
+                                state.websocket.as_ref(),
+                            );
+
+                            // Clear snap guides when done dragging
+                            state.event_handler.clear_snap();
+
+                            // Check if we just entered text edit mode (for new text created on release)
+                            if state.text_edit_state.is_none() {
+                                if let Some(text_id) = state.event_handler.editing_text {
+                                    if let Some(Shape::Text(text)) =
+                                        state.canvas.document.get_shape(text_id)
+                                    {
+                                        let mut edit_state = TextEditState::new(
+                                            &text.content,
+                                            text.font_size as f32,
+                                        );
+                                        edit_state.cursor_reset();
+                                        state.text_edit_state = Some(edit_state);
+                                        log::info!(
+                                            "Entered text edit mode for new text shape {:?}",
+                                            text_id
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                state.needs_redraw = true;
+                state.window.request_redraw();
+            }
+
+            WindowEvent::MouseWheel { delta, .. } => {
+                // Skip canvas processing if egui wants the pointer
+                if egui_wants_input {
+                    return;
+                }
+
+                let (scroll, zoom_factor) = match delta {
+                    MouseScrollDelta::LineDelta(x, y) => {
+                        let scroll = Vec2::new(x as f64 * 20.0, y as f64 * 20.0);
+                        // Mouse-wheel zoom: predictable but less abrupt than fixed 10% steps.
+                        let factor = ((y as f64) * 0.12).exp().clamp(0.75, 1.35);
+                        (scroll, factor)
+                    }
+                    MouseScrollDelta::PixelDelta(pos) => {
+                        let scroll = Vec2::new(pos.x, pos.y);
+                        // Precision touchpads (Chrome/Edge pinch -> Ctrl+pixel wheel)
+                        // generate many small deltas. Exponential scaling makes the
+                        // zoom continuous and keeps the point under the pointer fixed.
+                        let factor = (pos.y * 0.0025).exp().clamp(0.80, 1.25);
+                        (scroll, factor)
+                    }
+                };
+
+                let position = state.input.mouse_position();
+
+                #[cfg(target_arch = "wasm32")]
+                let browser_pinch = file_ops::take_browser_pinch();
+                #[cfg(not(target_arch = "wasm32"))]
+                let browser_pinch: Option<(f64, f64, f64)> = None;
+
+                if let Some((factor, x, y)) = browser_pinch {
+                    // Real Chrome/Edge precision-touchpad pinch, centered at the fingers.
+                    state.canvas.camera.zoom_at(
+                        Point::new(x, y),
+                        factor.powf(state.ui_state.settings.touchpad_zoom_speed),
+                    );
+                    state.ui_state.zoom_level = state.canvas.camera.zoom;
+                } else if state.input.ctrl() {
+                    // Physical Ctrl/Cmd + wheel = zoom.
+                    state.canvas.camera.zoom_at(position, zoom_factor);
+                    state.ui_state.zoom_level = state.canvas.camera.zoom;
+                } else {
+                    // Two-finger precision-touchpad scroll / normal wheel = pan.
+                    state.canvas.camera.pan(scroll);
+                }
+                state.needs_redraw = true;
+                state.window.request_redraw();
+            }
+
+            WindowEvent::Touch(touch) => {
+                // Skip if egui wants input
+                if egui_wants_input {
+                    return;
+                }
+
+                use winit::event::TouchPhase;
+                let pos = Point::new(touch.location.x, touch.location.y);
+                let world_point = state.canvas.camera.screen_to_world(pos);
+
+                // Track previous position for pan delta
+                let prev_pos = state.input.primary_touch();
+
+                // Process touch and get gesture result
+                let gesture = state.input.process_touch(&touch);
+                let touch_count = state.input.touch_count();
+
+                if let Some((pan_delta, zoom_delta, zoom_center)) = gesture {
+                    // Two-finger gesture: pinch-zoom and pan
+                    if (zoom_delta - 1.0).abs() > 0.001 {
+                        state.canvas.camera.zoom_at(
+                            zoom_center,
+                            zoom_delta.powf(state.ui_state.settings.touchpad_zoom_speed),
+                        );
+                    }
+                    if pan_delta.length() > 0.1 {
+                        state.canvas.camera.pan(pan_delta);
+                    }
+                } else if touch_count <= 1 {
+                    // Single finger behavior depends on tool
+                    let is_pan_tool = state.canvas.tool_manager.current_tool == ToolKind::Pan;
+
+                    if is_pan_tool {
+                        // Pan tool: single finger pans
+                        if touch.phase == TouchPhase::Moved {
+                            if let Some(prev) = prev_pos {
+                                let delta = Vec2::new(pos.x - prev.x, pos.y - prev.y);
+                                state.canvas.camera.pan(delta);
+                            }
+                        }
+                    } else {
+                        // Other tools: single finger draws/selects
+                        match touch.phase {
+                            TouchPhase::Started => {
+                                state.event_handler.handle_press(
+                                    &mut state.canvas,
+                                    world_point,
+                                    &state.input,
+                                    state.ui_state.grid_snap_enabled,
+                                );
+                            }
+                            TouchPhase::Moved => {
+                                state.event_handler.handle_drag(
+                                    &mut state.canvas,
+                                    world_point,
+                                    &state.input,
+                                    state.ui_state.grid_snap_enabled,
+                                    state.ui_state.smart_snap_enabled,
+                                    state.ui_state.angle_snap_enabled,
+                                );
+                            }
+                            TouchPhase::Ended => {
+                                let mut current_style = state.ui_state.to_shape_style();
+                                if state.canvas.tool_manager.current_tool == ToolKind::Freehand
+                                    && current_style.stroke_color.a == 128
+                                    && current_style.stroke_width >= 12.0
+                                {
+                                    current_style.stroke_width = 2.0;
+                                    current_style.stroke_color.a = 255;
+                                }
+                                state.event_handler.handle_release(
+                                    &mut state.canvas,
+                                    world_point,
+                                    &state.input,
+                                    &current_style,
+                                    state.ui_state.grid_snap_enabled,
+                                    state.ui_state.angle_snap_enabled,
+                                );
+                                if let Some(math_id) = state.event_handler.pending_math_edit.take()
+                                {
+                                    if let Some(Shape::Math(math)) =
+                                        state.canvas.document.get_shape(math_id)
+                                    {
+                                        state.ui_state.math_editor = Some(MathEditorState {
+                                            shape_id: math_id,
+                                            input: math.edit_source().to_string(),
+                                            original_source: String::new(),
+                                            original_latex: String::new(),
+                                            is_new: true,
+                                        });
+                                    }
+                                }
+                            }
+                            TouchPhase::Cancelled => {
+                                state.event_handler.cancel(&mut state.canvas);
+                            }
+                        }
+                    }
+                }
+                state.needs_redraw = true;
+                state.window.request_redraw();
+            }
+
+            WindowEvent::Ime(winit::event::Ime::Commit(value))
+                if state.event_handler.editing_text.is_some() =>
+            {
+                if let (Some(id), Some(editor)) = (
+                    state.event_handler.editing_text,
+                    state.text_edit_state.as_mut(),
+                ) {
+                    let old = editor.text();
+                    let (fonts, layouts) = state.shape_renderer.contexts_mut();
+                    editor.handle_key(
+                        TextKey::Character(value),
+                        TextModifiers::default(),
+                        fonts,
+                        layouts,
+                    );
+                    if let Some(Shape::Text(text)) = state.canvas.document.get_shape_mut(id) {
+                        text.content = editor.text();
+                        text.sync_spans_after_edit(&old);
+                    }
+                }
+                state.needs_redraw = true;
+                state.window.request_redraw();
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                // A selection nudge belongs to the canvas and must be handled
+                // before egui's focus guard consumes Ctrl+vertical arrows.
+                let vertical_nudge_fallback = state.input.shift()
+                    && !state.input.ctrl()
+                    && !state.input.alt()
+                    && matches!(
+                        event.physical_key,
+                        PhysicalKey::Code(KeyCode::ArrowUp | KeyCode::ArrowDown)
+                    );
+                if event.state == ElementState::Pressed
+                    && ((state.input.ctrl() && !state.input.alt()) || vertical_nudge_fallback)
+                    && state.event_handler.editing_text.is_none()
+                    && state.ui_state.math_editor.is_none()
+                    && !state.ui_state.settings_open
+                    && !state.ui_state.shortcuts_modal_open
+                    && !state.ui_state.save_dialog_open
+                    && !state.ui_state.open_dialog_open
+                    && !state.ui_state.open_recent_dialog_open
+                    && state.ui_state.renaming_tab.is_none()
+                    && state.ui_state.text_command_editor.is_none()
+                    && state.ui_state.inline_formula_draft.is_none()
+                    && !state.canvas.selection.is_empty()
+                {
+                    let arrow = match event.physical_key {
+                        PhysicalKey::Code(KeyCode::ArrowUp) => Some("ArrowUp"),
+                        PhysicalKey::Code(KeyCode::ArrowDown) => Some("ArrowDown"),
+                        PhysicalKey::Code(KeyCode::ArrowLeft) => Some("ArrowLeft"),
+                        PhysicalKey::Code(KeyCode::ArrowRight) => Some("ArrowRight"),
+                        _ => None,
+                    };
+                    if let Some(arrow) = arrow {
+                        move_selection_by_key(state, arrow, event.repeat, true);
+                        state.needs_redraw = true;
+                        state.window.request_redraw();
+                        return;
+                    }
+                }
+
+                // Keep script toggles available inside the custom text editor
+                // even when egui still reports keyboard focus from a prior panel.
+                if event.state == ElementState::Pressed
+                    && !event.repeat
+                    && state.event_handler.editing_text.is_some()
+                    && state.input.shift()
+                    && !state.input.ctrl()
+                    && !state.input.alt()
+                {
+                    if state.text_edit_state.is_none() {
+                        if let Some(id) = state.event_handler.editing_text {
+                            if let Some(Shape::Text(text)) = state.canvas.document.get_shape(id) {
+                                let mut editor = TextEditState::new(&text.content, text.font_size as f32);
+                                editor.cursor_reset();
+                                state.text_edit_state = Some(editor);
+                            }
+                        }
+                    }
+                    let script_key = match event.physical_key {
+                        PhysicalKey::Code(KeyCode::ArrowUp) => Some(TextKey::ToggleSuperscript),
+                        PhysicalKey::Code(KeyCode::ArrowDown) => Some(TextKey::ToggleSubscript),
+                        _ => None,
+                    };
+                    if let (Some(key), Some(id), Some(editor)) = (
+                        script_key,
+                        state.event_handler.editing_text,
+                        state.text_edit_state.as_mut(),
+                    ) {
+                        if let Some(range) = editor.selection_range() {
+                            state.canvas.document.push_undo();
+                            if let Some(Shape::Text(text)) = state.canvas.document.get_shape_mut(id) {
+                                text.toggle_script(
+                                    range,
+                                    if matches!(key, TextKey::ToggleSuperscript) { 1 } else { -1 },
+                                );
+                            }
+                        } else {
+                            let old = editor.text();
+                            let (fonts, layouts) = state.shape_renderer.contexts_mut();
+                            editor.handle_key(key, TextModifiers::default(), fonts, layouts);
+                            if let Some(Shape::Text(text)) = state.canvas.document.get_shape_mut(id) {
+                                text.content = editor.text();
+                                text.sync_spans_after_edit(&old);
+                            }
+                        }
+                        state.needs_redraw = true;
+                        state.window.request_redraw();
+                        return;
+                    }
+                }
+
+                // Skip canvas processing if egui wants keyboard
+                if egui_wants_input {
+                    state.needs_redraw = true;
+                    state.window.request_redraw();
+                    return;
+                }
+
+                // Handle text editing with dedicated handler
+                if let Some(text_id) = state.event_handler.editing_text {
+                    if event.state == ElementState::Pressed {
+                        // Initialize edit state if needed
+                        if state.text_edit_state.is_none() {
+                            if let Some(Shape::Text(text)) =
+                                state.canvas.document.get_shape(text_id)
+                            {
+                                let mut edit_state =
+                                    TextEditState::new(&text.content, text.font_size as f32);
+                                edit_state.cursor_reset();
+                                state.text_edit_state = Some(edit_state);
+                            }
+                        }
+
+                        if state.input.ctrl()
+                            && matches!(event.logical_key, Key::Named(NamedKey::Enter))
+                            && open_selected_text_command(state)
+                        {
+                            state.window.request_redraw();
+                            return;
+                        }
+                        if state.input.ctrl() {
+                            if let Key::Character(c) = &event.logical_key {
+                                let kind = c.to_ascii_lowercase();
+                                if matches!(kind.as_str(), "b" | "i" | "u") {
+                                    if let Some(range) = state
+                                        .text_edit_state
+                                        .as_ref()
+                                        .and_then(|e| e.selection_range())
+                                    {
+                                        state.canvas.document.push_undo();
+                                        if let Some(Shape::Text(text)) =
+                                            state.canvas.document.get_shape_mut(text_id)
+                                        {
+                                            text.toggle_format(range, kind.chars().next().unwrap());
+                                        }
+                                    }
+                                    state.needs_redraw = true;
+                                    state.window.request_redraw();
+                                    return;
+                                }
+                            }
+                        }
+
+                        // Script shortcuts are handled before clipboard shortcuts.
+                        // Literal ^ belongs to composition and external expanders.
+                        // Shift+ArrowUp/Down enters superscript/subscript. Ctrl+arrows
+                        // remain reserved for fast movement of canvas objects.
+                        let has_ctrl = state.input.ctrl() && !state.input.alt();
+                        let script_key = match &event.logical_key {
+                            Key::Character(c) if has_ctrl && c == "_" => {
+                                Some(TextKey::ToggleSubscript)
+                            }
+                            _ if !has_ctrl
+                                && state.input.shift()
+                                && matches!(event.physical_key, PhysicalKey::Code(KeyCode::ArrowUp)) =>
+                            {
+                                Some(TextKey::ToggleSuperscript)
+                            }
+                            _ if !has_ctrl
+                                && state.input.shift()
+                                && matches!(event.physical_key, PhysicalKey::Code(KeyCode::ArrowDown)) =>
+                            {
+                                Some(TextKey::ToggleSubscript)
+                            }
+                            _ if has_ctrl
+                                && state.input.shift()
+                                && matches!(
+                                    event.physical_key,
+                                    PhysicalKey::Code(KeyCode::Equal)
+                                ) =>
+                            {
+                                Some(TextKey::ToggleSuperscript)
+                            }
+                            _ if has_ctrl
+                                && matches!(
+                                    event.physical_key,
+                                    PhysicalKey::Code(KeyCode::Equal)
+                                ) =>
+                            {
+                                Some(TextKey::ToggleSubscript)
+                            }
+                            _ => None,
+                        };
+
+                        let text_key = if script_key.is_some() {
+                            script_key
+                        } else if has_ctrl {
+                            match &event.logical_key {
+                                Key::Character(c) if c == "c" || c == "C" => Some(TextKey::Copy),
+                                Key::Character(c) if c == "x" || c == "X" => Some(TextKey::Cut),
+                                Key::Character(c) if c == "v" || c == "V" => {
+                                    #[cfg(not(target_arch = "wasm32"))]
+                                    {
+                                        arboard::Clipboard::new()
+                                            .ok()
+                                            .and_then(|mut cb| cb.get_text().ok())
+                                            .map(TextKey::Paste)
+                                    }
+                                    #[cfg(target_arch = "wasm32")]
+                                    {
+                                        file_ops::request_clipboard_text();
+                                        return;
+                                    }
+                                }
+                                Key::Character(c) if c == "a" || c == "A" => None,
+                                Key::Character(_) => return,
+                                _ => None,
+                            }
+                        } else {
+                            None
+                        };
+
+                        // Convert winit key to TextKey (if not already a clipboard operation)
+                        let text_key = text_key.or_else(|| match &event.logical_key {
+                            Key::Dead(Some('^')) => Some(TextKey::DeadCaret),
+                            Key::Dead(None)
+                                if matches!(
+                                    event.physical_key,
+                                    PhysicalKey::Code(KeyCode::BracketLeft)
+                                ) =>
+                            {
+                                Some(TextKey::DeadCaret)
+                            }
+                            Key::Named(NamedKey::Escape) => Some(TextKey::Escape),
+                            Key::Named(NamedKey::Backspace) => Some(TextKey::Backspace),
+                            Key::Named(NamedKey::Delete) => Some(TextKey::Delete),
+                            Key::Named(NamedKey::Enter) => Some(TextKey::Enter),
+                            Key::Named(NamedKey::ArrowLeft) => Some(TextKey::Left),
+                            Key::Named(NamedKey::ArrowRight) => Some(TextKey::Right),
+                            Key::Named(NamedKey::ArrowUp) => Some(TextKey::Up),
+                            Key::Named(NamedKey::ArrowDown) => Some(TextKey::Down),
+                            Key::Named(NamedKey::Home) => Some(TextKey::Home),
+                            Key::Named(NamedKey::End) => Some(TextKey::End),
+                            Key::Named(NamedKey::Space) => {
+                                Some(TextKey::Character(" ".to_string()))
+                            }
+                            Key::Character(c) => Some(TextKey::ComposedCharacter(
+                                event
+                                    .text
+                                    .as_ref()
+                                    .map(|s| s.to_string())
+                                    .unwrap_or_else(|| c.to_string()),
+                                matches!(
+                                    event.physical_key,
+                                    PhysicalKey::Code(KeyCode::BracketLeft)
+                                ),
+                            )),
+                            _ => None,
+                        });
+
+                        if let Some(key) = text_key {
+                            if matches!(key, TextKey::ToggleSuperscript | TextKey::ToggleSubscript)
+                            {
+                                if let Some(range) = state
+                                    .text_edit_state
+                                    .as_ref()
+                                    .and_then(|e| e.selection_range())
+                                {
+                                    state.canvas.document.push_undo();
+                                    if let Some(Shape::Text(text)) =
+                                        state.canvas.document.get_shape_mut(text_id)
+                                    {
+                                        text.toggle_script(
+                                            range,
+                                            if matches!(key, TextKey::ToggleSuperscript) {
+                                                1
+                                            } else {
+                                                -1
+                                            },
+                                        );
+                                    }
+                                    state.needs_redraw = true;
+                                    state.window.request_redraw();
+                                    return;
+                                }
+                            }
+                            log::debug!("Text edit key: {:?}", key);
+                            let modifiers = TextModifiers {
+                                shift: state.input.shift(),
+                                ctrl: state.input.ctrl(),
+                                alt: state.input.alt(),
+                                meta: false, // winit_input_helper doesn't track meta separately
+                            };
+
+                            let (font_cx, layout_cx) = state.shape_renderer.contexts_mut();
+
+                            if let Some(edit_state) = &mut state.text_edit_state {
+                                // Capture state before edit for color sync
+                                let old_text = edit_state.text();
+
+                                let result =
+                                    edit_state.handle_key(key, modifiers, font_cx, layout_cx);
+                                log::debug!(
+                                    "Text edit result: {:?}, text now: '{}'",
+                                    result,
+                                    edit_state.text()
+                                );
+
+                                match result {
+                                    TextEditResult::ExitEdit => {
+                                        // Sync content before exiting
+                                        let new_text = edit_state.text();
+                                        if let Some(Shape::Text(text)) =
+                                            state.canvas.document.get_shape_mut(text_id)
+                                        {
+                                            text.content = new_text;
+                                            text.sync_spans_after_edit(&old_text);
+                                            text.set_inserted_script(
+                                                &old_text,
+                                                edit_state.script_value(),
+                                            );
+                                        }
+                                        state.event_handler.exit_text_edit(&mut state.canvas);
+                                        state.text_edit_state = None;
+                                    }
+                                    TextEditResult::Handled => {
+                                        // Sync content back to the text shape
+                                        let new_text = edit_state.text();
+                                        if let Some(Shape::Text(text)) =
+                                            state.canvas.document.get_shape_mut(text_id)
+                                        {
+                                            text.content = new_text;
+                                            text.sync_spans_after_edit(&old_text);
+                                            text.set_inserted_script(
+                                                &old_text,
+                                                edit_state.script_value(),
+                                            );
+                                        }
+                                    }
+                                    TextEditResult::Copy(text_to_copy) => {
+                                        // Copy text to clipboard
+                                        #[cfg(not(target_arch = "wasm32"))]
+                                        if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                                            let _ = clipboard.set_text(&text_to_copy);
+                                        }
+                                        #[cfg(target_arch = "wasm32")]
+                                        file_ops::copy_text_to_clipboard(&text_to_copy);
+                                        // Sync content back (for cut operation)
+                                        let new_text = edit_state.text();
+                                        if let Some(Shape::Text(text)) =
+                                            state.canvas.document.get_shape_mut(text_id)
+                                        {
+                                            text.content = new_text;
+                                            text.sync_spans_after_edit(&old_text);
+                                            text.set_inserted_script(
+                                                &old_text,
+                                                edit_state.script_value(),
+                                            );
+                                        }
+                                    }
+                                    TextEditResult::NotHandled => {}
+                                }
+                            }
+                        } else {
+                            log::debug!("Text edit: unhandled key {:?}", event.logical_key);
+                        }
+                    }
+                    if event.state == ElementState::Pressed
+                        && matches!(event.logical_key, Key::Character(_))
+                    {
+                        activate_text_command(state);
+                    }
+                    state.needs_redraw = true;
+                    state.window.request_redraw();
+                    return;
+                }
+
+                // Hold SPACE for a temporary pan tool. Releasing SPACE restores
+                // the previously active tool. This is intentionally layout-independent.
+                if matches!(event.physical_key, PhysicalKey::Code(KeyCode::Space))
+                    && !state.input.ctrl()
+                    && !event.repeat
+                {
+                    match event.state {
+                        ElementState::Pressed => {
+                            if state.temporary_pan_tool.is_none() {
+                                let previous = state.canvas.tool_manager.current_tool;
+                                state.temporary_pan_tool = Some(previous);
+                                state.canvas.set_tool(ToolKind::Pan);
+                                state.ui_state.current_tool = ToolKind::Pan;
+                            }
+                        }
+                        ElementState::Released => {
+                            if let Some(previous) = state.temporary_pan_tool.take() {
+                                state.canvas.set_tool(previous);
+                                state.ui_state.current_tool = previous;
+                            }
+                        }
+                    }
+
+                    state.needs_redraw = true;
+                    state.window.request_redraw();
+                    return;
+                }
+
+                // Regular keyboard handling (not text editing)
+                let key_str = match &event.logical_key {
+                    Key::Named(named) => match named {
+                        NamedKey::Escape => "Escape",
+                        NamedKey::Delete => "Delete",
+                        NamedKey::Backspace => "Backspace",
+                        NamedKey::ArrowUp => "ArrowUp",
+                        NamedKey::ArrowDown => "ArrowDown",
+                        NamedKey::ArrowLeft => "ArrowLeft",
+                        NamedKey::ArrowRight => "ArrowRight",
+                        _ => return,
+                    },
+                    Key::Character(c) => c.as_str(),
+                    _ => return,
+                };
+
+                match event.state {
+                    ElementState::Pressed => {
+                        // Check for Ctrl/Cmd modifiers first for file operations
+                        let has_modifier = state.input.ctrl();
+
+                        if has_modifier
+                            && matches!(
+                                key_str,
+                                "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight"
+                            )
+                        {
+                            move_selection_by_key(state, key_str, event.repeat, true);
+                            state.needs_redraw = true;
+                            state.window.request_redraw();
+                            return;
+                        }
+                        if has_modifier {
+                            let has_shift = state.input.shift();
+                            if key_str.eq_ignore_ascii_case("l") {
+                                toggle_selected_pinning(state);
+                                state.needs_redraw = true;
+                                state.window.request_redraw();
+                                return;
+                            }
+                            match key_str {
+                                "a" | "A" => {
+                                    state.canvas.select_all();
+                                    log::info!(
+                                        "Selected all {} shapes",
+                                        state.canvas.selection.len()
+                                    );
+                                }
+                                "s" | "S" => {
+                                    file_ops::save_document(
+                                        &state.canvas.document,
+                                        &state.canvas.document.name,
+                                    );
+                                }
+                                "o" | "O" => {
+                                    #[cfg(not(target_arch = "wasm32"))]
+                                    {
+                                        file_ops::load_document();
+                                    }
+                                    #[cfg(target_arch = "wasm32")]
+                                    {
+                                        file_ops::load_document_async();
+                                    }
+                                }
+                                // Ctrl+Shift+E = Copy PNG to clipboard
+                                "e" | "E" if has_shift => {
+                                    if let Some(render_cx) = self.render_cx.as_ref() {
+                                        let device_handle =
+                                            &render_cx.devices[state.surface.dev_id];
+                                        let device = &device_handle.device;
+                                        let queue = &device_handle.queue;
+                                        let export_scale = state.ui_state.export_scale as f64;
+
+                                        let (scene, bounds) = if state.canvas.selection.is_empty() {
+                                            state.shape_renderer.build_export_scene_with_pins(
+                                                &state.canvas.document,
+                                                export_scale,
+                                                Some(state.canvas.camera.transform().inverse()),
+                                            )
+                                        } else {
+                                            state.shape_renderer.build_export_scene_selection_with_pins(
+                                                &state.canvas.document,
+                                                &state.canvas.selection,
+                                                export_scale,
+                                                Some(state.canvas.camera.transform().inverse()),
+                                            )
+                                        };
+
+                                        if let Some(bounds) = bounds {
+                                            let width = bounds.width().ceil() as u32;
+                                            let height = bounds.height().ceil() as u32;
+
+                                            log::info!(
+                                                "Copying PNG at {}x scale: {}x{}",
+                                                state.ui_state.export_scale,
+                                                width,
+                                                height
+                                            );
+
+                                            #[cfg(not(target_arch = "wasm32"))]
+                                            {
+                                                if let Some(result) = render_scene_to_png(
+                                                    device,
+                                                    queue,
+                                                    &mut state.vello_renderer,
+                                                    &scene,
+                                                    width,
+                                                    height,
+                                                ) {
+                                                    file_ops::copy_png_to_clipboard(
+                                                        &result.rgba_data,
+                                                        result.width,
+                                                        result.height,
+                                                    );
+                                                }
+                                            }
+
+                                            #[cfg(target_arch = "wasm32")]
+                                            {
+                                                spawn_png_export_async(
+                                                    &mut state.vello_renderer,
+                                                    device,
+                                                    queue,
+                                                    scene,
+                                                    width,
+                                                    height,
+                                                    "selection.png".to_string(),
+                                                    true,
+                                                    None,
+                                                );
+                                            }
+                                        } else {
+                                            log::info!("Nothing to copy - selection is empty");
+                                        }
+                                    }
+                                }
+                                // Ctrl+E = Export PNG
+                                "e" | "E" => {
+                                    if let Some(render_cx) = self.render_cx.as_ref() {
+                                        let device_handle =
+                                            &render_cx.devices[state.surface.dev_id];
+                                        let device = &device_handle.device;
+                                        let queue = &device_handle.queue;
+                                        let export_scale = state.ui_state.export_scale as f64;
+
+                                        let (scene, bounds) = if state.canvas.selection.is_empty() {
+                                            state.shape_renderer.build_export_scene_with_pins(
+                                                &state.canvas.document,
+                                                export_scale,
+                                                Some(state.canvas.camera.transform().inverse()),
+                                            )
+                                        } else {
+                                            state.shape_renderer.build_export_scene_selection_with_pins(
+                                                &state.canvas.document,
+                                                &state.canvas.selection,
+                                                export_scale,
+                                                Some(state.canvas.camera.transform().inverse()),
+                                            )
+                                        };
+                                        if let Some(bounds) = bounds {
+                                            let width = bounds.width().ceil() as u32;
+                                            let height = bounds.height().ceil() as u32;
+
+                                            log::info!(
+                                                "Exporting PNG at {}x scale: {}x{}",
+                                                state.ui_state.export_scale,
+                                                width,
+                                                height
+                                            );
+
+                                            #[cfg(not(target_arch = "wasm32"))]
+                                            {
+                                                if let Some(result) = render_scene_to_png(
+                                                    device,
+                                                    queue,
+                                                    &mut state.vello_renderer,
+                                                    &scene,
+                                                    width,
+                                                    height,
+                                                ) {
+                                                    let scene_json =
+                                                        state.canvas.document.to_json().ok();
+                                                    if let Some(png_data) = encode_png(
+                                                        &result.rgba_data,
+                                                        result.width,
+                                                        result.height,
+                                                        scene_json.as_deref(),
+                                                    ) {
+                                                        file_ops::export_png(
+                                                            &png_data,
+                                                            &state.canvas.document.name,
+                                                        );
+                                                    }
+                                                }
+                                            }
+
+                                            #[cfg(target_arch = "wasm32")]
+                                            {
+                                                let filename =
+                                                    format!("{}.png", state.canvas.document.name);
+                                                let scene_json =
+                                                    state.canvas.document.to_json().ok();
+                                                spawn_png_export_async(
+                                                    &mut state.vello_renderer,
+                                                    device,
+                                                    queue,
+                                                    scene,
+                                                    width,
+                                                    height,
+                                                    filename,
+                                                    false,
+                                                    scene_json,
+                                                );
+                                            }
+                                        } else {
+                                            log::info!("Nothing to export - document is empty");
+                                        }
+                                    }
+                                }
+                                // Ctrl+Z = Undo, Ctrl+Shift+Z = Redo
+                                "z" | "Z" => {
+                                    if has_shift {
+                                        // Redo
+                                        if state.canvas.document.redo() {
+                                            state.canvas.clear_selection();
+                                            log::info!("Redo performed");
+                                        } else {
+                                            log::info!("Nothing to redo");
+                                        }
+                                    } else {
+                                        // Undo
+                                        if state.canvas.document.undo() {
+                                            state.canvas.clear_selection();
+                                            log::info!("Undo performed");
+                                        } else {
+                                            log::info!("Nothing to undo");
+                                        }
+                                    }
+                                }
+                                // Ctrl+Y = Redo (alternative)
+                                "y" | "Y" => {
+                                    if state.canvas.document.redo() {
+                                        state.canvas.clear_selection();
+                                        log::info!("Redo performed");
+                                    } else {
+                                        log::info!("Nothing to redo");
+                                    }
+                                }
+                                // Ctrl+G = Group, Ctrl+Shift+G = Ungroup
+                                "g" | "G" => {
+                                    if has_shift {
+                                        // Ungroup
+                                        let ungrouped = state.canvas.ungroup_selected();
+                                        if !ungrouped.is_empty() {
+                                            log::info!("Ungrouped {} shapes", ungrouped.len());
+                                        } else {
+                                            log::info!("No groups to ungroup");
+                                        }
+                                    } else {
+                                        // Group
+                                        if let Some(group_id) = state.canvas.group_selected() {
+                                            log::info!("Grouped shapes into {:?}", group_id);
+                                        } else {
+                                            log::info!("Select at least 2 shapes to group");
+                                        }
+                                    }
+                                }
+                                // Ctrl+Shift+C = Copy PNG
+                                "c" | "C" if has_shift => {
+                                    if let Some(render_cx) = self.render_cx.as_ref() {
+                                        let device_handle =
+                                            &render_cx.devices[state.surface.dev_id];
+                                        let device = &device_handle.device;
+                                        let queue = &device_handle.queue;
+                                        let export_scale = state.ui_state.export_scale as f64;
+
+                                        let (scene, bounds) = if state.canvas.selection.is_empty() {
+                                            state.shape_renderer.build_export_scene_with_pins(
+                                                &state.canvas.document,
+                                                export_scale,
+                                                Some(state.canvas.camera.transform().inverse()),
+                                            )
+                                        } else {
+                                            state.shape_renderer.build_export_scene_selection_with_pins(
+                                                &state.canvas.document,
+                                                &state.canvas.selection,
+                                                export_scale,
+                                                Some(state.canvas.camera.transform().inverse()),
+                                            )
+                                        };
+
+                                        if let Some(bounds) = bounds {
+                                            let width = bounds.width().ceil() as u32;
+                                            let height = bounds.height().ceil() as u32;
+
+                                            log::info!(
+                                                "Copying PNG at {}x scale: {}x{}",
+                                                state.ui_state.export_scale,
+                                                width,
+                                                height
+                                            );
+
+                                            #[cfg(not(target_arch = "wasm32"))]
+                                            {
+                                                if let Some(result) = render_scene_to_png(
+                                                    device,
+                                                    queue,
+                                                    &mut state.vello_renderer,
+                                                    &scene,
+                                                    width,
+                                                    height,
+                                                ) {
+                                                    file_ops::copy_png_to_clipboard(
+                                                        &result.rgba_data,
+                                                        result.width,
+                                                        result.height,
+                                                    );
+                                                }
+                                            }
+
+                                            #[cfg(target_arch = "wasm32")]
+                                            {
+                                                spawn_png_export_async(
+                                                    &mut state.vello_renderer,
+                                                    device,
+                                                    queue,
+                                                    scene,
+                                                    width,
+                                                    height,
+                                                    "selection.png".to_string(),
+                                                    true,
+                                                    None, // No metadata for clipboard copy
+                                                );
+                                            }
+                                        } else {
+                                            log::info!("Nothing to copy - selection is empty");
+                                        }
+                                    }
+                                }
+                                // Ctrl+C = Copy shapes (without shift)
+                                "c" | "C" => {
+                                    if !state.canvas.selection.is_empty() {
+                                        let shapes: Vec<Shape> = state
+                                            .canvas
+                                            .selection
+                                            .iter()
+                                            .filter_map(|&id| {
+                                                state.canvas.document.get_shape(id).cloned()
+                                            })
+                                            .collect();
+                                        if let Ok(json) = serde_json::to_string(&shapes) {
+                                            state.ui_state.clipboard_shapes = Some(json);
+                                            log::info!("Copied {} shapes", shapes.len());
+                                        }
+                                    }
+                                }
+                                // Ctrl+X = Cut shapes
+                                "x" | "X" => {
+                                    if !state.canvas.selection.is_empty() {
+                                        let shapes: Vec<Shape> = state
+                                            .canvas
+                                            .selection
+                                            .iter()
+                                            .filter_map(|&id| {
+                                                state.canvas.document.get_shape(id).cloned()
+                                            })
+                                            .collect();
+                                        if let Ok(json) = serde_json::to_string(&shapes) {
+                                            state.ui_state.clipboard_shapes = Some(json);
+                                            log::info!("Cut {} shapes", shapes.len());
+                                            state.canvas.document.push_undo();
+                                            for &id in &state.canvas.selection.clone() {
+                                                state.canvas.document.remove_shape(id);
+                                                if state.collab.is_in_room() {
+                                                    let _ = state
+                                                        .collab
+                                                        .crdt_mut()
+                                                        .remove_shape(&id.to_string());
+                                                }
+                                            }
+                                            state.canvas.clear_selection();
+                                        }
+                                    }
+                                }
+                                // Ctrl+V = Paste shapes or image
+                                "v" | "V" => {
+                                    // First try to paste shapes from the internal
+                                    // clipboard, centered on the cursor so pastes
+                                    // (including across tabs) always land in view.
+                                    let mut pasted = false;
+                                    if let Some(json) = &state.ui_state.clipboard_shapes.clone() {
+                                        if let Ok(shapes) = serde_json::from_str::<Vec<Shape>>(json)
+                                        {
+                                            let cursor_world = state
+                                                .canvas
+                                                .camera
+                                                .screen_to_world(state.input.mouse_position());
+                                            let shapes: Vec<Shape> = shapes
+                                                .into_iter()
+                                                .map(|mut s| {
+                                                    s.regenerate_id();
+                                                    s
+                                                })
+                                                .collect();
+                                            place_shapes_centered_at(
+                                                &mut state.canvas,
+                                                &mut state.collab,
+                                                shapes,
+                                                cursor_world,
+                                            );
+                                            log::info!("Pasted shapes");
+                                            pasted = true;
+                                        }
+                                    }
+
+                                    // Try structured text formats from the
+                                    // system clipboard (native): Excalidraw
+                                    // scene JSON first, then Mermaid diagram
+                                    // source. Both import as native shapes
+                                    // centered on the mouse cursor.
+                                    #[cfg(not(target_arch = "wasm32"))]
+                                    if !pasted {
+                                        if let Ok(mut cb) = arboard::Clipboard::new() {
+                                            if let Ok(text) = cb.get_text() {
+                                                let cursor_world = state
+                                                    .canvas
+                                                    .camera
+                                                    .screen_to_world(state.input.mouse_position());
+                                                if let Some(shapes) = drafftink_core::canvas::CanvasDocument::shapes_from_excalidraw_clipboard(&text) {
+                                                    place_shapes_centered_at(
+                                                        &mut state.canvas,
+                                                        &mut state.collab,
+                                                        shapes,
+                                                        cursor_world,
+                                                    );
+                                                    log::info!("Pasted shapes from Excalidraw clipboard");
+                                                    pasted = true;
+                                                } else if let Some(shapes) = drafftink_core::shapes_from_mermaid(&text) {
+                                                    place_shapes_centered_at(
+                                                        &mut state.canvas,
+                                                        &mut state.collab,
+                                                        shapes,
+                                                        cursor_world,
+                                                    );
+                                                    log::info!("Imported Mermaid diagram from clipboard");
+                                                    pasted = true;
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // If no shapes, try to paste image from system clipboard
+                                    #[cfg(not(target_arch = "wasm32"))]
+                                    if !pasted {
+                                        if let Some(image_shape) =
+                                            file_ops::paste_image_from_clipboard(&state.canvas)
+                                        {
+                                            state.canvas.document.push_undo();
+                                            state.canvas.clear_selection();
+                                            let new_id = image_shape.id();
+                                            state.canvas.document.add_shape(image_shape.clone());
+                                            state.canvas.add_to_selection(new_id);
+                                            if state.collab.is_in_room() {
+                                                let _ =
+                                                    state.collab.crdt_mut().add_shape(&image_shape);
+                                            }
+                                            log::info!("Pasted image from clipboard");
+                                        }
+                                    }
+
+                                    // WASM: Try Excalidraw clipboard text first, then image
+                                    #[cfg(target_arch = "wasm32")]
+                                    if !pasted {
+                                        let cursor_world = state
+                                            .canvas
+                                            .camera
+                                            .screen_to_world(state.input.mouse_position());
+                                        file_ops::paste_shapes_from_clipboard_async(cursor_world);
+                                        let vw = state.canvas.viewport_size.width;
+                                        let vh = state.canvas.viewport_size.height;
+                                        let cox = state.canvas.camera.offset.x;
+                                        let coy = state.canvas.camera.offset.y;
+                                        let cz = state.canvas.camera.zoom;
+                                        file_ops::paste_image_from_clipboard_async(
+                                            vw, vh, cox, coy, cz,
+                                        );
+                                    }
+                                }
+                                // Ctrl+D = Duplicate shapes
+                                "d" | "D" => {
+                                    if !state.canvas.selection.is_empty() {
+                                        state.canvas.document.push_undo();
+                                        let mut new_selection = Vec::new();
+                                        for &id in &state.canvas.selection.clone() {
+                                            if let Some(shape) = state.canvas.document.get_shape(id)
+                                            {
+                                                let mut new_shape = shape.clone();
+                                                new_shape.regenerate_id();
+                                                new_shape.transform(kurbo::Affine::translate(
+                                                    kurbo::Vec2::new(20.0, 20.0),
+                                                ));
+                                                let new_id = new_shape.id();
+                                                state.canvas.document.add_shape(new_shape.clone());
+                                                new_selection.push(new_id);
+                                                if state.collab.is_in_room() {
+                                                    let _ = state
+                                                        .collab
+                                                        .crdt_mut()
+                                                        .add_shape(&new_shape);
+                                                }
+                                            }
+                                        }
+                                        state.canvas.clear_selection();
+                                        for id in new_selection {
+                                            state.canvas.add_to_selection(id);
+                                        }
+                                        log::info!("Duplicated shapes");
+                                    }
+                                }
+                                _ => {}
+                            }
+                        } else {
+                            match key_str {
+                                // View shortcuts
+                                "+" | "=" => {
+                                    let center = kurbo::Point::new(
+                                        state.canvas.viewport_size.width / 2.0,
+                                        state.canvas.viewport_size.height / 2.0,
+                                    );
+                                    state.canvas.camera.zoom_at(center, 1.20);
+                                    state.ui_state.zoom_level = state.canvas.camera.zoom;
+                                }
+                                "-" => {
+                                    let center = kurbo::Point::new(
+                                        state.canvas.viewport_size.width / 2.0,
+                                        state.canvas.viewport_size.height / 2.0,
+                                    );
+                                    state.canvas.camera.zoom_at(center, 1.0 / 1.20);
+                                    state.ui_state.zoom_level = state.canvas.camera.zoom;
+                                }
+                                "0" => {
+                                    state.canvas.camera.zoom = drafftink_core::camera::BASE_ZOOM;
+                                    state.ui_state.zoom_level = drafftink_core::camera::BASE_ZOOM;
+                                }
+                                "f" | "F" => {
+                                    let bounds = if state.canvas.selection.is_empty() {
+                                        state.canvas.document.bounds()
+                                    } else {
+                                        let mut result: Option<kurbo::Rect> = None;
+                                        for &id in &state.canvas.selection {
+                                            if let Some(shape) = state.canvas.document.get_shape(id)
+                                            {
+                                                let b = shape.bounds();
+                                                result = Some(match result {
+                                                    Some(r) => r.union(b),
+                                                    None => b,
+                                                });
+                                            }
+                                        }
+                                        result
+                                    };
+                                    if let Some(bounds) = bounds {
+                                        state.canvas.camera.fit_to_bounds(
+                                            bounds,
+                                            state.canvas.viewport_size,
+                                            50.0,
+                                        );
+                                        state.ui_state.zoom_level = state.canvas.camera.zoom;
+                                    }
+                                }
+                                key if state.ui_state.settings.tool_for_key(key).is_some() => {
+                                    if let Some(tool) = state.ui_state.settings.tool_for_key(key) {
+                                        if matches!(tool, ToolKind::LaserPointer | ToolKind::Eraser)
+                                            && !event.repeat
+                                        {
+                                            if tool == ToolKind::LaserPointer {
+                                                if state.canvas.tool_manager.current_tool == tool {
+                                                    state.ui_state.settings.laser_permanent =
+                                                        !state.ui_state.settings.laser_permanent;
+                                                } else {
+                                                    state.ui_state.settings.laser_permanent = false;
+                                                }
+                                                crate::settings::save_settings(
+                                                    &state.ui_state.settings,
+                                                );
+                                            } else {
+                                                state.ui_state.eraser_mode =
+                                                    if state.canvas.tool_manager.current_tool != tool
+                                                        || state.ui_state.eraser_mode
+                                                            == EraserMode::Manual
+                                                    {
+                                                        EraserMode::Classic
+                                                    } else {
+                                                        EraserMode::Manual
+                                                    };
+                                                state.event_handler.eraser_mode =
+                                                    state.ui_state.eraser_mode;
+                                            }
+                                            if state.canvas.tool_manager.current_tool == tool {
+                                                state.needs_redraw = true;
+                                                state.window.request_redraw();
+                                                return;
+                                            }
+                                        }
+                                        finish_math_editor(state);
+                                        if tool == ToolKind::Ellipse
+                                            && state.canvas.tool_manager.current_tool
+                                                == ToolKind::Ellipse
+                                            && !event.repeat
+                                        {
+                                            state.ui_state.geometry =
+                                                state.ui_state.geometry.next();
+                                            state.canvas.tool_manager.geometry =
+                                                state.ui_state.geometry;
+                                        }
+                                        if tool != ToolKind::Text {
+                                            if state.event_handler.editing_text.is_some() {
+                                                state
+                                                    .event_handler
+                                                    .exit_text_edit(&mut state.canvas);
+                                                state.text_edit_state = None;
+                                            }
+                                            let selected_text = state
+                                                .canvas
+                                                .selection
+                                                .first()
+                                                .and_then(|id| state.canvas.document.get_shape(*id))
+                                                .is_some_and(|shape| {
+                                                    matches!(shape, Shape::Text(_))
+                                                });
+                                            if selected_text {
+                                                state.canvas.clear_selection();
+                                            }
+                                        } else {
+                                            let selected_non_text = state
+                                                .canvas
+                                                .selection
+                                                .first()
+                                                .and_then(|id| state.canvas.document.get_shape(*id))
+                                                .is_some_and(|shape| {
+                                                    !matches!(shape, Shape::Text(_))
+                                                });
+                                            if selected_non_text {
+                                                state.canvas.clear_selection();
+                                            }
+                                        }
+
+                                        state.canvas.set_tool(tool);
+                                        state.ui_state.current_tool = tool;
+                                        if matches!(
+                                            tool,
+                                            ToolKind::Rectangle
+                                                | ToolKind::Ellipse
+                                                | ToolKind::Line
+                                                | ToolKind::Arrow
+                                        ) {
+                                            state.ui_state.sloppiness =
+                                                drafftink_core::shapes::Sloppiness::Architect;
+                                        }
+                                        log::info!("Tool shortcut {:?}: {}", tool, key);
+                                    }
+                                }
+                                "Delete" | "Backspace" => {
+                                    if !state.canvas.selection.is_empty() {
+                                        state.canvas.document.push_undo();
+                                        state.canvas.delete_selected();
+                                    }
+                                }
+                                "Escape" => {
+                                    // Skip if egui is handling this (e.g., closing its own dialogs)
+                                    if egui_wants_input {
+                                        return;
+                                    }
+                                    // First, close any open dialogs/popovers
+                                    let had_open_dialog = state.ui_state.color_popover
+                                        != crate::ui::ColorPopover::None
+                                        || state.ui_state.menu_open
+                                        || state.ui_state.collab_modal_open
+                                        || state.ui_state.shortcuts_modal_open
+                                        || state.ui_state.settings_open
+                                        || state.ui_state.save_dialog_open
+                                        || state.ui_state.open_dialog_open
+                                        || state.ui_state.open_recent_dialog_open;
+
+                                    if had_open_dialog {
+                                        state.ui_state.color_popover =
+                                            crate::ui::ColorPopover::None;
+                                        state.ui_state.menu_open = false;
+                                        state.ui_state.collab_modal_open = false;
+                                        state.ui_state.shortcuts_modal_open = false;
+                                        state.ui_state.settings_open = false;
+                                        state.ui_state.save_dialog_open = false;
+                                        state.ui_state.open_dialog_open = false;
+                                        state.ui_state.open_recent_dialog_open = false;
+                                    } else {
+                                        // No dialog open - switch to Select tool
+                                        state.canvas.tool_manager.cancel();
+                                        state.canvas.clear_selection();
+                                        state.canvas.set_tool(ToolKind::Select);
+                                        state.ui_state.current_tool = ToolKind::Select;
+                                    }
+                                }
+                                // Arrow keys: nudge selected shapes by grid size
+                                "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight" => {
+                                    if !state.canvas.selection.is_empty() {
+                                        use drafftink_core::GRID_SIZE;
+                                        let step = if state.input.ctrl() {
+                                            GRID_SIZE
+                                        } else {
+                                            1.0 / state.canvas.camera.zoom
+                                        };
+                                        let delta = match key_str {
+                                            "ArrowUp" => kurbo::Vec2::new(0.0, -step),
+                                            "ArrowDown" => kurbo::Vec2::new(0.0, step),
+                                            "ArrowLeft" => kurbo::Vec2::new(-step, 0.0),
+                                            "ArrowRight" => kurbo::Vec2::new(step, 0.0),
+                                            _ => return,
+                                        };
+                                        if !event.repeat {
+                                            state.canvas.document.push_undo();
+                                        }
+                                        for &id in &state.canvas.selection {
+                                            let is_pinned = state.canvas.document.is_pinned(id);
+                                            if let Some(shape) =
+                                                state.canvas.document.get_shape_mut(id)
+                                            {
+                                                let local_delta = if is_pinned {
+                                                    delta * state.canvas.camera.zoom
+                                                } else { delta };
+                                                shape.transform(kurbo::Affine::translate(local_delta));
+                                            }
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    ElementState::Released => {
+                        // Input state is handled by WinitInputHelper
+                    }
+                }
+                state.needs_redraw = true;
+                state.window.request_redraw();
+            }
+
+            WindowEvent::ModifiersChanged(_) => {
+                // Modifiers are tracked by WinitInputHelper
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            WindowEvent::DroppedFile(path) => {
+                // Handle dropped image files
+                if let Some(ext) = path.extension() {
+                    let ext_str = ext.to_string_lossy().to_lowercase();
+                    if matches!(ext_str.as_str(), "png" | "jpg" | "jpeg" | "webp") {
+                        if let Ok(data) = std::fs::read(&path) {
+                            // Check for embedded scene data in PNG files
+                            if ext_str == "png" {
+                                if let Some(json) = extract_scene_from_png(&data) {
+                                    log::info!("Found embedded scene in PNG, loading as document");
+                                    use drafftink_core::canvas::CanvasDocument;
+                                    match CanvasDocument::from_json(&json) {
+                                        Ok(doc) => {
+                                            state.canvas.document = doc;
+                                            state.canvas.clear_selection();
+                                            state.canvas.camera.reset();
+                                            state.needs_redraw = true;
+                                            state.window.request_redraw();
+                                            return;
+                                        }
+                                        Err(e) => {
+                                            log::error!("Failed to parse embedded document: {}", e)
+                                        }
+                                    }
+                                }
+                            }
+
+                            use drafftink_core::shapes::{Image, ImageFormat, Shape};
+                            use kurbo::Point;
+
+                            let format = match ext_str.as_str() {
+                                "png" => ImageFormat::Png,
+                                "jpg" | "jpeg" => ImageFormat::Jpeg,
+                                "webp" => ImageFormat::WebP,
+                                _ => ImageFormat::Png,
+                            };
+
+                            // Decode to get dimensions
+                            if let Ok(decoded) = image::load_from_memory(&data) {
+                                let (width, height) = (decoded.width(), decoded.height());
+
+                                // Position at viewport center
+                                let viewport_center =
+                                    state.canvas.camera.screen_to_world(Point::new(
+                                        state.canvas.viewport_size.width / 2.0,
+                                        state.canvas.viewport_size.height / 2.0,
+                                    ));
+                                let position = Point::new(
+                                    viewport_center.x - width as f64 / 2.0,
+                                    viewport_center.y - height as f64 / 2.0,
+                                );
+
+                                // Create image shape, scaled to fit if too large
+                                let max_size = 800.0;
+                                let mut img = Image::new(position, &data, width, height, format);
+                                if width as f64 > max_size || height as f64 > max_size {
+                                    img = img.fit_within(max_size, max_size);
+                                    img.position = Point::new(
+                                        viewport_center.x - img.width / 2.0,
+                                        viewport_center.y - img.height / 2.0,
+                                    );
+                                }
+
+                                state.canvas.document.push_undo();
+                                state.canvas.clear_selection();
+                                let shape = Shape::Image(img);
+                                let new_id = shape.id();
+                                state.canvas.document.add_shape(shape.clone());
+                                state.canvas.add_to_selection(new_id);
+                                if state.collab.is_in_room() {
+                                    let _ = state.collab.crdt_mut().add_shape(&shape);
+                                }
+
+                                log::info!(
+                                    "Dropped image: {:?} ({}x{})",
+                                    path.file_name(),
+                                    width,
+                                    height
+                                );
+                                state.needs_redraw = true;
+                                state.window.request_redraw();
+                            } else {
+                                log::error!("Failed to decode dropped image: {:?}", path);
+                            }
+                        } else {
+                            log::error!("Failed to read dropped file: {:?}", path);
+                        }
+                    }
+                }
+            }
+
+            _ => {}
+        }
+    }
+
+    fn new_events(&mut self, _event_loop: &ActiveEventLoop, _cause: winit::event::StartCause) {
+        if let Some(state) = &mut self.state {
+            state.input.step();
+        }
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(state) = &mut self.state {
+            state.input.end_step();
+        }
+    }
+}
+
+#[cfg(test)]
+mod unicode_png_metadata_tests {
+    use super::*;
+    #[test]
+    fn unicode_document_metadata_survives_png_export_import() {
+        let source = r#"{"text":"123⁴ ≥ ≤ ￼ α","font":"Google Sans Medium","formula":"fraction"}"#;
+        let png = encode_png(&[255, 0, 0, 255], 1, 1, Some(source)).expect("Unicode PNG export");
+        assert_eq!(extract_scene_from_png(&png).as_deref(), Some(source));
+    }
+    #[test]
+    fn legacy_compressed_latin1_png_metadata_is_still_readable() {
+        let source = r#"{"text":"x^3"}"#;
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut bytes, 1, 1);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder
+                .add_ztxt_chunk(PNG_METADATA_KEYWORD.into(), source.into())
+                .unwrap();
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&[0, 0, 0, 255]).unwrap();
+        }
+        assert_eq!(extract_scene_from_png(&bytes).as_deref(), Some(source));
+    }
+}
+
+fn position_text_command_panel(state: &mut AppState, text_id: drafftink_core::shapes::ShapeId) {
+    let Some(Shape::Text(text)) = state.canvas.document.get_shape(text_id) else {
+        return;
+    };
+    let bounds = state
+        .ui_state
+        .text_command_editor
+        .as_ref()
+        .and_then(|editor| {
+            let formula = text
+                .formulas
+                .iter()
+                .find(|f| f.math.id() == editor.formula_id)?;
+            let byte = text.content.char_indices().nth(formula.at)?.0;
+            state
+                .text_edit_state
+                .as_ref()
+                .and_then(|e| e.formula_bounds(byte))
+                .or_else(|| state.shape_renderer.text_formula_geometry(text, byte))
+        });
+    let world = if let Some(b) = bounds {
+        let transform = kurbo::Affine::rotate_about(text.rotation, text.bounds().center())
+            * kurbo::Affine::translate((text.position.x, text.position.y))
+            * kurbo::Affine::scale_non_uniform(text.display_scale[0], text.display_scale[1]);
+        rect_corners(b).map(|p| transform * p)
+    } else {
+        rect_corners(text.bounds())
+    };
+    let screen = world.map(|p| {
+        if state.canvas.document.is_pinned(text_id) {
+            p
+        } else {
+            state.canvas.camera.world_to_screen(p)
+        }
+    });
+    let scale = state.egui_ctx.pixels_per_point() as f64;
+    let left = screen.iter().map(|p| p.x).fold(f64::INFINITY, f64::min);
+    let bottom = screen.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max);
+    state.ui_state.text_command_pos =
+        egui::Pos2::new((left / scale) as f32, ((bottom + 10.0) / scale) as f32);
+}
+fn activate_text_command(state: &mut AppState) {
+    if state.ui_state.text_command_editor.is_some() {
+        return;
+    }
+    let Some(id) = state.event_handler.editing_text else {
+        return;
+    };
+    let Some(editor) = state.text_edit_state.as_ref() else {
+        return;
+    };
+    let old = editor.text();
+    let caret = editor.cursor_byte_offset();
+    let Some((start, _)) = crate::math_input::text_command_prefix(&old, caret) else {
+        return;
+    };
+    let source = old[start..caret].to_string();
+    let Some(latex) = crate::math_input::live_command_latex(&source) else {
+        return;
+    };
+    state.canvas.document.push_undo();
+    let editor = state.text_edit_state.as_mut().unwrap();
+    let (fonts, layouts) = state.shape_renderer.contexts_mut();
+    editor
+        .driver(fonts, layouts)
+        .select_byte_range(start, caret);
+    editor.handle_key(
+        TextKey::Character("\u{fffc}".into()),
+        TextModifiers::default(),
+        fonts,
+        layouts,
+    );
+    let at = old[..start].chars().count();
+    let mut math = drafftink_core::shapes::Math::new(Point::ZERO, latex);
+    math.source = source.clone();
+    let formula_id = math.id();
+    if let Some(Shape::Text(text)) = state.canvas.document.get_shape_mut(id) {
+        text.content = editor.text();
+        text.sync_spans_after_edit(&old);
+        text.formulas.push(drafftink_core::shapes::InlineFormula {
+            at,
+            math,
+            kind: "Code".into(),
+            parts: [source.clone(), String::new(), String::new(), String::new()],
+        });
+        text.invalidate_cache();
+    }
+    state.ui_state.text_command_editor = Some(crate::ui::TextCommandEditor {
+        text_id: id,
+        formula_id,
+        source,
+        request_focus: true,
+    });
+    position_text_command_panel(state, id);
+    state.ui_keyboard_pending = true;
+}
+fn open_selected_text_command(state: &mut AppState) -> bool {
+    let Some(id) = state.event_handler.editing_text else {
+        return false;
+    };
+    let Some(editor) = state.text_edit_state.as_ref() else {
+        return false;
+    };
+    let Some(range) = editor.selection_range() else {
+        return false;
+    };
+    let Some(Shape::Text(text)) = state.canvas.document.get_shape(id) else {
+        return false;
+    };
+    let start = text.content[..range.start].chars().count();
+    let end = text.content[..range.end].chars().count();
+    let Some(formula) = text.formulas.iter().find(|f| f.at >= start && f.at < end) else {
+        return false;
+    };
+    state.ui_state.text_command_editor = Some(crate::ui::TextCommandEditor {
+        text_id: id,
+        formula_id: formula.math.id(),
+        source: match formula.kind.as_str() {
+            "Fraction" => format!("frac({},{})", formula.parts[0], formula.parts[1]),
+            "Racine" => format!("sqrt({})", formula.parts[0]),
+            "Racine n-ième" => format!("root({},{})", formula.parts[0], formula.parts[1]),
+            "Somme" => format!(
+                "sum({},{},{},{})",
+                formula.parts[0], formula.parts[1], formula.parts[2], formula.parts[3]
+            ),
+            "Produit" => format!(
+                "prod({},{},{},{})",
+                formula.parts[0], formula.parts[1], formula.parts[2], formula.parts[3]
+            ),
+            "Intégrale" => format!(
+                "int({},{},{},{})",
+                formula.parts[0], formula.parts[1], formula.parts[2], formula.parts[3]
+            ),
+            "Limite" => format!(
+                "lim({},{},{})",
+                formula.parts[0], formula.parts[1], formula.parts[2]
+            ),
+            _ => formula.math.source.clone(),
+        },
+        request_focus: true,
+    });
+    state.canvas.document.push_undo();
+    // The code panel owns focus; don't obscure the live formula with its selection.
+    if let Some(edit) = state.text_edit_state.as_mut() {
+        let (fonts, layouts) = state.shape_renderer.contexts_mut();
+        edit.driver(fonts, layouts).move_to_byte(range.end);
+    }
+    position_text_command_panel(state, id);
+    state.ui_keyboard_pending = true;
+    true
+}
+fn update_text_command(state: &mut AppState, source: String, finished: bool, exit_text: bool) {
+    let Some(editor) = state.ui_state.text_command_editor.clone() else {
+        return;
+    };
+    let latex = crate::math_input::live_command_latex(&source);
+    let valid = latex
+        .as_ref()
+        .is_some_and(|s| state.shape_renderer.formula_is_valid(s));
+    if let Some(Shape::Text(text)) = state.canvas.document.get_shape_mut(editor.text_id) {
+        if let Some(formula) = text
+            .formulas
+            .iter_mut()
+            .find(|f| f.math.id() == editor.formula_id)
+        {
+            if valid {
+                formula.math.set_latex(latex.unwrap());
+            }
+            formula.math.source = source.clone();
+            formula.parts[0] = source;
+            formula.kind = "Code".into();
+            text.invalidate_cache();
+        }
+    }
+    if finished {
+        state.ui_keyboard_pending = false;
+        state.ui_state.text_command_editor = None;
+        // Continue after the embedded formula, including when reopening an old block.
+        if let Some(Shape::Text(text)) = state.canvas.document.get_shape(editor.text_id) {
+            if let Some(formula) = text
+                .formulas
+                .iter()
+                .find(|f| f.math.id() == editor.formula_id)
+            {
+                let byte = text
+                    .content
+                    .char_indices()
+                    .nth(formula.at + 1)
+                    .map(|(b, _)| b)
+                    .unwrap_or(text.content.len());
+                if let Some(edit) = state.text_edit_state.as_mut() {
+                    let (fonts, layouts) = state.shape_renderer.contexts_mut();
+                    edit.driver(fonts, layouts).move_to_byte(byte);
+                }
+            }
+        }
+        if exit_text {
+            state.event_handler.exit_text_edit(&mut state.canvas);
+            state.text_edit_state = None;
+        }
+    }
+}
+
+fn select_formula_at(state: &mut AppState, world: Point) {
+    let Some(id) = state.event_handler.editing_text else {
+        return;
+    };
+    let Some(Shape::Text(text)) = state.canvas.document.get_shape(id) else {
+        return;
+    };
+    let edit_point = if state.canvas.document.is_pinned(id) {
+        state.canvas.camera.world_to_screen(world)
+    } else {
+        world
+    };
+    let local = text.editing_local_point(edit_point);
+    let byte = state
+        .text_edit_state
+        .as_ref()
+        .and_then(|edit| edit.formula_byte_at(local.x as f32, local.y as f32))
+        .or_else(|| state.shape_renderer.text_formula_at(text, local));
+    if let (Some(byte), Some(edit)) = (byte, state.text_edit_state.as_mut()) {
+        let (fonts, layouts) = state.shape_renderer.contexts_mut();
+        edit.driver(fonts, layouts)
+            .select_byte_range(byte, byte + 3);
+    }
+}
+
+fn rect_corners(b: kurbo::Rect) -> [Point; 4] {
+    [
+        Point::new(b.x0, b.y0),
+        Point::new(b.x1, b.y0),
+        Point::new(b.x1, b.y1),
+        Point::new(b.x0, b.y1),
+    ]
+}
+
+#[cfg(target_arch = "wasm32")]
+struct PngBusyGuard(bool);
+#[cfg(target_arch = "wasm32")]
+impl PngBusyGuard {
+    fn new() -> Self {
+        if let Some(w) = web_sys::window() {
+            let _ = js_sys::Reflect::set(
+                &w,
+                &"__drafftinkPngBusy".into(),
+                &wasm_bindgen::JsValue::TRUE,
+            );
+        }
+        Self(false)
+    }
+}
+#[cfg(target_arch = "wasm32")]
+impl Drop for PngBusyGuard {
+    fn drop(&mut self) {
+        if let Some(w) = web_sys::window() {
+            if !self.0 {
+                let _ = js_sys::Reflect::set(
+                    &w,
+                    &"__drafftinkPngFailed".into(),
+                    &wasm_bindgen::JsValue::TRUE,
+                );
+            }
+            let _ = js_sys::Reflect::set(
+                &w,
+                &"__drafftinkPngBusy".into(),
+                &wasm_bindgen::JsValue::FALSE,
+            );
+        }
+        file_ops::schedule_repaint(0);
+    }
+}
+fn save_canvas_png(state: &mut AppState, render_cx: &vello::util::RenderContext, automatic: bool) {
+    #[cfg(target_arch = "wasm32")]
+    if file_ops::browser_flag("__drafftinkPngBusy")
+        || file_ops::browser_flag("drafftinkDiskSaveBusy")
+        || (automatic && !file_ops::browser_flag("drafftinkExportFolderReady"))
+    {
+        return;
+    }
+    #[cfg(target_arch = "wasm32")]
+    if file_ops::browser_flag("__drafftinkPngFailed") {
+        state.last_png_signature = 0;
+        if let Some(w) = web_sys::window() {
+            let _ = js_sys::Reflect::set(
+                &w,
+                &"__drafftinkPngFailed".into(),
+                &wasm_bindgen::JsValue::FALSE,
+            );
+        }
+    }
+    if state.canvas.document.is_empty() {
+        return;
+    }
+    let Ok(json) = state.canvas.document.to_json() else {
+        return;
+    };
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    json.hash(&mut hash);
+    if !state.canvas.document.pinned_shapes.is_empty() {
+        // An automatic screenshot is also changed when the camera moves,
+        // because pinned shapes are flattened at their current view position.
+        state.canvas.camera.offset.x.to_bits().hash(&mut hash);
+        state.canvas.camera.offset.y.to_bits().hash(&mut hash);
+        state.canvas.camera.zoom.to_bits().hash(&mut hash);
+    }
+    let signature = hash.finish();
+    if automatic && state.last_png_signature == signature {
+        return;
+    }
+    state.png_save_requests += 1;
+    let (scene, bounds) = state
+        .shape_renderer
+        .build_export_scene_with_pins(
+            &state.canvas.document,
+            state.ui_state.export_scale as f64,
+            Some(state.canvas.camera.transform().inverse()),
+        );
+    let Some(bounds) = bounds else {
+        return;
+    };
+    let width = bounds.width().ceil() as u32;
+    let height = bounds.height().ceil() as u32;
+    let handle = &render_cx.devices[state.surface.dev_id];
+    #[cfg(target_arch = "wasm32")]
+    let filename = file_ops::snapshot_filename(&state.canvas.document.name, "png");
+    #[cfg(not(target_arch = "wasm32"))]
+    let filename = format!("{}.png", state.canvas.document.name);
+    #[cfg(target_arch = "wasm32")]
+    spawn_png_export_async_mode(
+        &mut state.vello_renderer,
+        &handle.device,
+        &handle.queue,
+        scene,
+        width,
+        height,
+        filename,
+        false,
+        Some(json),
+        automatic,
+    );
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(result) = render_scene_to_png(
+        &handle.device,
+        &handle.queue,
+        &mut state.vello_renderer,
+        &scene,
+        width,
+        height,
+    ) {
+        if let Some(bytes) = encode_png(&result.rgba_data, width, height, Some(&json)) {
+            file_ops::export_png(&bytes, &state.canvas.document.name);
+        }
+    }
+    state.last_png_signature = signature;
+}
+
+fn finish_math_editor(state: &mut AppState) {
+    if let Some(editor) = state.ui_state.math_editor.take() {
+        if let Some(Shape::Math(math)) = state.canvas.document.get_shape_mut(editor.shape_id) {
+            math.set_formula(editor.input.clone(), editor.input.clone());
+        }
+        if editor.input.trim().is_empty() {
+            state.canvas.remove_shape(editor.shape_id);
+        } else if !editor.is_new && editor.input != editor.original_source {
+            if let Some(Shape::Math(math)) = state.canvas.document.get_shape_mut(editor.shape_id) {
+                math.set_formula(
+                    editor.original_source.clone(),
+                    editor.original_latex.clone(),
+                );
+            }
+            state.canvas.document.push_undo();
+            if let Some(Shape::Math(math)) = state.canvas.document.get_shape_mut(editor.shape_id) {
+                math.set_formula(editor.input.clone(), editor.input.clone());
+            }
+        }
+    }
+    state.ui_state.math_editor_screen_pos = None;
+    state.ui_state.math_editor_rect = None;
+    state.egui_ctx.memory_mut(|m| {
+        if let Some(id) = m.focused() {
+            m.surrender_focus(id);
+        }
+    });
+}
+fn move_selection_by_key(state: &mut AppState, key: &str, repeat: bool, fast: bool) {
+    if state.canvas.selection.is_empty() {
+        return;
+    }
+    let step = if fast {
+        drafftink_core::GRID_SIZE
+    } else {
+        1.0 / state.canvas.camera.zoom
+    };
+    let delta = match key {
+        "ArrowLeft" => (-step, 0.0),
+        "ArrowRight" => (step, 0.0),
+        "ArrowUp" => (0.0, -step),
+        _ => (0.0, step),
+    };
+    if !repeat {
+        state.canvas.document.push_undo();
+    }
+    for id in state.canvas.selection.clone() {
+        let local_delta = if state.canvas.document.is_pinned(id) {
+            (
+                delta.0 * state.canvas.camera.zoom,
+                delta.1 * state.canvas.camera.zoom,
+            )
+        } else {
+            delta
+        };
+        if let Some(shape) = state.canvas.document.get_shape_mut(id) {
+            shape.transform(kurbo::Affine::translate(local_delta));
+        }
+    }
+}
+
+fn toggle_selected_pinning(state: &mut AppState) {
+    use drafftink_core::canvas::PinnedShape;
+    if state.canvas.selection.is_empty() {
+        return;
+    }
+    let all_pinned = state
+        .canvas
+        .selection
+        .iter()
+        .all(|id| state.canvas.document.is_pinned(*id));
+    let transform = state.canvas.camera.transform();
+    state.canvas.document.push_undo();
+    for id in state.canvas.selection.clone() {
+        if all_pinned {
+            if state.canvas.document.pinned_shapes.remove(&id).is_some() {
+                if let Some(shape) = state.canvas.document.get_shape_mut(id) {
+                    shape.transform(transform.inverse());
+                }
+            }
+        } else {
+            if let Some(shape) = state.canvas.document.get_shape_mut(id) {
+                shape.transform(transform);
+            }
+            state.canvas.document.pinned_shapes.insert(
+                id,
+                PinnedShape {
+                    background: drafftink_core::shapes::SerializableColor::white(),
+                },
+            );
+        }
+    }
+    state.ui_state.selection_pinned = !all_pinned;
+    state.ui_state.pin_background = egui::Color32::WHITE;
+}
+
+fn shape_ids_at_screen(
+    canvas: &Canvas,
+    screen_point: Point,
+) -> Vec<drafftink_core::shapes::ShapeId> {
+    let world_point = canvas.camera.screen_to_world(screen_point);
+    let tolerance = 5.0 / canvas.camera.zoom;
+    canvas
+        .document
+        .z_order
+        .iter()
+        .rev()
+        .filter_map(|id| {
+            let shape = canvas.document.get_shape(*id)?;
+            let (point, hit_tolerance) = if canvas.document.is_pinned(*id) {
+                (screen_point, tolerance * canvas.camera.zoom)
+            } else {
+                (world_point, tolerance)
+            };
+            shape.hit_test(point, hit_tolerance).then_some(*id)
+        })
+        .collect()
+}
+
+fn request_math_font(font: &drafftink_core::shapes::TextFont) {
+    #[cfg(target_arch = "wasm32")]
+    if let (Some(family), Some(ps)) = (&font.custom, &font.postscript) {
+        file_ops::load_local_font_async(family.clone(), ps.clone());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = font;
+}
+fn select_text_word_at(state: &mut AppState, point: kurbo::Point) {
+    if let Some(id) = state.event_handler.editing_text {
+        if let Some(Shape::Text(text)) = state.canvas.document.get_shape(id) {
+            let p = text.editing_local_point(point);
+            if let Some(editor) = state.text_edit_state.as_mut() {
+                let (fonts, layouts) = state.shape_renderer.contexts_mut();
+                editor.handle_double_click(p.x as f32, p.y as f32, fonts, layouts);
+            }
+        }
+    }
+}
+
+fn auto_pan_drag(state: &mut AppState, seconds: f64) -> bool {
+    if !state.input.is_button_pressed(MouseButton::Left)
+        || !state.event_handler.is_moving_shapes()
+        || state.event_handler.editing_text.is_some()
+    {
+        return false;
+    }
+    let point = state.input.mouse_position();
+    let size = kurbo::Size::new(
+        state.window.inner_size().width as f64,
+        state.window.inner_size().height as f64,
+    );
+    let velocity =
+        crate::event_handler::edge_pan_velocity(point, size, 48.0 * state.window.scale_factor());
+    if velocity.hypot2() == 0.0 {
+        return false;
+    }
+    state.canvas.camera.pan(-velocity * seconds);
+    let world = state.canvas.camera.screen_to_world(point);
+    state.event_handler.handle_drag(
+        &mut state.canvas,
+        world,
+        &state.input,
+        state.ui_state.grid_snap_enabled,
+        state.ui_state.smart_snap_enabled,
+        state.ui_state.angle_snap_enabled,
+    );
+    true
+}
+
+fn browser_cursor_kind(state: &AppState) -> (u8, bool) {
+    let pointer = state.egui_ctx.input(|i| i.pointer.hover_pos());
+    let over_ui = state.egui_ctx.is_pointer_over_area();
+    if over_ui {
+        if egui::Popup::is_any_open(&state.egui_ctx) {
+            return (0, true);
+        }
+        if state.ui_state.math_editor.is_some()
+            && pointer.is_some_and(|p| {
+                state
+                    .ui_state
+                    .math_editor_rect
+                    .is_some_and(|r| r.contains(p))
+            })
+        {
+            return (2, true);
+        }
+        if state.ui_state.text_command_editor.is_some()
+            && pointer.is_some_and(|p| {
+                state
+                    .ui_state
+                    .text_command_rect
+                    .is_some_and(|r| r.contains(p))
+            })
+        {
+            return (1, true);
+        }
+        return (0, true);
+    }
+    match state.canvas.tool_manager.current_tool {
+        ToolKind::Text => (1, false),
+        ToolKind::Math => (2, false),
+        ToolKind::Eraser => (if state.ui_state.eraser_mode == EraserMode::Manual { 6 } else { 3 }, false),
+        ToolKind::Freehand | ToolKind::Highlighter => (4, false),
+        ToolKind::Rectangle | ToolKind::Ellipse | ToolKind::Line | ToolKind::Arrow => (5, false),
+        _ => {
+            let point = state
+                .canvas
+                .camera
+                .screen_to_world(state.input.mouse_position());
+            let text = state
+                .event_handler
+                .editing_text
+                .and_then(|id| state.canvas.document.get_shape(id))
+                .is_some_and(|s| s.hit_test(point, 0.0));
+            (if text { 1 } else { 0 }, false)
+        }
+    }
+}
