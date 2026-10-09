@@ -1260,7 +1260,12 @@ fn render_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
     if ui_state.laser_color_open
         && ctx.input(|i| i.pointer.primary_pressed())
         && ctx.input(|i| i.pointer.interact_pos()).is_some_and(|pos| {
-            !ui_state.laser_color_rect.is_some_and(|rect| rect.contains(pos))
+            let in_palette = ui_state.laser_color_rect.is_some_and(|rect| rect.contains(pos));
+            let toolbar_grip = Rect::from_min_size(
+                output.response.rect.min,
+                Vec2::new(output.response.rect.width(), 12.0),
+            );
+            !in_palette && !toolbar_grip.contains(pos)
         })
     {
         ui_state.laser_color_open = false;
