@@ -26,6 +26,10 @@ pub struct IconButtonStyle {
     pub icon_tint: Option<Color32>,
     /// Icon tint when selected
     pub selected_icon_tint: Option<Color32>,
+    /// Offset the icon within its button while preserving the button hit target.
+    pub icon_offset: Vec2,
+    /// Override the normal dark hover tint when a tool has a meaningful color.
+    pub hover_icon_tint: Option<Color32>,
     /// Whether to use solid fill style (like toolbar tools)
     pub solid_selected: bool,
 }
@@ -41,6 +45,8 @@ impl Default for IconButtonStyle {
             selected_color: theme::ACCENT,
             icon_tint: Some(Color32::from_gray(80)),
             selected_icon_tint: Some(Color32::WHITE),
+            icon_offset: Vec2::ZERO,
+            hover_icon_tint: None,
             solid_selected: true,
         }
     }
@@ -58,6 +64,8 @@ impl IconButtonStyle {
             selected_color: Color32::TRANSPARENT,
             icon_tint: Some(Color32::from_gray(100)),
             selected_icon_tint: Some(theme::ACCENT),
+            icon_offset: Vec2::ZERO,
+            hover_icon_tint: None,
             solid_selected: false,
         }
     }
@@ -73,6 +81,8 @@ impl IconButtonStyle {
             selected_color: theme::ACCENT,
             icon_tint: Some(Color32::from_gray(80)),
             selected_icon_tint: Some(Color32::WHITE),
+            icon_offset: Vec2::ZERO,
+            hover_icon_tint: None,
             solid_selected: true,
         }
     }
@@ -170,13 +180,13 @@ impl<'a> IconButton<'a> {
             let icon_tint = if self.selected {
                 self.style.selected_icon_tint
             } else if response.hovered() {
-                Some(Color32::from_gray(40))
+                self.style.hover_icon_tint.or(Some(Color32::from_gray(40)))
             } else {
                 self.style.icon_tint
             };
 
             // Draw icon centered
-            let icon_rect = Rect::from_center_size(rect.center(), self.style.icon_size);
+            let icon_rect = Rect::from_center_size(rect.center() + self.style.icon_offset, self.style.icon_size);
             let mut image = Image::new(self.icon).fit_to_exact_size(self.style.icon_size);
             if let Some(tint) = icon_tint {
                 image = image.tint(tint);

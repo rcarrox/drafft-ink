@@ -3000,7 +3000,14 @@ impl ApplicationHandler for App {
 
                 // Check for pending document from async file load
                 if let Some(doc) = file_ops::take_pending_document() {
+                    let restored_name = doc.name.clone();
                     state.canvas.document = doc;
+                    state.tabs[state.active_tab].name = if restored_name.trim().is_empty() {
+                        "Canvas".to_string()
+                    } else {
+                        restored_name
+                    };
+                    state.tabs[state.active_tab].document = state.canvas.document.persisted_copy();
                     state.canvas.clear_selection();
                     #[cfg(target_arch = "wasm32")]
                     if let (Some(family), Some(ps)) = (
@@ -4182,6 +4189,10 @@ impl ApplicationHandler for App {
                                     [color.r(), color.g(), color.b()];
                                 crate::settings::save_settings(&state.ui_state.settings);
                             }
+                            UiAction::SetLaserPermanent(permanent) => {
+                                state.ui_state.settings.laser_permanent = permanent;
+                                crate::settings::save_settings(&state.ui_state.settings);
+                            }
                             UiAction::ResetFloatingPanels => {
                                 state.ui_state.settings.panel_positions.clear();
                                 ctx.memory_mut(|memory| memory.reset_areas());
@@ -5102,6 +5113,8 @@ impl ApplicationHandler for App {
                                     state.tabs[i].document.name = clean.clone();
                                     if i == state.active_tab {
                                         state.canvas.document.name = clean;
+                                        #[cfg(target_arch = "wasm32")]
+                                        file_ops::autosave_document(&state.canvas.document);
                                     }
                                 }
                             }
@@ -5681,6 +5694,12 @@ impl ApplicationHandler for App {
                 }
 
                 let world_point = state.canvas.camera.screen_to_world(point);
+                if state.canvas.tool_manager.current_tool == ToolKind::LaserPointer
+                    && state.ui_state.settings.laser_permanent
+                {
+                    state.event_handler.update_laser_pointer(world_point);
+                    state.needs_redraw = true;
+                }
 
                 // Update cursor based on hover position (only when not dragging)
                 if !state.input.is_drawing() {
@@ -6292,7 +6311,12 @@ impl ApplicationHandler for App {
                     && state.ui_state.math_editor.is_none()
                     && !state.ui_state.settings_open
                     && !state.ui_state.shortcuts_modal_open
-                    && !egui_wants_input
+                    && !state.ui_state.save_dialog_open
+                    && !state.ui_state.open_dialog_open
+                    && !state.ui_state.open_recent_dialog_open
+                    && state.ui_state.renaming_tab.is_none()
+                    && state.ui_state.text_command_editor.is_none()
+                    && state.ui_state.inline_formula_draft.is_none()
                     && !state.canvas.selection.is_empty()
                 {
                     let arrow = match event.physical_key {
@@ -6304,6 +6328,56 @@ impl ApplicationHandler for App {
                     };
                     if let Some(arrow) = arrow {
                         move_selection_by_key(state, arrow, event.repeat, true);
+                        state.needs_redraw = true;
+                        state.window.request_redraw();
+                        return;
+                    }
+                }
+
+                // Keep script toggles available inside the custom text editor
+                // even when egui still reports keyboard focus from a prior panel.
+                if event.state == ElementState::Pressed
+                    && state.event_handler.editing_text.is_some()
+                    && state.input.shift()
+                    && !state.input.ctrl()
+                    && !state.input.alt()
+                {
+                    if state.text_edit_state.is_none() {
+                        if let Some(id) = state.event_handler.editing_text {
+                            if let Some(Shape::Text(text)) = state.canvas.document.get_shape(id) {
+                                let mut editor = TextEditState::new(&text.content, text.font_size as f32);
+                                editor.cursor_reset();
+                                state.text_edit_state = Some(editor);
+                            }
+                        }
+                    }
+                    let script_key = match event.physical_key {
+                        PhysicalKey::Code(KeyCode::ArrowUp) => Some(TextKey::ToggleSuperscript),
+                        PhysicalKey::Code(KeyCode::ArrowDown) => Some(TextKey::ToggleSubscript),
+                        _ => None,
+                    };
+                    if let (Some(key), Some(id), Some(editor)) = (
+                        script_key,
+                        state.event_handler.editing_text,
+                        state.text_edit_state.as_mut(),
+                    ) {
+                        if let Some(range) = editor.selection_range() {
+                            state.canvas.document.push_undo();
+                            if let Some(Shape::Text(text)) = state.canvas.document.get_shape_mut(id) {
+                                text.toggle_script(
+                                    range,
+                                    if matches!(key, TextKey::ToggleSuperscript) { 1 } else { -1 },
+                                );
+                            }
+                        } else {
+                            let old = editor.text();
+                            let (fonts, layouts) = state.shape_renderer.contexts_mut();
+                            editor.handle_key(key, TextModifiers::default(), fonts, layouts);
+                            if let Some(Shape::Text(text)) = state.canvas.document.get_shape_mut(id) {
+                                text.content = editor.text();
+                                text.sync_spans_after_edit(&old);
+                            }
+                        }
                         state.needs_redraw = true;
                         state.window.request_redraw();
                         return;
@@ -6364,26 +6438,22 @@ impl ApplicationHandler for App {
 
                         // Script shortcuts are handled before clipboard shortcuts.
                         // Literal ^ belongs to composition and external expanders.
-                        // Ctrl+ArrowUp / Ctrl+Shift+= enters superscript.
-                        // Ctrl+ArrowDown / Ctrl+= enters subscript.
+                        // Shift+ArrowUp/Down enters superscript/subscript. Ctrl+arrows
+                        // remain reserved for fast movement of canvas objects.
                         let has_ctrl = state.input.ctrl() && !state.input.alt();
                         let script_key = match &event.logical_key {
                             Key::Character(c) if has_ctrl && c == "_" => {
                                 Some(TextKey::ToggleSubscript)
                             }
-                            _ if has_ctrl
-                                && matches!(
-                                    event.physical_key,
-                                    PhysicalKey::Code(KeyCode::ArrowUp)
-                                ) =>
+                            _ if !has_ctrl
+                                && state.input.shift()
+                                && matches!(event.physical_key, PhysicalKey::Code(KeyCode::ArrowUp)) =>
                             {
                                 Some(TextKey::ToggleSuperscript)
                             }
-                            _ if has_ctrl
-                                && matches!(
-                                    event.physical_key,
-                                    PhysicalKey::Code(KeyCode::ArrowDown)
-                                ) =>
+                            _ if !has_ctrl
+                                && state.input.shift()
+                                && matches!(event.physical_key, PhysicalKey::Code(KeyCode::ArrowDown)) =>
                             {
                                 Some(TextKey::ToggleSubscript)
                             }

@@ -284,6 +284,8 @@ pub struct UiState {
     pub text_command_pos: Pos2,
     pub text_command_rect: Option<Rect>,
     pub save_status: String,
+    pub save_status_seen: String,
+    pub save_status_since: Option<web_time::Instant>,
     pub inline_formula_error: String,
     /// Currently selected tool (mirrored from canvas).
     pub current_tool: ToolKind,
@@ -390,6 +392,7 @@ pub struct UiState {
     pub font_error: String,
     pub math_input_font_ready: bool,
     pub laser_color_open: bool,
+    pub laser_color_rect: Option<Rect>,
     pub geometry: drafftink_core::shapes::GeometryKind,
     pub context_properties: bool,
     pub context_rects: Vec<Rect>,
@@ -423,6 +426,8 @@ impl Default for UiState {
             text_command_rect: None,
             text_command_pos: Pos2::new(400.0, 300.0),
             save_status: String::new(),
+            save_status_seen: String::new(),
+            save_status_since: None,
             inline_formula_error: String::new(),
             eraser_mode: EraserMode::Classic,
             stroke_color: TAILWIND_COLORS[11].shades[6], // Indigo 500
@@ -481,6 +486,7 @@ impl Default for UiState {
             font_error: String::new(),
             math_input_font_ready: false,
             laser_color_open: false,
+            laser_color_rect: None,
             geometry: Default::default(),
             context_properties: false,
             context_rects: Vec::new(),
@@ -540,6 +546,7 @@ pub enum UiAction {
     SetEraserMode(EraserMode),
     SetDefaultFont(String, String),
     SetLaserColor(Color32),
+    SetLaserPermanent(bool),
     ResetFloatingPanels,
     InsertTextSymbol(String),
     OpenInlineFormula(String),
@@ -813,12 +820,23 @@ pub fn render_ui(
     if ui_state.presentation_mode {
         return None;
     }
-    if !ui_state.save_status.is_empty() {
+    if ui_state.save_status != ui_state.save_status_seen {
+        ui_state.save_status_seen.clone_from(&ui_state.save_status);
+        ui_state.save_status_since = Some(web_time::Instant::now());
+    }
+    let save_notice_elapsed = ui_state.save_status_since.map(|at| at.elapsed().as_secs_f32());
+    if !ui_state.save_status.is_empty() && save_notice_elapsed.is_some_and(|elapsed| elapsed < 6.0) {
+        let elapsed = save_notice_elapsed.unwrap_or_default();
+        let opacity = if elapsed <= 5.0 { 1.0 } else { 1.0 - (elapsed - 5.0) };
+        ctx.request_repaint_after(std::time::Duration::from_millis(80));
         egui::Area::new(egui::Id::new("save_notice"))
             .anchor(egui::Align2::RIGHT_BOTTOM, [-12.0, -65.0])
             .show(ctx, |ui| {
-                egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.label(&ui_state.save_status);
+                let mut frame = egui::Frame::popup(ui.style());
+                frame.fill = frame.fill.gamma_multiply(opacity);
+                frame.stroke.color = frame.stroke.color.gamma_multiply(opacity);
+                frame.show(ui, |ui| {
+                    ui.label(egui::RichText::new(&ui_state.save_status).color(Color32::BLACK.gamma_multiply(opacity)));
                 });
             });
     }
@@ -1125,7 +1143,7 @@ fn render_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                     } else {
                         tool.icon.clone()
                     };
-                    let button = IconButton::new(icon, label)
+                    let mut button = IconButton::new(icon, label)
                         .shortcut(ui_state.settings.shortcut_for(tool.kind));
                     let mut style = IconButtonStyle::tool();
                     style.size = Vec2::splat(40.0);
@@ -1135,8 +1153,17 @@ fn render_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                         // while using the same hover and selected backgrounds as all tools.
                         style.icon_tint = None;
                         style.selected_icon_tint = None;
+                        style.icon_offset = Vec2::new(2.0, 0.0);
                     }
-                    let response = button.style(style).selected(is_selected).show_response(ui);
+                    if tool.kind == ToolKind::LaserPointer {
+                        let [r, g, b] = ui_state.settings.laser_color;
+                        let laser = Color32::from_rgb(r, g, b);
+                        style.icon_tint = Some(laser);
+                        style.selected_icon_tint = Some(laser);
+                        style.hover_icon_tint = Some(laser);
+                    }
+                    button = button.style(style).selected(is_selected);
+                    let response = button.show_response(ui);
                     ui_state.test_controls.insert(
                         format!("tool_{:?}", tool.kind),
                         [
@@ -1181,6 +1208,18 @@ fn render_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
     });
 
     remember_panel(ui_state, "toolbar", &output.response);
+    if ui_state.laser_color_open
+        && ctx.input(|i| i.pointer.primary_pressed())
+        && ctx.input(|i| i.pointer.interact_pos()).is_some_and(|pos| {
+            !ui_state.laser_color_rect.is_some_and(|rect| rect.contains(pos))
+                && !ui_state.test_controls.get("tool_LaserPointer").is_some_and(|rect| {
+                    Rect::from_min_max(Pos2::new(rect[0], rect[1]), Pos2::new(rect[2], rect[3])).contains(pos)
+                })
+        })
+    {
+        ui_state.laser_color_open = false;
+        ui_state.laser_color_rect = None;
+    }
     if ui_state.laser_color_open {
         let output = floating_area(ctx, ui_state, "laser_palette", ui_state.laser_color_pos).show(
             ctx,
@@ -1188,12 +1227,7 @@ fn render_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                 panel_frame().show(ui, |ui| {
                     ui.set_width(190.0);
                     panel_grip(ui);
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Couleur du laser").color(Color32::BLACK));
-                        if default_btn(ui, "×") {
-                            ui_state.laser_color_open = false;
-                        }
-                    });
+                    ui.label(egui::RichText::new("Couleur du laser").color(Color32::BLACK));
                     ui.horizontal(|ui| {
                         for &index in QUICK_COLORS {
                             let color = TAILWIND_COLORS[index].shades[6];
@@ -1213,10 +1247,15 @@ fn render_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                             color[0], color[1], color[2],
                         )));
                     }
+                    let mut permanent = ui_state.settings.laser_permanent;
+                    if ui.checkbox(&mut permanent, "Permanent").changed() {
+                        action = Some(UiAction::SetLaserPermanent(permanent));
+                    }
                 });
             },
         );
         remember_panel(ui_state, "laser_palette", &output.response);
+        ui_state.laser_color_rect = Some(output.response.rect);
     }
     action
 }
@@ -3780,7 +3819,13 @@ fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAct
                         });
                         ui.label("Choisir un dossier d’export autorisé pour l’enregistrement PNG régulier.");
                         ui.label("Ctrl+S : PNG complet ; Ctrl+Shift+S : document JSON.");
-                        if !ui_state.save_status.is_empty(){ui.label(&ui_state.save_status);}
+                        if !ui_state.save_status.is_empty()
+                            && ui_state.save_status_since.is_some_and(|at| at.elapsed().as_secs_f32() < 6.0)
+                        {
+                            let elapsed = ui_state.save_status_since.unwrap().elapsed().as_secs_f32();
+                            let opacity = if elapsed <= 5.0 { 1.0 } else { 1.0 - (elapsed - 5.0) };
+                            ui.label(egui::RichText::new(&ui_state.save_status).color(Color32::BLACK.gamma_multiply(opacity)));
+                        }
                         ui.checkbox(
                             &mut ui_state.settings.restore_last_document,
                             "Restaurer la dernière feuille au démarrage",
