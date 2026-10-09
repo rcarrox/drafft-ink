@@ -6038,7 +6038,14 @@ impl ApplicationHandler for App {
                             }
 
                             let world_point = state.canvas.camera.screen_to_world(position);
-                            let current_style = state.ui_state.to_shape_style();
+                            let mut current_style = state.ui_state.to_shape_style();
+                            if state.canvas.tool_manager.current_tool == ToolKind::Freehand
+                                && current_style.stroke_color.a == 128
+                                && current_style.stroke_width >= 12.0
+                            {
+                                current_style.stroke_width = 2.0;
+                                current_style.stroke_color.a = 255;
+                            }
                             state.event_handler.handle_release(
                                 &mut state.canvas,
                                 world_point,
@@ -6212,7 +6219,14 @@ impl ApplicationHandler for App {
                                 );
                             }
                             TouchPhase::Ended => {
-                                let current_style = state.ui_state.to_shape_style();
+                                let mut current_style = state.ui_state.to_shape_style();
+                                if state.canvas.tool_manager.current_tool == ToolKind::Freehand
+                                    && current_style.stroke_color.a == 128
+                                    && current_style.stroke_width >= 12.0
+                                {
+                                    current_style.stroke_width = 2.0;
+                                    current_style.stroke_color.a = 255;
+                                }
                                 state.event_handler.handle_release(
                                     &mut state.canvas,
                                     world_point,
