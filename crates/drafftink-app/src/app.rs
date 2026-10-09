@@ -41,6 +41,11 @@ pub mod file_ops {
     use drafftink_core::canvas::CanvasDocument;
     use std::sync::Mutex;
 
+    /// Media import is implemented in the browser build, which supports raster decoding and PDF.js.
+    pub fn import_media() {
+        log::warn!("Media insertion is available in the browser build.");
+    }
+
     // Channel for receiving async file operation results
     static PENDING_DOCUMENT: Mutex<Option<CanvasDocument>> = Mutex::new(None);
     static PENDING_LIBRARY: Mutex<Option<(String, CanvasDocument)>> = Mutex::new(None);
@@ -929,6 +934,73 @@ pub mod file_ops {
         });
     }
 
+    /// Import raster images or PDF pages as regular editable image shapes.
+    pub fn import_media_async(viewport_width: f64, viewport_height: f64, camera_offset_x: f64, camera_offset_y: f64, camera_zoom: f64) {
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Err(error) = import_media_impl(viewport_width, viewport_height, camera_offset_x, camera_offset_y, camera_zoom).await {
+                log::error!("Could not import image/PDF: {:?}", error);
+            }
+        });
+    }
+
+    /// Load an image chosen through the native file dialog in the desktop target.
+    pub fn import_media() {
+        log::warn!("Use the browser version to import images and PDF pages.");
+    }
+
+    async fn import_media_impl(viewport_width: f64, viewport_height: f64, camera_offset_x: f64, camera_offset_y: f64, camera_zoom: f64) -> Result<(), JsValue> {
+        use drafftink_core::shapes::{Image, ImageFormat, Shape};
+        use kurbo::Point;
+        let window = web_sys::window().ok_or("No window")?;
+        let document = window.document().ok_or("No document")?;
+        let input: web_sys::HtmlInputElement = document.create_element("input")?.dyn_into()?;
+        input.set_type("file");
+        input.set_accept("image/png,image/jpeg,image/webp,.pdf,application/pdf");
+        input.style().set_property("display", "none").ok();
+        document.body().ok_or("No body")?.append_child(&input)?;
+        let selected = wait_for_file_selection(&input).await;
+        input.remove();
+        let file = selected?;
+        let mime = file.type();
+        let is_pdf = mime == "application/pdf" || file.name().to_lowercase().ends_with(".pdf");
+        let blobs: Vec<web_sys::Blob> = if is_pdf {
+            let value = js_sys::Reflect::get(window.as_ref(), &JsValue::from_str("drafftinkPdfPages"))?;
+            let function: js_sys::Function = value.dyn_into().map_err(|_| JsValue::from_str("Le lecteur PDF local n'est pas disponible"))?;
+            let promise: js_sys::Promise = function.call1(window.as_ref(), file.as_ref())?.dyn_into()?;
+            let pages = wasm_bindgen_futures::JsFuture::from(promise).await?;
+            if js_sys::Reflect::get(window.as_ref(), &JsValue::from_str("drafftinkPdfPagesTruncated"))?.as_bool().unwrap_or(false) {
+                PENDING_IMPORT_NOTICE.with(|cell| *cell.borrow_mut() = Some("PDF limité aux 20 premières pages pour préserver la mémoire.".into()));
+            }
+            js_sys::Array::from(&pages).iter().map(|value| value.dyn_into::<web_sys::Blob>()).collect::<Result<Vec<_>, _>>()?
+        } else {
+            vec![file.clone().unchecked_into::<web_sys::Blob>()]
+        };
+        let zoom = camera_zoom.max(0.01);
+        let cx = (viewport_width / 2.0 - camera_offset_x) / zoom;
+        let cy = (viewport_height / 2.0 - camera_offset_y) / zoom;
+        let format = if !is_pdf && mime == "image/jpeg" { ImageFormat::Jpeg } else if !is_pdf && mime == "image/webp" { ImageFormat::WebP } else { ImageFormat::Png };
+        let mut images = Vec::new();
+        let mut y = cy;
+        for blob in blobs {
+            let blob_url = web_sys::Url::create_object_url_with_blob(&blob)?;
+            let dimensions = decode_image_dimensions(&blob_url).await;
+            web_sys::Url::revoke_object_url(&blob_url)?;
+            let (width, height) = dimensions?;
+            let array = wasm_bindgen_futures::JsFuture::from(blob.array_buffer()).await?;
+            let data = js_sys::Uint8Array::new(&array).to_vec();
+            let mut image = Image::new(Point::new(cx - width as f64 / 2.0, y), &data, width, height, format);
+            if width.max(height) > 1600 {
+                image = image.fit_within(1600.0, 1600.0);
+                image.position = Point::new(cx - image.width / 2.0, y);
+            }
+            y += image.height + 24.0;
+            images.push(Shape::Image(image));
+        }
+        if images.is_empty() { return Err(JsValue::from_str("Aucune page trouvée dans le PDF")); }
+        PENDING_IMPORTED_MEDIA.with(|cell| *cell.borrow_mut() = Some(images));
+        Ok(())
+    }
+
     /// Load an Excalidraw library (`.excalidrawlib`) via a browser file picker
     /// (async). Retrieve via `take_pending_library()`.
     pub fn load_excalidrawlib_async() {
@@ -1051,6 +1123,8 @@ pub mod file_ops {
     // Thread-local storage for pending pasted image
     thread_local! {
         static PENDING_IMAGE: RefCell<Option<drafftink_core::shapes::Shape>> = const { RefCell::new(None) };
+        static PENDING_IMPORTED_MEDIA: RefCell<Option<Vec<drafftink_core::shapes::Shape>>> = const { RefCell::new(None) };
+        static PENDING_IMPORT_NOTICE: RefCell<Option<String>> = const { RefCell::new(None) };
     }
 
     /// Try to paste an image from the clipboard (async).
@@ -1230,6 +1304,14 @@ pub mod file_ops {
     /// Take the pending image from clipboard paste.
     pub fn take_pending_image() -> Option<drafftink_core::shapes::Shape> {
         PENDING_IMAGE.with(|cell| cell.borrow_mut().take())
+    }
+
+    pub fn take_pending_imported_media() -> Option<Vec<drafftink_core::shapes::Shape>> {
+        PENDING_IMPORTED_MEDIA.with(|cell| cell.borrow_mut().take())
+    }
+
+    pub fn take_pending_import_notice() -> Option<String> {
+        PENDING_IMPORT_NOTICE.with(|cell| cell.borrow_mut().take())
     }
 
     // Thread-local storage for pending pasted Excalidraw shapes
@@ -3224,6 +3306,17 @@ impl ApplicationHandler for App {
                     state.needs_redraw = true;
                 }
 
+                // Add imported image/PDF pages as one undoable insertion.
+                #[cfg(target_arch = "wasm32")]
+                if let Some(notice) = file_ops::take_pending_import_notice() {
+                    state.ui_state.save_status = notice;
+                }
+
+                #[cfg(target_arch = "wasm32")]
+                if let Some(shapes) = file_ops::take_pending_imported_media() {
+                    insert_vector_shapes(state, shapes);
+                }
+
                 // Check for pending pasted image (WASM)
                 #[cfg(target_arch = "wasm32")]
                 if let Some(image_shape) = file_ops::take_pending_image() {
@@ -3961,6 +4054,40 @@ impl ApplicationHandler for App {
                                 }
                                 #[cfg(target_arch = "wasm32")]
                                 file_ops::paste_shapes_from_clipboard_async(center_world);
+                            }
+                            UiAction::ToggleStopwatch => {
+                                state.ui_state.stopwatch_open = !state.ui_state.stopwatch_open;
+                                state.needs_redraw = true;
+                            }
+                            UiAction::ImportMedia => {
+                                #[cfg(target_arch = "wasm32")]
+                                file_ops::import_media_async(
+                                    state.canvas.viewport_size.width,
+                                    state.canvas.viewport_size.height,
+                                    state.canvas.camera.offset.x,
+                                    state.canvas.camera.offset.y,
+                                    state.canvas.camera.zoom,
+                                );
+                                #[cfg(not(target_arch = "wasm32"))]
+                                file_ops::import_media();
+                            }
+                            UiAction::InsertPreset(kind) => {
+                                let center = state.canvas.camera.screen_to_world(Point::new(
+                                    state.canvas.viewport_size.width / 2.0,
+                                    state.canvas.viewport_size.height / 2.0,
+                                ));
+                                let shapes = build_vector_preset(kind, center, &state.ui_state.to_shape_style());
+                                insert_vector_shapes(state, shapes);
+                            }
+                            UiAction::InsertGraph(expression) => {
+                                let center = state.canvas.camera.screen_to_world(Point::new(
+                                    state.canvas.viewport_size.width / 2.0,
+                                    state.canvas.viewport_size.height / 2.0,
+                                ));
+                                match build_vector_graph(&expression, center, &state.ui_state.to_shape_style()) {
+                                    Some(shapes) => insert_vector_shapes(state, shapes),
+                                    None => log::warn!("Invalid graph expression: {expression}"),
+                                }
                             }
                             UiAction::SwitchTab(_)
                             | UiAction::NewCanvas
@@ -8170,9 +8297,156 @@ fn select_text_word_at(state: &mut AppState, point: kurbo::Point) {
     }
 }
 
+fn insert_vector_shapes(state: &mut AppState, shapes: Vec<Shape>) {
+    if shapes.is_empty() { return; }
+    state.canvas.document.push_undo();
+    state.canvas.clear_selection();
+    for shape in shapes {
+        let id = shape.id();
+        state.canvas.document.add_shape(shape.clone());
+        state.canvas.add_to_selection(id);
+        if state.collab.is_in_room() { let _ = state.collab.crdt_mut().add_shape(&shape); }
+    }
+    broadcast_doc_changes(&mut state.collab, &state.canvas.document, state.websocket.as_ref());
+    state.needs_redraw = true;
+}
+
+fn vector_line(a: Point, b: Point, style: &drafftink_core::shapes::ShapeStyle) -> Shape {
+    let mut line = drafftink_core::shapes::Line::new(a, b);
+    line.style = style.clone();
+    Shape::Line(line)
+}
+
+fn vector_path(points: Vec<Point>, style: &drafftink_core::shapes::ShapeStyle) -> Shape {
+    let mut path = drafftink_core::shapes::Freehand::from_points(points);
+    path.style = style.clone();
+    Shape::Freehand(path)
+}
+
+fn build_vector_preset(kind: u8, center: Point, style: &drafftink_core::shapes::ShapeStyle) -> Vec<Shape> {
+    use drafftink_core::shapes::{Ellipse, GeometryKind};
+    let mut shapes = Vec::new();
+    let (w, h) = (180.0, 140.0);
+    match kind {
+        0 | 4 => {
+            // Cartesian or complex plane: a light grid and emphasized axes.
+            for i in -5..=5 {
+                let d = i as f64 * 28.0;
+                let mut grid = style.clone(); grid.stroke_width = 0.7;
+                grid.stroke_color.a = 90;
+                if i != 0 {
+                    shapes.push(vector_line(Point::new(center.x + d, center.y - h), Point::new(center.x + d, center.y + h), &grid));
+                    shapes.push(vector_line(Point::new(center.x - w, center.y + d), Point::new(center.x + w, center.y + d), &grid));
+                }
+            }
+            shapes.push(vector_line(Point::new(center.x - w, center.y), Point::new(center.x + w, center.y), style));
+            shapes.push(vector_line(Point::new(center.x, center.y - h), Point::new(center.x, center.y + h), style));
+            if kind == 4 {
+                let mut circle = Ellipse::new(center, 84.0, 84.0); circle.style = style.clone();
+                shapes.push(Shape::Ellipse(circle));
+                shapes.push(vector_line(center, Point::new(center.x + 84.0, center.y - 84.0), style));
+            }
+        }
+        1 => {
+            let mut circle = Ellipse::new(center, 110.0, 110.0); circle.style = style.clone(); shapes.push(Shape::Ellipse(circle));
+            shapes.push(vector_line(Point::new(center.x - 130.0, center.y), Point::new(center.x + 130.0, center.y), style));
+            shapes.push(vector_line(Point::new(center.x, center.y - 130.0), Point::new(center.x, center.y + 130.0), style));
+            let p = Point::new(center.x + 78.0, center.y - 78.0);
+            shapes.push(vector_line(center, p, style));
+            shapes.push(vector_line(p, Point::new(p.x, center.y), style));
+            shapes.push(vector_line(p, Point::new(center.x, p.y), style));
+        }
+        2 => {
+            let back = [Point::new(center.x-70.0,center.y-50.0),Point::new(center.x+40.0,center.y-50.0),Point::new(center.x+40.0,center.y+65.0),Point::new(center.x-70.0,center.y+65.0)];
+            let front = [Point::new(center.x-25.0,center.y-95.0),Point::new(center.x+85.0,center.y-95.0),Point::new(center.x+85.0,center.y+20.0),Point::new(center.x-25.0,center.y+20.0)];
+            for i in 0..4 { shapes.push(vector_line(back[i], back[(i+1)%4], style)); shapes.push(vector_line(front[i], front[(i+1)%4], style)); shapes.push(vector_line(back[i], front[i], style)); }
+        }
+        _ => {
+            // A small editable geometry reference sheet.
+            let variants = [GeometryKind::Triangle, GeometryKind::Parallelogram, GeometryKind::Trapezoid, GeometryKind::Diamond];
+            for (i, geometry) in variants.into_iter().enumerate() {
+                let x = center.x - 135.0 + (i % 2) as f64 * 170.0;
+                let y = center.y - 90.0 + (i / 2) as f64 * 145.0;
+                let mut shape = Ellipse::new(Point::new(x + 65.0, y + 48.0), 62.0, 44.0);
+                shape.geometry = geometry; shape.style = style.clone(); shapes.push(Shape::Ellipse(shape));
+            }
+        }
+    }
+    shapes
+}
+
+fn build_vector_graph(expression: &str, center: Point, style: &drafftink_core::shapes::ShapeStyle) -> Option<Vec<Shape>> {
+    let expression = expression.trim().strip_prefix("y=").or_else(|| expression.trim().strip_prefix("y = ")).unwrap_or(expression.trim());
+    let mut points = Vec::with_capacity(401);
+    for i in 0..=400 {
+        let x = -10.0 + i as f64 * 0.05;
+        let y = ExprParser::new(expression, x).parse()?;
+        if !y.is_finite() || y.abs() > 20.0 { points.push(None); }
+        else { points.push(Some(Point::new(center.x + x * 22.0, center.y - y * 22.0))); }
+    }
+    let mut shapes = build_vector_preset(0, center, style);
+    let mut segment = Vec::new();
+    for point in points.into_iter().chain(std::iter::once(None)) {
+        if let Some(point) = point { segment.push(point); }
+        else if segment.len() > 1 { shapes.push(vector_path(std::mem::take(&mut segment), style)); }
+        else { segment.clear(); }
+    }
+    Some(shapes)
+}
+
+struct ExprParser<'a> { bytes: &'a [u8], at: usize, x: f64 }
+impl<'a> ExprParser<'a> {
+    fn new(source: &'a str, x: f64) -> Self { Self { bytes: source.as_bytes(), at: 0, x } }
+    fn parse(mut self) -> Option<f64> { let value=self.expr()?; self.ws(); (self.at==self.bytes.len()).then_some(value) }
+    fn ws(&mut self) { while self.at<self.bytes.len() && self.bytes[self.at].is_ascii_whitespace() { self.at+=1; } }
+    fn eat(&mut self, b:u8)->bool { self.ws(); if self.bytes.get(self.at)==Some(&b) { self.at+=1; true } else { false } }
+    fn expr(&mut self)->Option<f64> { let mut v=self.term()?; loop { if self.eat(b'+') {v+=self.term()?} else if self.eat(b'-'){v-=self.term()?} else {break} } Some(v) }
+    fn term(&mut self)->Option<f64> { let mut v=self.unary()?; loop { if self.eat(b'*'){v*=self.unary()?} else if self.eat(b'/'){v/=self.unary()?} else {break} } Some(v) }
+    fn power(&mut self)->Option<f64> { let v=self.atom()?; if self.eat(b'^'){Some(v.powf(self.unary()?))}else{Some(v)} }
+    fn unary(&mut self)->Option<f64> { if self.eat(b'-'){Some(-self.unary()?)}else if self.eat(b'+'){self.unary()}else{self.power()} }
+    fn atom(&mut self)->Option<f64> {
+        self.ws(); if self.eat(b'('){let v=self.expr()?; if !self.eat(b')'){return None} return Some(v)}
+        let start=self.at; while self.at<self.bytes.len() && (self.bytes[self.at].is_ascii_alphabetic()||self.bytes[self.at]==b'_'){self.at+=1}
+        if self.at>start { let name=std::str::from_utf8(&self.bytes[start..self.at]).ok()?; if name=="x" {return Some(self.x)} if !self.eat(b'('){return None} let v=self.expr()?; if !self.eat(b')'){return None} return Some(match name {"sin"=>v.sin(),"cos"=>v.cos(),"tan"=>v.tan(),"sqrt"=>v.sqrt(),"abs"=>v.abs(),"ln"=>v.ln(),"log"=>v.log10(),"exp"=>v.exp(),_=>return None}); }
+        let start=self.at;
+        while self.at<self.bytes.len() && (self.bytes[self.at].is_ascii_digit() || self.bytes[self.at]==b'.') { self.at+=1; }
+        if self.at<self.bytes.len() && matches!(self.bytes[self.at], b'e'|b'E') {
+            self.at+=1;
+            if self.at<self.bytes.len() && matches!(self.bytes[self.at], b'+'|b'-') { self.at+=1; }
+            let exponent_start=self.at;
+            while self.at<self.bytes.len() && self.bytes[self.at].is_ascii_digit() { self.at+=1; }
+            if exponent_start==self.at { return None; }
+        }
+        if self.at==start{return None} std::str::from_utf8(&self.bytes[start..self.at]).ok()?.parse().ok()
+    }
+}
+
+#[cfg(test)]
+mod insert_tool_tests {
+    use super::*;
+    #[test]
+    fn graph_expression_parser_handles_arithmetic_and_functions() {
+        assert_eq!(ExprParser::new("2*x^2+sqrt(9)", 2.0).parse(), Some(11.0));
+        assert!((ExprParser::new("sin(x)", std::f64::consts::FRAC_PI_2).parse().unwrap()-1.0).abs()<1e-10);
+        assert!(ExprParser::new("sqrt(", 0.0).parse().is_none());
+    }
+    #[test]
+    fn presets_and_graph_are_editable_vector_shapes() {
+        let center=Point::new(0.0,0.0); let style=drafftink_core::shapes::ShapeStyle::default();
+        for kind in 0..=4 { assert!(!build_vector_preset(kind,center,&style).is_empty()); }
+        let graph=build_vector_graph("x^2",center,&style).unwrap();
+        assert!(graph.iter().any(|shape| matches!(shape,Shape::Freehand(_))));
+        assert!(build_vector_graph("not_a_function(x)",center,&style).is_none());
+    }
+}
+
 fn auto_pan_drag(state: &mut AppState, seconds: f64) -> bool {
+    let drawing = matches!(
+        state.canvas.tool_manager.current_tool,
+        ToolKind::Freehand | ToolKind::Highlighter
+    ) && state.canvas.tool_manager.is_active();
     if !state.input.is_button_pressed(MouseButton::Left)
-        || !state.event_handler.is_moving_shapes()
+        || (!state.event_handler.is_moving_shapes() && !drawing)
         || state.event_handler.editing_text.is_some()
     {
         return false;
@@ -8189,6 +8463,8 @@ fn auto_pan_drag(state: &mut AppState, seconds: f64) -> bool {
     }
     state.canvas.camera.pan(-velocity * seconds);
     let world = state.canvas.camera.screen_to_world(point);
+    // Keep the active freehand path sampling the pointer as the camera pans;
+    // otherwise the stroke would stop at the viewport edge until another input event.
     state.event_handler.handle_drag(
         &mut state.canvas,
         world,

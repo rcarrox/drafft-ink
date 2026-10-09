@@ -296,6 +296,14 @@ pub struct UiState {
     pub save_status: String,
     pub save_status_seen: String,
     pub save_status_since: Option<StatusInstant>,
+    /// Visibility and monotonic stopwatch state; independent from canvas camera.
+    pub stopwatch_open: bool,
+    pub stopwatch_running: bool,
+    pub stopwatch_elapsed: f64,
+    pub stopwatch_started_at: Option<StatusInstant>,
+    pub insert_menu_open: bool,
+    pub graph_dialog_open: bool,
+    pub graph_expression: String,
     pub inline_formula_error: String,
     /// Currently selected tool (mirrored from canvas).
     pub current_tool: ToolKind,
@@ -443,6 +451,13 @@ impl Default for UiState {
             save_status: String::new(),
             save_status_seen: String::new(),
             save_status_since: None,
+            stopwatch_open: false,
+            stopwatch_running: false,
+            stopwatch_elapsed: 0.0,
+            stopwatch_started_at: None,
+            insert_menu_open: false,
+            graph_dialog_open: false,
+            graph_expression: "sin(x)".into(),
             inline_formula_error: String::new(),
             eraser_mode: EraserMode::Classic,
             stroke_color: TAILWIND_COLORS[11].shades[6], // Indigo 500
@@ -566,6 +581,10 @@ pub enum UiAction {
     SetLaserColor(Color32),
     SetLaserPermanent(bool),
     ResetFloatingPanels,
+    ToggleStopwatch,
+    ImportMedia,
+    InsertPreset(u8),
+    InsertGraph(String),
     InsertTextSymbol(String),
     OpenInlineFormula(String),
     EditTextCommand(String, bool, bool),
@@ -837,6 +856,7 @@ pub fn render_ui(
         ui_state.context_properties = false;
     }
     ui_state.context_rects.clear();
+    render_stopwatch(ctx, ui_state);
     if ui_state.presentation_mode {
         return None;
     }
@@ -856,7 +876,7 @@ pub fn render_ui(
                 frame.fill = frame.fill.gamma_multiply(opacity);
                 frame.stroke.color = frame.stroke.color.gamma_multiply(opacity);
                 frame.show(ui, |ui| {
-                    ui.label(egui::RichText::new(&ui_state.save_status).color(Color32::BLACK.gamma_multiply(opacity)));
+                    ui.label(egui::RichText::new(&ui_state.save_status).color(Color32::WHITE.gamma_multiply(opacity)));
                 });
             });
     }
@@ -872,6 +892,7 @@ pub fn render_ui(
     let command_action = render_text_command_editor(ctx, ui_state);
     let settings_action = render_settings_dialog(ctx, ui_state);
     let tab_action = render_tab_bar(ctx, ui_state);
+    let insert_action = render_insert_panel(ctx, ui_state);
 
     // Render presence panel (no actions returned)
     render_presence_panel(ctx, ui_state);
@@ -886,7 +907,119 @@ pub fn render_ui(
         .or(inline_action)
         .or(command_action)
         .or(settings_action)
+        .or(insert_action)
         .or(tab_action)
+}
+
+fn render_insert_panel(ctx: &Context, state: &mut UiState) -> Option<UiAction> {
+    let mut action = None;
+    if state.insert_menu_open {
+        let mut open = state.insert_menu_open;
+        egui::Window::new("Insérer")
+        .id(egui::Id::new("insert_menu"))
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .default_pos(Pos2::new(82.0, 250.0))
+        .show(ctx, |ui| {
+            ui.set_min_width(205.0);
+            if ui.button("Image ou PDF…").clicked() {
+                action = Some(UiAction::ImportMedia);
+                state.insert_menu_open = false;
+            }
+            ui.separator();
+            ui.label("Schémas et courbes vectorielles");
+            for (name, kind) in [("Repère cartésien", 0), ("Cercle trigonométrique", 1), ("Cube 3D", 2), ("Formes géométriques", 3), ("Plan complexe", 4)] {
+                if ui.button(name).clicked() {
+                    action = Some(UiAction::InsertPreset(kind));
+                    state.insert_menu_open = false;
+                }
+            }
+            if ui.button("Courbe…").clicked() {
+                state.graph_dialog_open = true;
+                state.insert_menu_open = false;
+            }
+            if ui.button(if state.stopwatch_open { "Masquer le chronomètre" } else { "Chronomètre" }).clicked() {
+                action = Some(UiAction::ToggleStopwatch);
+                state.insert_menu_open = false;
+            }
+        });
+        if action.is_none() {
+            state.insert_menu_open = open;
+        }
+    }
+    if state.graph_dialog_open {
+        let mut open = state.graph_dialog_open;
+        egui::Window::new("Courbe vectorielle")
+            .id(egui::Id::new("graph_dialog"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label("y = f(x), x ∈ [−10, 10] · utilisez * pour multiplier");
+                ui.label("Fonctions : sin, cos, tan, sqrt, abs, ln, log, exp");
+                let input = ui.add(egui::TextEdit::singleline(&mut state.graph_expression).desired_width(240.0));
+                input.request_focus();
+                ui.horizontal(|ui| {
+                    if ui.button("Insérer la courbe").clicked() {
+                        action = Some(UiAction::InsertGraph(state.graph_expression.clone()));
+                        state.graph_dialog_open = false;
+                    }
+                    if ui.button("Annuler").clicked() { state.graph_dialog_open = false; }
+                });
+            });
+        if action.is_none() {
+            state.graph_dialog_open = open;
+        }
+    }
+    action
+}
+
+fn render_stopwatch(ctx: &Context, state: &mut UiState) {
+    if !state.stopwatch_open { return; }
+    if state.stopwatch_running { ctx.request_repaint_after(std::time::Duration::from_millis(30)); }
+    let elapsed = state.stopwatch_elapsed + state.stopwatch_started_at.map_or(0.0, |at| at.elapsed().as_secs_f64());
+    let total = elapsed.max(0.0) as u64;
+    let minutes = total / 60;
+    let seconds = total % 60;
+    let centiseconds = ((elapsed.fract() * 100.0) as u64).min(99);
+    let mut open = state.stopwatch_open;
+    egui::Window::new("Chronomètre")
+        .id(egui::Id::new("qurso_stopwatch"))
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(true)
+        .default_size(Vec2::new(330.0, 126.0))
+        .default_pos(Pos2::new(110.0, 100.0))
+        .show(ctx, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.label(egui::RichText::new(format!("{minutes:02}:{seconds:02}.{centiseconds:02}"))
+                    .size(30.0).monospace());
+                ui.horizontal(|ui| {
+                    if ui.button(if state.stopwatch_running { "Pause" } else { "Démarrer" }).clicked() {
+                        if state.stopwatch_running {
+                            state.stopwatch_elapsed = elapsed;
+                            state.stopwatch_started_at = None;
+                            state.stopwatch_running = false;
+                        } else {
+                            state.stopwatch_started_at = Some(StatusInstant::now());
+                            state.stopwatch_running = true;
+                        }
+                    }
+                    if ui.button("Stop").clicked() {
+                        state.stopwatch_elapsed = elapsed;
+                        state.stopwatch_running = false;
+                        state.stopwatch_started_at = None;
+                    }
+                    if ui.button("Reset").clicked() {
+                        state.stopwatch_running = false;
+                        state.stopwatch_elapsed = 0.0;
+                        state.stopwatch_started_at = None;
+                    }
+                });
+            });
+        });
+    state.stopwatch_open = open;
 }
 
 /// Render the tab strip (top-center) with one button per open canvas plus a
@@ -1027,7 +1160,7 @@ fn floating_area(_ctx: &Context, state: &UiState, id: &str, default: Pos2) -> eg
     // Without these hints, a small tool panel starts as 600x400 and both moves
     // other panels and expands its drag grip to the full available width.
     let size = match id {
-        "toolbar" => Vec2::new(58.0, 530.0),
+        "toolbar" => Vec2::new(58.0, 590.0),
         "right_panel" => Vec2::new(260.0, 400.0),
         "bottom_toolbar" => Vec2::new(440.0, 38.0),
         "properties" => Vec2::new(340.0, 112.0),
@@ -1142,7 +1275,7 @@ fn render_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
         ctx,
         ui_state,
         "toolbar",
-        Pos2::new(12.0, (screen.height() - 530.0).max(24.0) / 2.0),
+        Pos2::new(12.0, (screen.height() - 590.0).max(24.0) / 2.0),
     )
     .show(ctx, |ui| {
         panel_frame().show(ui, |ui| {
@@ -1244,6 +1377,13 @@ fn render_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                     if tool.kind == ToolKind::LaserPointer && response.secondary_clicked() {
                         ui_state.laser_color_open = !ui_state.laser_color_open;
                     }
+                }
+                ui.separator();
+                if ui.add(egui::Button::new("＋").min_size(Vec2::new(40.0, 34.0)))
+                    .on_hover_text("Insérer une image, un PDF, un schéma ou un chronomètre")
+                    .clicked()
+                {
+                    ui_state.insert_menu_open = !ui_state.insert_menu_open;
                 }
             });
         });
@@ -3931,7 +4071,7 @@ fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAct
                         {
                             let elapsed = ui_state.save_status_since.unwrap().elapsed().as_secs_f32();
                             let opacity = if elapsed <= 5.0 { 1.0 } else { 1.0 - (elapsed - 5.0) };
-                            ui.label(egui::RichText::new(&ui_state.save_status).color(Color32::from_gray(170).gamma_multiply(opacity)));
+                            ui.label(egui::RichText::new(&ui_state.save_status).color(Color32::WHITE.gamma_multiply(opacity)));
                         }
                         ui.checkbox(
                             &mut ui_state.settings.restore_last_document,

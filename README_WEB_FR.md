@@ -15,3 +15,13 @@ Le cache du navigateur n’est pas une sauvegarde permanente : supprimer les don
 Les préférences du site HTTPS sont distinctes de celles du portable sur localhost. Les anciens documents du portable ne sont pas transférés automatiquement : utiliser Export/Import JSON. Pour Google Sans installée sur Windows, le site dépend de l’autorisation de polices locales du navigateur ; cliquer sur Actualiser mes polices dans Settings. Les polices privées ne sont pas dans ce ZIP et ne sont pas envoyées au serveur.
 
 Le cache occupe du stockage sur disque. Il ne réduit pas à lui seul la RAM consommée par le rendu WASM/WebGPU.
+
+
+## Nouveautés 0.26.0
+
+- Menu Insérer dans la barre : images et PDF (pages rendues en images éditables, jusqu’à 20 pages par import), repère cartésien, cercle trigonométrique, cube 3D, plan géométrique/complexe.
+- Courbe vectorielle : saisie de y=f(x), échantillonnage dans x∈[-10,10], outils sin/cos/tan/sqrt/abs/ln/log/exp ; la courbe et les axes sont des objets vectoriels éditables.
+- Chronomètre flottant redimensionnable et déplaçable, indépendant du zoom/pan, commandes démarrer/pause/stop/reset, sans tours.
+- Draw et Highlighter continuent le trait en faisant défiler automatiquement la feuille au bord de la fenêtre.
+- PDF.js est chargé seulement à l’import et intégré au cache hors connexion ; les pages rasterisées sont limitées pour contenir la mémoire.
+- Favicon fourni par l’utilisateur, statut « Enregistré » en blanc et diagnostic distinctif du cache hors connexion (réseau, HTTP ou empreinte incohérente).

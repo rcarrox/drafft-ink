@@ -265,6 +265,17 @@ function inspectCapture(file) {
     await page.mouse.up();await page.keyboard.press('Control+z');await wait(s=>Math.abs(s.shapes[0].shape.Rectangle.position.x-originalRect)<1e-7);
     await control('New canvas');await wait(s=>s.shapes.length===0);
 
+    // A live Draw stroke must keep sampling while the canvas auto-pans at the viewport edge.
+    await control('tool_Freehand');await wait(s=>s.tool==='Freehand');
+    const drawOffset=(await state()).camera_offset[0];
+    await page.mouse.move(400,300);await page.mouse.down();await page.mouse.move(1278,300,{steps:12});
+    await wait(s=>s.camera_offset[0]<drawOffset-25);
+    await page.waitForTimeout(180);
+    await page.mouse.move(900,300,{steps:5});await page.mouse.up();
+    const edgeStroke=(await wait(s=>s.shapes.some(item=>item.shape.Freehand))).shapes.find(item=>item.shape.Freehand);
+    assert(edgeStroke.shape.Freehand.points.length>12,'edge auto-pan continues sampling the active freehand path');
+    await control('New canvas');await wait(s=>s.shapes.length===0);
+
     // A completed shape remains selected and can resize with its drawing tool still active.
     await page.keyboard.press('r');await wait(s=>s.tool==='Rectangle');
     await page.mouse.move(320,260);await page.mouse.down();await page.mouse.move(440,350,{steps:6});await page.mouse.up();

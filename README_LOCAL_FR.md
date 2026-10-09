@@ -1,10 +1,10 @@
-# Qurso🌿 0.25.0
+# Qurso🌿 0.26.0
 
 Version personnelle du tableau DrafftInk, sans collaboration reseau.
 
 ## Utilisation sous Windows
 
-Le ZIP **DrafftInk_Windows_Portable_0.25.0.zip** produit par GitHub Actions est deja compile.
+Le ZIP **DrafftInk_Windows_Portable_0.26.0.zip** produit par GitHub Actions est deja compile.
 Il ne faut installer ni Rust, ni wasm-pack, ni Visual Studio.
 
 1. Decompresser le ZIP.
@@ -26,8 +26,8 @@ Workflow : `.github/workflows/build-portable.yml`.
 
 A chaque push sur `main`, deux artefacts sont produits :
 
-- `DrafftInk-Windows-Portable-0.25.0` : version locale Windows precompilee ;
-- `DrafftInk-Web-0.25.0` : fichiers statiques a deposer sur un serveur web.
+- `DrafftInk-Windows-Portable-0.26.0` : version locale Windows precompilee ;
+- `DrafftInk-Web-0.26.0` : fichiers statiques a deposer sur un serveur web.
 
 ## Modifications de cette branche
 
@@ -163,3 +163,13 @@ Zoom au pavé tactile : vitesse 2× par défaut, réglable de 0,25× à 8× dans
 ## Nouveautés 0.20.0
 
 Cache hors connexion des fichiers de l’application et mises à jour explicites, limitées au dossier hébergé. Pour le déploiement FTP, lire README_WEB_FR.md. Documents, préférences, polices et rendu existants conservés.
+
+
+## Nouveautés 0.26.0
+
+- Menu Insérer dans la barre : images et PDF (pages rendues en images éditables, jusqu’à 20 pages par import), repère cartésien, cercle trigonométrique, cube 3D, plan géométrique/complexe.
+- Courbe vectorielle : saisie de y=f(x), échantillonnage dans x∈[-10,10], outils sin/cos/tan/sqrt/abs/ln/log/exp ; la courbe et les axes sont des objets vectoriels éditables.
+- Chronomètre flottant redimensionnable et déplaçable, indépendant du zoom/pan, commandes démarrer/pause/stop/reset, sans tours.
+- Draw et Highlighter continuent le trait en faisant défiler automatiquement la feuille au bord de la fenêtre.
+- PDF.js est chargé seulement à l’import et intégré au cache hors connexion ; les pages rasterisées sont limitées pour contenir la mémoire.
+- Favicon fourni par l’utilisateur, statut « Enregistré » en blanc et diagnostic distinctif du cache hors connexion (réseau, HTTP ou empreinte incohérente).
