@@ -1,1 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M12.48 3L7.73 7.75L3 12.59a2 2 0 0 0 0 2.82l4.3 4.3A1 1 0 0 0 8 20h12v-2h-7l7.22-7.22a2 2 0 0 0 0-2.83L15.31 3a2 2 0 0 0-2.83 0zM8.41 18l-4-4l4.75-4.84l.74-.75l4.95 4.95l-4.56 4.56l-.07.08z" fill="#202020"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <title>eraser intelligent</title>
+
+  <!-- La gomme d'origine -->
+  <path fill="currentColor" d="M8.086 2.207a2 2 0 0 1 2.828 0l3.879 3.879a2 2 0 0 1 0 2.828l-5.5 5.5A2 2 0 0 1 7.879 15H5.12a2 2 0 0 1-1.414-.586l-2.5-2.5a2 2 0 0 1 0-2.828zm2.121.707a1 1 0 0 0-1.414 0L4.16 7.547l5.293 5.293l4.633-4.633a1 1 0 0 0 0-1.414zM8.746 13.547L3.453 8.254L1.914 9.793a1 1 0 0 0 0 1.414l2.5 2.5a1 1 0 0 0 .707.293H7.88a1 1 0 0 0 .707-.293z"/>
+
+  <!-- Cercle de fond pour détacher l'étoile -->
+  <circle cx="12.5" cy="3.5" r="4" fill="var(--bg-color, white)"/>
+
+  <!-- Étoile à 4 branches (symbole IA) -->
+  <path fill="currentColor" d="M12.5 0.3c.2 1.7.8 2.3 2.5 2.5c-1.7.2-2.3.8-2.5 2.5c-.2-1.7-.8-2.3-2.5-2.5c1.7-.2 2.3-.8 2.5-2.5z"/>
+</svg>
+
