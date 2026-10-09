@@ -1051,7 +1051,7 @@ fn remember_panel(state: &mut UiState, id: &str, response: &egui::Response) {
 fn panel_grip(ui: &mut egui::Ui) {
     let (rect, response) = ui.allocate_exact_size(
         Vec2::new(ui.available_width().clamp(24.0, 400.0), 7.0),
-        egui::Sense::hover(),
+        egui::Sense::drag(),
     );
     for offset in [-6.0, 0.0, 6.0] {
         ui.painter().circle_filled(

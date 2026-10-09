@@ -195,6 +195,7 @@ function inspectCapture(file) {
     const originalToolbar=openedPalette.controls.toolbar;
     const originalPalette=openedPalette.controls.laser_palette;
     await page.mouse.move((originalToolbar[0]+originalToolbar[2])/2,originalToolbar[1]+4);
+    await page.waitForTimeout(100);
     await page.mouse.down();await page.mouse.move((originalToolbar[0]+originalToolbar[2])/2+35,originalToolbar[1]+34,{steps:8});await page.mouse.up();
     const movedPalette=await wait(s=>s.controls.toolbar&&s.controls.laser_palette&&Math.abs(s.controls.toolbar[0]-originalToolbar[0]-35)<3);
     assert(Math.abs(movedPalette.controls.laser_palette[0]-originalPalette[0]-35)<3,'Laser palette should remain anchored as the toolbar moves');
