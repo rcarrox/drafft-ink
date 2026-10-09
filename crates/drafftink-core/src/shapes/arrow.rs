@@ -350,7 +350,11 @@ impl ShapeTrait for Arrow {
         }
         // Scale head size based on transform
         let scale = affine.as_coeffs();
-        self.head_size *= (scale[0].abs() + scale[3].abs()) / 2.0;
+        // Use each transformed basis vector's length so pure rotations keep
+        // the arrowhead size unchanged.
+        let x_scale = scale[0].hypot(scale[1]);
+        let y_scale = scale[2].hypot(scale[3]);
+        self.head_size *= (x_scale + y_scale) / 2.0;
     }
 
     fn clone_box(&self) -> Box<dyn ShapeTrait + Send + Sync> {

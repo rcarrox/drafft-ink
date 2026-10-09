@@ -98,6 +98,11 @@ pub struct ToolManager {
     /// Corner radius for new rectangles (0 = sharp corners).
     pub corner_radius: f64,
     pub geometry: crate::shapes::GeometryKind,
+    /// Per-family defaults for newly created paths and arrows.
+    pub path_style: crate::shapes::PathStyle,
+    pub stroke_style: crate::shapes::StrokeStyle,
+    pub arrow_start_head: crate::shapes::ArrowHeadStyle,
+    pub arrow_end_head: crate::shapes::ArrowHeadStyle,
     /// Calligraphy mode for freehand (MSD smoothing).
     pub calligraphy_mode: bool,
     /// Pressure simulation mode (varies width based on speed).
@@ -121,6 +126,10 @@ impl Default for ToolManager {
             current_style: ShapeStyle::default(),
             corner_radius: 0.0,
             geometry: Default::default(),
+            path_style: crate::shapes::PathStyle::Direct,
+            stroke_style: crate::shapes::StrokeStyle::default(),
+            arrow_start_head: crate::shapes::ArrowHeadStyle::None,
+            arrow_end_head: crate::shapes::ArrowHeadStyle::Open,
             calligraphy_mode: true,
             pressure_simulation: false,
             msd_pos: Point::ZERO,
@@ -355,8 +364,20 @@ impl ToolManager {
                 shape.geometry = self.geometry;
                 Some(Shape::Ellipse(shape))
             }
-            ToolKind::Line => Some(Shape::Line(Line::new(start, end))),
-            ToolKind::Arrow => Some(Shape::Arrow(Arrow::new(start, end))),
+            ToolKind::Line => {
+                let mut line = Line::new(start, end);
+                line.path_style = self.path_style;
+                line.stroke_style = self.stroke_style;
+                Some(Shape::Line(line))
+            }
+            ToolKind::Arrow => {
+                let mut arrow = Arrow::new(start, end);
+                arrow.path_style = self.path_style;
+                arrow.stroke_style = self.stroke_style;
+                arrow.start_head = self.arrow_start_head;
+                arrow.end_head = self.arrow_end_head;
+                Some(Shape::Arrow(arrow))
+            }
             ToolKind::Freehand | ToolKind::Highlighter => {
                 // Use accumulated points for freehand/highlighter
                 return self.create_freehand_preview(seed);
@@ -437,5 +458,35 @@ mod tests {
         tm.begin(Point::new(0.0, 0.0));
         let shape = tm.end(Point::new(100.0, 100.0));
         assert!(shape.is_none());
+    }
+
+    #[test]
+    fn new_paths_reuse_the_last_configured_family_properties() {
+        let mut tm = ToolManager::new();
+        tm.path_style = crate::shapes::PathStyle::Flowing;
+        tm.stroke_style = crate::shapes::StrokeStyle::DashedShort;
+        tm.current_tool = ToolKind::Line;
+        let Shape::Line(line) = tm
+            .create_shape_with_seed(Point::ZERO, Point::new(20.0, 0.0), 12)
+            .unwrap()
+        else {
+            panic!("line tool should create a line")
+        };
+        assert_eq!(line.path_style, crate::shapes::PathStyle::Flowing);
+        assert_eq!(line.stroke_style, crate::shapes::StrokeStyle::DashedShort);
+
+        tm.current_tool = ToolKind::Arrow;
+        tm.arrow_start_head = crate::shapes::ArrowHeadStyle::Filled;
+        tm.arrow_end_head = crate::shapes::ArrowHeadStyle::None;
+        let Shape::Arrow(arrow) = tm
+            .create_shape_with_seed(Point::ZERO, Point::new(20.0, 0.0), 13)
+            .unwrap()
+        else {
+            panic!("arrow tool should create an arrow")
+        };
+        assert_eq!(arrow.path_style, crate::shapes::PathStyle::Flowing);
+        assert_eq!(arrow.stroke_style, crate::shapes::StrokeStyle::DashedShort);
+        assert_eq!(arrow.start_head, crate::shapes::ArrowHeadStyle::Filled);
+        assert_eq!(arrow.end_head, crate::shapes::ArrowHeadStyle::None);
     }
 }

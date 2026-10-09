@@ -124,6 +124,8 @@ function inspectCapture(file) {
     await page.mouse.move(380,270);await page.waitForTimeout(100);
     await page.mouse.click(380,270,{button:'right',delay:60});
     await wait(s=>s.context_properties&&s.properties_visible);
+    await page.keyboard.press('F1');await wait(s=>!s.properties_visible);
+    await page.keyboard.press('F1');await wait(s=>s.properties_visible);
     await page.mouse.move(600,500);await page.waitForTimeout(100);await page.mouse.click(600,500);
     await wait(s=>!s.context_properties&&!s.properties_visible);
     const ellipseButton=(await state()).controls.tool_Ellipse;
@@ -176,6 +178,12 @@ function inspectCapture(file) {
     assert(Math.abs(shiftNudged.shapes[0].bounds[1]-topBeforeNudge-33.6)<2,'Shift+ArrowDown should provide the fast vertical nudge fallback');
     await page.keyboard.press('Shift+ArrowUp');
     await wait(s=>Math.abs(s.shapes[0].bounds[1]-topBeforeNudge)<1);
+    const leftBeforeNudge=(await state()).shapes[0].bounds[0];
+    await page.keyboard.press('Shift+ArrowRight');
+    const horizontalNudge=await wait(s=>s.shapes[0].bounds[0]>leftBeforeNudge+20);
+    assert(Math.abs(horizontalNudge.shapes[0].bounds[0]-leftBeforeNudge-33.6)<2,'Shift+ArrowRight should nudge horizontally by the fast step');
+    await page.keyboard.press('Shift+ArrowLeft');
+    await wait(s=>Math.abs(s.shapes[0].bounds[0]-leftBeforeNudge)<1);
     const selectTool=await state();
     const selectButton=selectTool.controls.tool_Select;
     const selectIcon=selectTool.controls.tool_Select_icon;
@@ -207,15 +215,20 @@ function inspectCapture(file) {
     await page.mouse.move(...multiSelectPoint);
     await page.keyboard.down('Control');await page.mouse.click(...multiSelectPoint);await page.keyboard.up('Control');
     await wait(s=>s.selected_count===2);
-    await page.keyboard.press('Control+l');await wait(s=>s.shapes.every(shape=>shape.pinned));
-    await page.keyboard.press('Control+z');await wait(s=>s.shapes.every(shape=>!shape.pinned));
-    // Undo restores the document snapshot and clears selection; select both again.
-    await page.mouse.click(...multiSelectPoint);await wait(s=>s.selected_count===1);
     const secondBounds=(await state()).shapes[1].bounds;
     const secondPoint=[secondBounds[0]+1,secondBounds[1]+1];
+    await page.mouse.click(1100,650);await wait(s=>s.selected_count===0);
+    await page.mouse.click(...multiSelectPoint);
+    await wait(s=>s.selected_count===1);
+    await page.keyboard.press('Control+l');
+    const singlePinned=await wait(s=>s.shapes[0].pinned&&!s.shapes[1].pinned);
+    const pinnedBoundsBeforeMixed=singlePinned.shapes[0].bounds;
     await page.keyboard.down('Control');await page.mouse.click(...secondPoint);await page.keyboard.up('Control');
     await wait(s=>s.selected_count===2);
-    await page.keyboard.press('Control+l');await wait(s=>s.shapes.every(shape=>shape.pinned));
+    const mixedPinned=await wait(s=>s.shapes[0].pinned&&!s.shapes[1].pinned);
+    await page.keyboard.press('Control+l');
+    const allPinned=await wait(s=>s.shapes.every(shape=>shape.pinned));
+    assert.deepEqual(allPinned.shapes[0].bounds,pinnedBoundsBeforeMixed,'pinning a mixed selection should not transform an already pinned object again');
     await page.keyboard.press('Control+l');await wait(s=>s.shapes.every(shape=>!shape.pinned));
     await snapshot(page,'accent-selection.png');
     await page.mouse.move(700,500);await page.waitForTimeout(100);await control('tool_Ellipse');await wait(s=>s.tool==='Ellipse');

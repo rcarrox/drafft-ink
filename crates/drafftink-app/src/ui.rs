@@ -338,6 +338,9 @@ pub struct UiState {
     pub corner_radius: f32,
     /// Current path style for new lines/arrows (0=Direct, 1=Flowing, 2=Angular).
     pub path_style: u8,
+    /// Arrow marker defaults for subsequently created arrows.
+    pub arrow_start_head: u8,
+    pub arrow_end_head: u8,
     // Collaboration state
     /// WebSocket connection state.
     pub connection_state: ConnectionState,
@@ -405,6 +408,8 @@ pub struct UiState {
     pub laser_color_rect: Option<Rect>,
     pub geometry: drafftink_core::shapes::GeometryKind,
     pub context_properties: bool,
+    /// F1 can temporarily hide properties even when Settings normally shows them.
+    pub properties_hotkey_hidden: bool,
     pub context_rects: Vec<Rect>,
     pub laser_color_pos: Pos2,
     /// Names of the open tabs, in order (synced from the app each frame).
@@ -459,6 +464,8 @@ impl Default for UiState {
             fill_pattern: FillPattern::Solid,
             corner_radius: 0.0, // Sharp corners by default
             path_style: 0,      // Direct by default
+            arrow_start_head: 0,
+            arrow_end_head: 1,
             // Collaboration defaults
             connection_state: ConnectionState::Disconnected,
             current_room: None,
@@ -499,6 +506,7 @@ impl Default for UiState {
             laser_color_rect: None,
             geometry: Default::default(),
             context_properties: false,
+            properties_hotkey_hidden: false,
             context_rects: Vec::new(),
             laser_color_pos: Pos2::new(72.0, 200.0),
             tab_names: Vec::new(),
@@ -1051,7 +1059,9 @@ fn remember_panel(state: &mut UiState, id: &str, response: &egui::Response) {
 fn panel_grip(ui: &mut egui::Ui) {
     let (rect, response) = ui.allocate_exact_size(
         Vec2::new(ui.available_width().clamp(24.0, 400.0), 7.0),
-        egui::Sense::drag(),
+        // Let the movable floating Area receive the drag; a child drag response
+        // captures the pointer and prevents toolbar/stroke panels from moving.
+        egui::Sense::hover(),
     );
     for offset in [-6.0, 0.0, 6.0] {
         ui.painter().circle_filled(
@@ -1886,6 +1896,9 @@ fn render_right_panel(
     ui_state: &mut UiState,
     props: &SelectedShapeProps,
 ) -> Option<UiAction> {
+    if ui_state.properties_hotkey_hidden {
+        return None;
+    }
     if ui_state.settings.hide_properties && !ui_state.context_properties {
         return None;
     }
@@ -3918,7 +3931,7 @@ fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAct
                         {
                             let elapsed = ui_state.save_status_since.unwrap().elapsed().as_secs_f32();
                             let opacity = if elapsed <= 5.0 { 1.0 } else { 1.0 - (elapsed - 5.0) };
-                            ui.label(egui::RichText::new(&ui_state.save_status).color(Color32::BLACK.gamma_multiply(opacity)));
+                            ui.label(egui::RichText::new(&ui_state.save_status).color(Color32::from_gray(170).gamma_multiply(opacity)));
                         }
                         ui.checkbox(
                             &mut ui_state.settings.restore_last_document,

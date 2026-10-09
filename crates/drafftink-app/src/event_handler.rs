@@ -951,16 +951,21 @@ impl EventHandler {
                 if let Some(shape) = canvas.document.get_shape(manip.shape_id) {
                     let current_rotation = shape.rotation();
                     let original_rotation = manip.original_shape.rotation();
+                    let path_rotation = manip.rotation_angle.filter(|_| matches!(
+                        &manip.original_shape,
+                        Shape::Line(_) | Shape::Arrow(_) | Shape::Freehand(_)
+                    ));
+                    let final_rotation = path_rotation.unwrap_or(current_rotation);
 
                     // Only push undo if rotation actually changed
-                    if (current_rotation - original_rotation).abs() > 0.001 {
+                    if (final_rotation - original_rotation).abs() > 0.001 {
                         // Restore original, push undo, then re-apply current rotation
                         if let Some(shape) = canvas.document.get_shape_mut(manip.shape_id) {
                             *shape = manip.original_shape.clone();
                         }
                         canvas.document.push_undo();
                         if let Some(shape) = canvas.document.get_shape_mut(manip.shape_id) {
-                            shape.set_rotation(current_rotation);
+                            shape.set_rotation(final_rotation);
                         }
                     }
                 }
@@ -1261,6 +1266,9 @@ impl EventHandler {
 
                 // Apply rotation to the shape
                 if let Some(shape) = canvas.document.get_shape_mut(manip.shape_id) {
+                    // Rebuild the preview from the press-time geometry on each
+                    // frame so path rotations are absolute to the gesture.
+                    *shape = manip.original_shape.clone();
                     let angle = apply_rotation_from_drag(
                         shape,
                         &manip.original_shape,
@@ -1268,6 +1276,7 @@ impl EventHandler {
                         world_point,
                         snap_to_15deg,
                     );
+                    manip.rotation_angle = Some(angle);
 
                     // Update rotation state for helper line rendering
                     self.rotation_state = Some(RotationState {

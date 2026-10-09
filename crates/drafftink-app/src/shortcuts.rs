@@ -104,10 +104,11 @@ impl ShortcutRegistry {
             Shortcut::new("^", false, false, "Literal caret in Text; exponent in Math"),
             Shortcut::new("P", true, false, "Presentation: hide/show panels"),
             Shortcut::new("F11", false, false, "Fullscreen"),
+            Shortcut::new("F1", false, false, "Show/hide selected object properties"),
             Shortcut::new("B", true, false, "Bold selected text"),
             Shortcut::new("I", true, false, "Italic selected text"),
             Shortcut::new("U", true, false, "Underline selected text"),
-            Shortcut::new("Ctrl+Arrow", false, false, "Move selected objects quickly"),
+            Shortcut::new("Shift+←/→; Ctrl+↑/↓", false, false, "Move selected objects quickly"),
             Shortcut::new(
                 "Shift+ArrowUp",
                 false,
