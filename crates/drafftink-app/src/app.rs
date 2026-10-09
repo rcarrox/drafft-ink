@@ -3616,8 +3616,22 @@ impl ApplicationHandler for App {
                                     }
                                 }
 
+                                let previous_tool = state.canvas.tool_manager.current_tool;
                                 state.canvas.set_tool(tool);
                                 state.ui_state.current_tool = tool;
+                                if tool == ToolKind::Freehand
+                                    && previous_tool == ToolKind::Highlighter
+                                {
+                                    state.ui_state.stroke_width = 2.0;
+                                    state.ui_state.stroke_color = egui::Color32::from_rgba_unmultiplied(
+                                        state.ui_state.stroke_color.r(),
+                                        state.ui_state.stroke_color.g(),
+                                        state.ui_state.stroke_color.b(),
+                                        255,
+                                    );
+                                    state.canvas.tool_manager.current_style =
+                                        state.ui_state.to_shape_style();
+                                }
                                 if matches!(
                                     tool,
                                     ToolKind::Rectangle
