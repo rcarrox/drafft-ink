@@ -105,7 +105,6 @@ pub fn get_handles(shape: &Shape) -> Vec<Handle> {
             // Lines and arrows retain their point-edit handles and also get a
             // rectangular transform frame for scaling from any side/corner.
             handles.extend(corner_handles(selection_bounds(shape)));
-            handles.extend(edge_handles(selection_bounds(shape), 0.0));
             handles.push(rotation_handle(shape.bounds()));
             handles
         }
@@ -126,7 +125,6 @@ pub fn get_handles(shape: &Shape) -> Vec<Handle> {
                 handles.push(Handle::new(mid, HandleKind::SegmentMidpoint(i)));
             }
             handles.extend(corner_handles(selection_bounds(shape)));
-            handles.extend(edge_handles(selection_bounds(shape), 0.0));
             handles.push(rotation_handle(shape.bounds()));
             handles
         }
