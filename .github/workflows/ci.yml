@@ -23,6 +23,7 @@ jobs:
       - name: Test cursor, repaint, and local-font helpers
         run: |
           node utils/test_browser_helpers.cjs
+          node utils/test_image_prepare.cjs
           node utils/test_file_saving.cjs
           node --check web/offline.js
           node --check utils/test_offline_cache.cjs
