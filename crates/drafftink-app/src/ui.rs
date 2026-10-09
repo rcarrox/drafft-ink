@@ -301,9 +301,21 @@ pub struct UiState {
     pub stopwatch_running: bool,
     pub stopwatch_elapsed: f64,
     pub stopwatch_started_at: Option<StatusInstant>,
+    pub time_mode: u8,
+    pub countdown_seconds: u32,
+    pub countdown_remaining: f64,
+    pub countdown_started_at: Option<StatusInstant>,
+    pub alarm_enabled: bool,
+    pub alarm_hour: u8,
+    pub alarm_minute: u8,
+    pub time_options_open: bool,
+    pub alarm_last_fired: String,
     pub insert_menu_open: bool,
-    pub graph_dialog_open: bool,
-    pub graph_expression: String,
+    pub preset_menu_open: bool,
+    pub preset_manager_open: bool,
+    pub presets: Vec<PresetInfo>,
+    pub toolbar_rect: Option<Rect>,
+    pub insert_panel_rect: Option<Rect>,
     pub inline_formula_error: String,
     /// Currently selected tool (mirrored from canvas).
     pub current_tool: ToolKind,
@@ -455,9 +467,21 @@ impl Default for UiState {
             stopwatch_running: false,
             stopwatch_elapsed: 0.0,
             stopwatch_started_at: None,
+            time_mode: 0,
+            countdown_seconds: 300,
+            countdown_remaining: 300.0,
+            countdown_started_at: None,
+            alarm_enabled: false,
+            alarm_hour: 8,
+            alarm_minute: 0,
+            time_options_open: false,
+            alarm_last_fired: String::new(),
             insert_menu_open: false,
-            graph_dialog_open: false,
-            graph_expression: "sin(x)".into(),
+            preset_menu_open: false,
+            preset_manager_open: false,
+            presets: Vec::new(),
+            toolbar_rect: None,
+            insert_panel_rect: None,
             inline_formula_error: String::new(),
             eraser_mode: EraserMode::Classic,
             stroke_color: TAILWIND_COLORS[11].shades[6], // Indigo 500
@@ -583,8 +607,11 @@ pub enum UiAction {
     ResetFloatingPanels,
     ToggleStopwatch,
     ImportMedia,
-    InsertPreset(u8),
-    InsertGraph(String),
+    ListPresets,
+    AddPreset,
+    RenamePreset(String, String),
+    DeletePreset(String),
+    InsertUserPreset(String),
     InsertTextSymbol(String),
     OpenInlineFormula(String),
     EditTextCommand(String, bool, bool),
@@ -759,6 +786,14 @@ pub enum UiAction {
     CancelMath(ShapeId, String, String, bool),
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PresetInfo {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub rename: String,
+}
+
 /// Tool definitions with SVG icons
 struct Tool {
     kind: ToolKind,
@@ -914,112 +949,167 @@ pub fn render_ui(
 fn render_insert_panel(ctx: &Context, state: &mut UiState) -> Option<UiAction> {
     let mut action = None;
     if state.insert_menu_open {
-        let mut open = state.insert_menu_open;
-        egui::Window::new("Insérer")
-        .id(egui::Id::new("insert_menu"))
-        .open(&mut open)
-        .collapsible(false)
-        .resizable(false)
-        .default_pos(Pos2::new(82.0, 250.0))
-        .show(ctx, |ui| {
-            ui.set_min_width(205.0);
-            if ui.button("Image ou PDF…").clicked() {
-                action = Some(UiAction::ImportMedia);
-                state.insert_menu_open = false;
-            }
-            ui.separator();
-            ui.label("Schémas et courbes vectorielles");
-            for (name, kind) in [("Repère cartésien", 0), ("Cercle trigonométrique", 1), ("Cube 3D", 2), ("Formes géométriques", 3), ("Plan complexe", 4)] {
-                if ui.button(name).clicked() {
-                    action = Some(UiAction::InsertPreset(kind));
-                    state.insert_menu_open = false;
-                }
-            }
-            if ui.button("Courbe…").clicked() {
-                state.graph_dialog_open = true;
-                state.insert_menu_open = false;
-            }
-            if ui.button(if state.stopwatch_open { "Masquer le chronomètre" } else { "Chronomètre" }).clicked() {
-                action = Some(UiAction::ToggleStopwatch);
-                state.insert_menu_open = false;
-            }
-        });
-        if action.is_none() {
-            state.insert_menu_open = open;
-        }
-    }
-    if state.graph_dialog_open {
-        let mut open = state.graph_dialog_open;
-        egui::Window::new("Courbe vectorielle")
-            .id(egui::Id::new("graph_dialog"))
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .show(ctx, |ui| {
-                ui.label("y = f(x), x ∈ [−10, 10] · utilisez * pour multiplier");
-                ui.label("Fonctions : sin, cos, tan, sqrt, abs, ln, log, exp");
-                let input = ui.add(egui::TextEdit::singleline(&mut state.graph_expression).desired_width(240.0));
-                input.request_focus();
-                ui.horizontal(|ui| {
-                    if ui.button("Insérer la courbe").clicked() {
-                        action = Some(UiAction::InsertGraph(state.graph_expression.clone()));
-                        state.graph_dialog_open = false;
+        let pos = state.toolbar_rect.map_or(Pos2::new(64.0, 250.0), |r| Pos2::new(r.right() + 6.0, r.center().y - 70.0));
+        let panel = egui::Area::new(egui::Id::new("insert_menu"))
+            .fixed_pos(pos).order(egui::Order::Foreground).show(ctx, |ui| {
+                panel_frame().show(ui, |ui| {
+                    ui.set_min_width(170.0);
+                    if ui.button("Image / PDF").clicked() { action = Some(UiAction::ImportMedia); state.insert_menu_open = false; }
+                    if ui.button(if state.stopwatch_open { "Time · Masquer" } else { "Time" }).clicked() { action = Some(UiAction::ToggleStopwatch); state.insert_menu_open = false; }
+                    let label = if state.preset_menu_open { "Preset  ‹" } else { "Preset  ›" };
+                    if ui.button(label).clicked() {
+                        state.preset_menu_open = !state.preset_menu_open;
+                        if state.preset_menu_open { action = Some(UiAction::ListPresets); }
                     }
-                    if ui.button("Annuler").clicked() { state.graph_dialog_open = false; }
+                    if state.preset_menu_open {
+                        ui.separator();
+                        for preset in &state.presets {
+                            if ui.button(&preset.name).clicked() { action = Some(UiAction::InsertUserPreset(preset.id.clone())); state.insert_menu_open = false; }
+                        }
+                        if state.presets.is_empty() { ui.label("Aucun preset"); }
+                    }
                 });
             });
-        if action.is_none() {
-            state.graph_dialog_open = open;
+        state.insert_panel_rect = Some(panel.response.rect);
+        if action.is_none() && ctx.input(|input| input.pointer.any_click()) {
+            if let Some(pointer) = ctx.input(|input| input.pointer.interact_pos()) {
+                let toolbar = state.toolbar_rect.unwrap_or_default();
+                if !panel.response.rect.contains(pointer) && !toolbar.contains(pointer) {
+                    state.insert_menu_open = false;
+                    state.preset_menu_open = false;
+                }
+            }
         }
+    }
+    if state.preset_manager_open {
+        egui::Window::new("Preset").id(egui::Id::new("preset_manager"))
+            .open(&mut state.preset_manager_open).collapsible(false).resizable(false)
+            .default_pos(Pos2::new(80.0, 160.0)).show(ctx, |ui| {
+                ui.label("Images PNG enregistrées dans ce navigateur.");
+                if ui.button("＋ Ajouter un PNG…").clicked() { action = Some(UiAction::AddPreset); }
+                ui.separator();
+                let mut rename_action = None;
+                let mut delete_action = None;
+                for preset in &mut state.presets {
+                    ui.horizontal(|ui| {
+                        ui.add(egui::TextEdit::singleline(&mut preset.rename).desired_width(140.0));
+                        if ui.button("Renommer").clicked() && !preset.rename.trim().is_empty() { rename_action = Some((preset.id.clone(), preset.rename.trim().to_string())); }
+                        if ui.button("Supprimer").clicked() { delete_action = Some(preset.id.clone()); }
+                    });
+                }
+                if let Some((id, name)) = rename_action { action = Some(UiAction::RenamePreset(id, name)); }
+                if let Some(id) = delete_action { action = Some(UiAction::DeletePreset(id)); }
+            });
     }
     action
 }
 
 fn render_stopwatch(ctx: &Context, state: &mut UiState) {
     if !state.stopwatch_open { return; }
-    if state.stopwatch_running { ctx.request_repaint_after(std::time::Duration::from_millis(30)); }
+    if state.stopwatch_running || state.countdown_started_at.is_some() || state.time_mode == 2 || state.alarm_enabled { ctx.request_repaint_after(std::time::Duration::from_millis(250)); }
     let elapsed = state.stopwatch_elapsed + state.stopwatch_started_at.map_or(0.0, |at| at.elapsed().as_secs_f64());
-    let total = elapsed.max(0.0) as u64;
-    let minutes = total / 60;
+    let remaining = (state.countdown_remaining - state.countdown_started_at.map_or(0.0, |at| at.elapsed().as_secs_f64())).max(0.0);
+    if state.countdown_started_at.is_some() && remaining <= 0.0 {
+        state.countdown_remaining = 0.0;
+        state.countdown_started_at = None;
+        play_time_alarm();
+    }
+    let shown = if state.time_mode == 1 { remaining } else { elapsed };
+    let total = shown.max(0.0) as u64;
+    let hours = total / 3600;
+    let minutes = (total / 60) % 60;
     let seconds = total % 60;
-    let centiseconds = ((elapsed.fract() * 100.0) as u64).min(99);
+    let centiseconds = ((shown.fract() * 100.0) as u64).min(99);
+    #[cfg(target_arch = "wasm32")]
+    let (clock_hour, clock_minute, clock_second) = { let date = js_sys::Date::new_0(); (date.get_hours() as u8, date.get_minutes() as u8, date.get_seconds() as u8) };
+    #[cfg(not(target_arch = "wasm32"))]
+    let (clock_hour, clock_minute, clock_second) = { let seconds = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() % 86400; ((seconds / 3600) as u8, ((seconds / 60) % 60) as u8, (seconds % 60) as u8) };
+    #[cfg(target_arch = "wasm32")]
+    let alarm_key = { let date = js_sys::Date::new_0(); format!("{}-{}-{} {:02}:{:02}", date.get_full_year(), date.get_month() + 1, date.get_date(), clock_hour, clock_minute) };
+    #[cfg(not(target_arch = "wasm32"))]
+    let alarm_key = format!("{} {:02}:{:02}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() / 86400, clock_hour, clock_minute);
+    if state.alarm_enabled && clock_hour == state.alarm_hour && clock_minute == state.alarm_minute && state.alarm_last_fired != alarm_key {
+        state.alarm_last_fired = alarm_key;
+        play_time_alarm();
+    }
     let mut open = state.stopwatch_open;
-    egui::Window::new("Chronomètre")
-        .id(egui::Id::new("qurso_stopwatch"))
+    egui::Window::new("Time")
+        .id(egui::Id::new("qurso_time_widget"))
         .open(&mut open)
         .collapsible(false)
         .resizable(true)
-        .default_size(Vec2::new(330.0, 126.0))
+        .default_size(Vec2::new(340.0, 170.0))
         .default_pos(Pos2::new(110.0, 100.0))
         .show(ctx, |ui| {
             ui.vertical_centered(|ui| {
-                ui.label(egui::RichText::new(format!("{minutes:02}:{seconds:02}.{centiseconds:02}"))
-                    .size(30.0).monospace());
                 ui.horizontal(|ui| {
-                    if ui.button(if state.stopwatch_running { "Pause" } else { "Démarrer" }).clicked() {
-                        if state.stopwatch_running {
-                            state.stopwatch_elapsed = elapsed;
-                            state.stopwatch_started_at = None;
-                            state.stopwatch_running = false;
-                        } else {
-                            state.stopwatch_started_at = Some(StatusInstant::now());
-                            state.stopwatch_running = true;
-                        }
+                    let title = ui.label(egui::RichText::new("Qurso Time").strong());
+                    title.context_menu(|ui| { if ui.button("Options…").clicked() { state.time_options_open = true; ui.close(); } });
+                    if ui.small_button("⚙").on_hover_text("Options (clic droit)").clicked() { state.time_options_open = true; }
+                });
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut state.time_mode, 0, "Chronomètre");
+                    ui.selectable_value(&mut state.time_mode, 1, "Compte à rebours");
+                    ui.selectable_value(&mut state.time_mode, 2, "Heure / alarme");
+                });
+                let display = match state.time_mode {
+                    2 => format!("{clock_hour:02}:{clock_minute:02}:{clock_second:02}"),
+                    _ if hours > 0 => format!("{hours:02}:{minutes:02}:{seconds:02}"),
+                    _ => format!("{minutes:02}:{seconds:02}.{centiseconds:02}"),
+                };
+                let face = ui.label(egui::RichText::new(display).size(32.0).monospace());
+                face.context_menu(|ui| { if ui.button("Options…").clicked() { state.time_options_open = true; ui.close(); } });
+                if state.time_mode == 2 {
+                    ui.label(if state.alarm_enabled { format!("Alarme réglée à {:02}:{:02}", state.alarm_hour, state.alarm_minute) } else { "Alarme désactivée · réglages par clic droit".into() });
+                }
+                ui.horizontal(|ui| {
+                    let running = if state.time_mode == 1 { state.countdown_started_at.is_some() } else { state.stopwatch_running };
+                    if state.time_mode != 2 && ui.button(if running { "Pause" } else { "▶ Démarrer" }).clicked() {
+                        if state.time_mode == 1 {
+                            if running { state.countdown_remaining = remaining; state.countdown_started_at = None; }
+                            else { if state.countdown_remaining <= 0.0 { state.countdown_remaining = state.countdown_seconds as f64; } state.countdown_started_at = Some(StatusInstant::now()); }
+                        } else if running { state.stopwatch_elapsed = elapsed; state.stopwatch_started_at = None; state.stopwatch_running = false; }
+                        else { state.stopwatch_started_at = Some(StatusInstant::now()); state.stopwatch_running = true; }
                     }
-                    if ui.button("Stop").clicked() {
-                        state.stopwatch_elapsed = elapsed;
-                        state.stopwatch_running = false;
-                        state.stopwatch_started_at = None;
+                    if state.time_mode != 2 && ui.button("Stop").clicked() {
+                        if state.time_mode == 1 { state.countdown_remaining = remaining; state.countdown_started_at = None; }
+                        else { state.stopwatch_elapsed = elapsed; state.stopwatch_running = false; state.stopwatch_started_at = None; }
                     }
-                    if ui.button("Reset").clicked() {
+                    if state.time_mode == 0 && ui.button("Reset").clicked() {
                         state.stopwatch_running = false;
                         state.stopwatch_elapsed = 0.0;
                         state.stopwatch_started_at = None;
                     }
+                    if state.time_mode == 1 && ui.button("Réinitialiser").clicked() { state.countdown_started_at = None; state.countdown_remaining = state.countdown_seconds as f64; }
                 });
             });
         });
     state.stopwatch_open = open;
+    if state.time_options_open {
+        egui::Window::new("Options Time").id(egui::Id::new("qurso_time_options"))
+            .open(&mut state.time_options_open).collapsible(false).resizable(false)
+            .default_pos(Pos2::new(470.0, 120.0)).show(ctx, |ui| {
+                ui.horizontal(|ui| { ui.label("Durée du compte à rebours"); ui.add(egui::DragValue::new(&mut state.countdown_seconds).range(1..=86400).suffix(" s")); });
+                if state.countdown_started_at.is_none() { state.countdown_remaining = state.countdown_seconds as f64; }
+                ui.separator();
+                ui.checkbox(&mut state.alarm_enabled, "Activer l’alarme");
+                ui.horizontal(|ui| {
+                    ui.label("Heure"); ui.add(egui::DragValue::new(&mut state.alarm_hour).range(0..=23).speed(0.1));
+                    ui.label(":"); ui.add(egui::DragValue::new(&mut state.alarm_minute).range(0..=59).speed(0.1));
+                });
+                if ui.button("Tester l’alarme").clicked() { play_time_alarm(); }
+            });
+    }
+}
+
+fn play_time_alarm() {
+    #[cfg(target_arch = "wasm32")]
+    if let Some(window) = web_sys::window() {
+        use wasm_bindgen::JsCast;
+        if let Ok(value) = js_sys::Reflect::get(window.as_ref(), &wasm_bindgen::JsValue::from_str("qursoPlayAlarm")) {
+            if let Ok(function) = value.dyn_into::<js_sys::Function>() { let _ = function.call0(window.as_ref()); }
+        }
+    }
 }
 
 /// Render the tab strip (top-center) with one button per open canvas plus a
@@ -1379,10 +1469,8 @@ fn render_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                     }
                 }
                 ui.separator();
-                if ui.add(egui::Button::new("＋").min_size(Vec2::new(40.0, 34.0)))
-                    .on_hover_text("Insérer une image, un PDF, un schéma ou un chronomètre")
-                    .clicked()
-                {
+                if ui.add(IconButton::new(include_image!("../assets/add.svg"), "Insérer")
+                    .style(IconButtonStyle::tool()).show(ui)) {
                     ui_state.insert_menu_open = !ui_state.insert_menu_open;
                 }
             });
@@ -1390,6 +1478,7 @@ fn render_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
     });
 
     remember_panel(ui_state, "toolbar", &output.response);
+    ui_state.toolbar_rect = Some(output.response.rect);
     ui_state.test_controls.insert(
         "toolbar".into(),
         [
@@ -2810,6 +2899,12 @@ fn render_file_menu(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                             ui_state.menu_open = false;
                         }
 
+                        if menu_item(ui, "Preset…", "") {
+                            action = Some(UiAction::ListPresets);
+                            ui_state.preset_manager_open = true;
+                            ui_state.menu_open = false;
+                        }
+
                         if menu_item(ui, "Import Library...", "") {
                             action = Some(UiAction::LoadLibrary);
                             ui_state.menu_open = false;
@@ -4040,6 +4135,16 @@ fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAct
                             .size(11.0)
                             .color(Color32::from_gray(120)),
                         );
+
+                        ui.add_space(16.0);
+                        ui.separator();
+                        ui.add_space(10.0);
+                        widgets_section_label(ui, "Images importées");
+                        ui.checkbox(&mut ui_state.settings.optimize_imported_images, "Réduire les grandes images à l’import");
+                        ui.add_enabled_ui(ui_state.settings.optimize_imported_images, |ui| {
+                            ui.add(egui::Slider::new(&mut ui_state.settings.image_max_side_px, 1024..=4096).step_by(256.0).text("Côté maximal (px)"));
+                        });
+                        ui.label("Les PNG gardent leur transparence ; JPEG/WebP sont recompressés pour réduire la mémoire.");
 
                         ui.add_space(16.0);
                         ui.separator();

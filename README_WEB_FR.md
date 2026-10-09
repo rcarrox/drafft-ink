@@ -17,7 +17,7 @@ Les préférences du site HTTPS sont distinctes de celles du portable sur localh
 Le cache occupe du stockage sur disque. Il ne réduit pas à lui seul la RAM consommée par le rendu WASM/WebGPU.
 
 
-## Nouveautés 0.26.0
+## Nouveautés 0.27.0
 
 - Menu Insérer dans la barre : images et PDF (pages rendues en images éditables, jusqu’à 20 pages par import), repère cartésien, cercle trigonométrique, cube 3D, plan géométrique/complexe.
 - Courbe vectorielle : saisie de y=f(x), échantillonnage dans x∈[-10,10], outils sin/cos/tan/sqrt/abs/ln/log/exp ; la courbe et les axes sont des objets vectoriels éditables.

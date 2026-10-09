@@ -169,6 +169,10 @@ pub struct CharacterStyle {
     pub italic: bool,
     pub underline: bool,
     #[serde(default)]
+    pub overline: bool,
+    #[serde(default)]
+    pub vector_arrow: bool,
+    #[serde(default)]
     pub script: i8,
 }
 
@@ -409,13 +413,19 @@ impl Text {
         let active = !selected.iter().all(|s| match kind {
             'b' => s.bold,
             'i' => s.italic,
-            _ => s.underline,
+            'u' => s.underline,
+            'o' => s.overline,
+            'v' => s.vector_arrow,
+            _ => false,
         });
         for style in selected {
             match kind {
                 'b' => style.bold = active,
                 'i' => style.italic = active,
-                _ => style.underline = active,
+                'u' => style.underline = active,
+                'o' => style.overline = active,
+                'v' => style.vector_arrow = active,
+                _ => {}
             }
         }
         self.invalidate_cache();
@@ -726,5 +736,21 @@ mod script_style_tests {
         assert!(text.char_styles.iter().all(|s| s.script == 0));
         text.toggle_script(0..original.len(), -1);
         assert!(text.char_styles.iter().all(|s| s.script == -1));
+    }
+}
+
+#[cfg(test)]
+mod vector_text_style_tests {
+    use super::*;
+
+    #[test]
+    fn overline_and_vector_arrow_styles_round_trip_per_character() {
+        let mut text = Text::new(Point::ZERO, "zv".into());
+        text.toggle_format(0..1, 'o');
+        text.toggle_format(1..2, 'v');
+        assert!(text.char_styles[0].overline);
+        assert!(text.char_styles[1].vector_arrow);
+        let restored: Text = serde_json::from_str(&serde_json::to_string(&text).unwrap()).unwrap();
+        assert_eq!(restored.char_styles, text.char_styles);
     }
 }

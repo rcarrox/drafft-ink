@@ -1311,7 +1311,8 @@ impl EventHandler {
             );
 
             // For line/arrow endpoint manipulation, use angle/grid/smart snapping
-            let snap_result = if is_line_or_arrow && manip.handle.is_some() {
+            let editing_line_point = matches!(manip.handle, Some(HandleKind::Endpoint(_) | HandleKind::IntermediatePoint(_) | HandleKind::SegmentMidpoint(_)));
+            let snap_result = if is_line_or_arrow && editing_line_point {
                 // Get the other endpoint as the origin for polar snapping
                 let other_endpoint = get_line_other_endpoint(&manip.original_shape, manip.handle);
 

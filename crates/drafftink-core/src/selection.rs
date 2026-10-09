@@ -73,6 +73,10 @@ impl Handle {
 pub fn selection_bounds(shape: &Shape) -> Rect {
     if matches!(shape, Shape::Text(_) | Shape::Math(_)) {
         shape.bounds().inflate(6.0, 4.0)
+    } else if matches!(shape, Shape::Line(_) | Shape::Arrow(_)) {
+        // Keep the frame handles distinct from the editable line points, even
+        // for perfectly horizontal or vertical strokes with a zero-size axis.
+        shape.bounds().inflate(4.0, 4.0)
     } else {
         shape.bounds()
     }
@@ -98,6 +102,10 @@ pub fn get_handles(shape: &Shape) -> Vec<Handle> {
                 );
                 handles.push(Handle::new(mid, HandleKind::SegmentMidpoint(i)));
             }
+            // Lines and arrows retain their point-edit handles and also get a
+            // rectangular transform frame for scaling from any side/corner.
+            handles.extend(corner_handles(selection_bounds(shape)));
+            handles.extend(edge_handles(selection_bounds(shape), 0.0));
             handles.push(rotation_handle(shape.bounds()));
             handles
         }
@@ -117,6 +125,8 @@ pub fn get_handles(shape: &Shape) -> Vec<Handle> {
                 );
                 handles.push(Handle::new(mid, HandleKind::SegmentMidpoint(i)));
             }
+            handles.extend(corner_handles(selection_bounds(shape)));
+            handles.extend(edge_handles(selection_bounds(shape), 0.0));
             handles.push(rotation_handle(shape.bounds()));
             handles
         }
@@ -630,6 +640,42 @@ fn rotate_delta(delta: kurbo::Vec2, angle: f64) -> kurbo::Vec2 {
     kurbo::Vec2::new(cos * delta.x - sin * delta.y, sin * delta.x + cos * delta.y)
 }
 fn apply_box_resize(shape: &mut Shape, kind: HandleKind, delta: kurbo::Vec2, aspect: bool) {
+    if matches!(shape, Shape::Line(_) | Shape::Arrow(_)) {
+        let bounds = shape.bounds();
+        let (mut sx, mut sy) = (1.0, 1.0);
+        if matches!(kind, HandleKind::Corner(Corner::TopLeft | Corner::BottomLeft) | HandleKind::Edge(Edge::Left)) {
+            sx = (bounds.width() - delta.x) / bounds.width().max(0.001);
+        } else if matches!(kind, HandleKind::Corner(Corner::TopRight | Corner::BottomRight) | HandleKind::Edge(Edge::Right)) {
+            sx = (bounds.width() + delta.x) / bounds.width().max(0.001);
+        }
+        if matches!(kind, HandleKind::Corner(Corner::TopLeft | Corner::TopRight) | HandleKind::Edge(Edge::Top)) {
+            sy = (bounds.height() - delta.y) / bounds.height().max(0.001);
+        } else if matches!(kind, HandleKind::Corner(Corner::BottomLeft | Corner::BottomRight) | HandleKind::Edge(Edge::Bottom)) {
+            sy = (bounds.height() + delta.y) / bounds.height().max(0.001);
+        }
+        let anchor = Point::new(
+            if matches!(kind, HandleKind::Corner(Corner::TopLeft | Corner::BottomLeft) | HandleKind::Edge(Edge::Left)) { bounds.x1 } else { bounds.x0 },
+            if matches!(kind, HandleKind::Corner(Corner::TopLeft | Corner::TopRight) | HandleKind::Edge(Edge::Top)) { bounds.y1 } else { bounds.y0 },
+        );
+        let transform = Affine::translate((anchor.x, anchor.y))
+            * Affine::scale_non_uniform(sx, sy)
+            * Affine::translate((-anchor.x, -anchor.y));
+        match shape {
+            Shape::Line(line) => {
+                line.start = transform * line.start;
+                line.end = transform * line.end;
+                for point in &mut line.intermediate_points { *point = transform * *point; }
+            }
+            Shape::Arrow(arrow) => {
+                arrow.start = transform * arrow.start;
+                arrow.end = transform * arrow.end;
+                for point in &mut arrow.intermediate_points { *point = transform * *point; }
+            }
+            _ => {}
+        }
+        let _ = aspect;
+        return;
+    }
     let content = shape.bounds();
     let is_text = matches!(shape, Shape::Text(_) | Shape::Math(_));
     let old = selection_bounds(shape);
@@ -892,12 +938,23 @@ mod tests {
         let line = Line::new(Point::new(0.0, 0.0), Point::new(100.0, 100.0));
         let handles = get_handles(&Shape::Line(line));
 
-        // 2 endpoints + 1 segment midpoint + rotation
-        assert_eq!(handles.len(), 4);
+        // 2 endpoints + segment midpoint + 8 frame handles + rotation
+        assert_eq!(handles.len(), 12);
         assert!(matches!(handles[0].kind, HandleKind::Endpoint(0)));
         assert!(matches!(handles[1].kind, HandleKind::Endpoint(1)));
         assert!(matches!(handles[2].kind, HandleKind::SegmentMidpoint(0)));
-        assert!(matches!(handles[3].kind, HandleKind::Rotate));
+        assert!(handles.iter().any(|handle| matches!(handle.kind, HandleKind::Corner(Corner::TopLeft))));
+        assert!(handles.iter().any(|handle| matches!(handle.kind, HandleKind::Edge(Edge::Right))));
+        assert!(matches!(handles.last().unwrap().kind, HandleKind::Rotate));
+    }
+
+    #[test]
+    fn line_frame_resize_can_cross_the_opposite_side() {
+        let line = Shape::Line(Line::new(Point::new(0.0, 0.0), Point::new(100.0, 80.0)));
+        let resized = apply_manipulation(&line, Some(HandleKind::Corner(Corner::TopLeft)), kurbo::Vec2::new(120.0, 0.0), false);
+        let Shape::Line(resized) = resized else { panic!("line changed type") };
+        assert!(resized.start.x > resized.end.x, "crossing the anchor should flip the line frame");
+        assert_eq!(resized.end, Point::new(100.0, 80.0), "the opposite corner stays anchored");
     }
 
     #[test]

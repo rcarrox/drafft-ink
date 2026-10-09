@@ -1145,6 +1145,37 @@ impl VelloRenderer {
         }
     }
 
+    fn draw_overlines_and_vectors(&mut self, text: &drafftink_core::shapes::Text, layout: &parley::Layout<Brush>, transform: Affine, font_size: f32) {
+        let color = Color::from_rgba8(text.style.stroke_color.r, text.style.stroke_color.g, text.style.stroke_color.b, text.style.stroke_color.a);
+        let brush = Brush::Solid(color);
+        for line in layout.lines() {
+            for item in line.items() {
+                let PositionedLayoutItem::GlyphRun(run) = item else { continue; };
+                let range = run.run().text_range();
+                let start = text.content[..range.start.min(text.content.len())].chars().count();
+                let end = text.content[..range.end.min(text.content.len())].chars().count();
+                let Some(styles) = text.char_styles.get(start..end) else { continue; };
+                if styles.is_empty() { continue; }
+                let width: f32 = run.glyphs().map(|glyph| glyph.advance).sum();
+                if width <= 0.0 { continue; }
+                let x0 = run.offset() as f64;
+                let x1 = (run.offset() + width) as f64;
+                let y = run.baseline() + text_script_offset(text, range.start) - crate::text_editor::inline_baseline_shift(&line, font_size);
+                let top = (y - run.run().font_size() * 0.9) as f64;
+                let thickness = (run.run().font_size() / 18.0).max(1.0) as f64;
+                if styles.iter().all(|style| style.overline) {
+                    self.scene.fill(Fill::NonZero, transform, &brush, None, &Rect::new(x0, top, x1, top + thickness));
+                }
+                if styles.iter().all(|style| style.vector_arrow) {
+                    let mut path = BezPath::new();
+                    path.move_to((x0, top)); path.line_to((x1, top));
+                    path.move_to((x1 - 4.0, top - 3.0)); path.line_to((x1, top)); path.line_to((x1 - 4.0, top + 3.0));
+                    self.scene.stroke(&Stroke::new(thickness as f32), transform, &brush, None, &path);
+                }
+            }
+        }
+    }
+
     pub fn text_formula_geometry(
         &self,
         text: &drafftink_core::shapes::Text,
@@ -1498,6 +1529,7 @@ impl VelloRenderer {
         let previous_scene = std::mem::take(&mut self.scene);
         let text_transform = Affine::IDENTITY;
         self.draw_underlines(text, &layout, text_transform, text.font_size as f32);
+        self.draw_overlines_and_vectors(text, &layout, text_transform, text.font_size as f32);
         self.append_inline_formulas(text, &layout, text_transform);
         let mut glyph_count = 0;
 
@@ -2082,6 +2114,7 @@ impl VelloRenderer {
 
         self.append_inline_formulas(text, &styled_layout, text_transform);
         self.draw_underlines(text, &styled_layout, text_transform, text.font_size as f32);
+        self.draw_overlines_and_vectors(text, &styled_layout, text_transform, text.font_size as f32);
         // Render glyphs first (text content) - use styled_layout which has color spans
         for line in styled_layout.lines() {
             for item in line.items() {
@@ -3517,7 +3550,7 @@ mod inline_formula_render_tests {
                 bold: true,
                 italic: true,
                 underline: true,
-                script: 0,
+                ..CharacterStyle::default()
             };
             text.content.chars().count()
         ];

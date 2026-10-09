@@ -26,6 +26,10 @@ pub struct UserSettings {
     pub touchpad_zoom_speed: f64,
     pub autosave_enabled: bool,
     pub autosave_interval_secs: u64,
+    #[serde(default = "default_optimize_images")]
+    pub optimize_imported_images: bool,
+    #[serde(default = "default_image_max_side")]
+    pub image_max_side_px: u32,
     pub restore_last_document: bool,
     pub show_properties_for_tools: bool,
     pub hide_properties: bool,
@@ -68,6 +72,8 @@ impl Default for UserSettings {
             touchpad_zoom_speed: 2.0,
             autosave_enabled: true,
             autosave_interval_secs: 600,
+            optimize_imported_images: true,
+            image_max_side_px: 2048,
             restore_last_document: true,
             show_properties_for_tools: false,
             hide_properties: true,
@@ -85,6 +91,9 @@ impl Default for UserSettings {
         }
     }
 }
+
+fn default_optimize_images() -> bool { true }
+fn default_image_max_side() -> u32 { 2048 }
 
 fn normalized_key(value: &str) -> String {
     value.trim().to_lowercase()
@@ -178,6 +187,7 @@ impl UserSettings {
             2.0
         };
         self.autosave_interval_secs = self.autosave_interval_secs.clamp(1, 3600);
+        self.image_max_side_px = self.image_max_side_px.clamp(1024, 4096);
         self.hidden_toolbar_tools.retain(|hidden| {
             [
                 ToolKind::Select,
