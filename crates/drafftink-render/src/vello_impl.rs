@@ -1170,7 +1170,7 @@ impl VelloRenderer {
                     let mut path = BezPath::new();
                     path.move_to((x0, top)); path.line_to((x1, top));
                     path.move_to((x1 - 4.0, top - 3.0)); path.line_to((x1, top)); path.line_to((x1 - 4.0, top + 3.0));
-                    self.scene.stroke(&Stroke::new(thickness as f32), transform, &brush, None, &path);
+                    self.scene.stroke(&Stroke::new(thickness), transform, &brush, None, &path);
                 }
             }
         }
