@@ -12,6 +12,11 @@ use egui::{
 };
 
 #[cfg(target_arch = "wasm32")]
+use web_time::Instant as StatusInstant;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant as StatusInstant;
+
+#[cfg(target_arch = "wasm32")]
 use crate::app::file_ops;
 use crate::math_input::{
     friendly_math_to_latex, normalize_friendly_math_input, open_structured_depth,
@@ -285,7 +290,7 @@ pub struct UiState {
     pub text_command_rect: Option<Rect>,
     pub save_status: String,
     pub save_status_seen: String,
-    pub save_status_since: Option<web_time::Instant>,
+    pub save_status_since: Option<StatusInstant>,
     pub inline_formula_error: String,
     /// Currently selected tool (mirrored from canvas).
     pub current_tool: ToolKind,
@@ -822,7 +827,7 @@ pub fn render_ui(
     }
     if ui_state.save_status != ui_state.save_status_seen {
         ui_state.save_status_seen.clone_from(&ui_state.save_status);
-        ui_state.save_status_since = Some(web_time::Instant::now());
+        ui_state.save_status_since = Some(StatusInstant::now());
     }
     let save_notice_elapsed = ui_state.save_status_since.map(|at| at.elapsed().as_secs_f32());
     if !ui_state.save_status.is_empty() && save_notice_elapsed.is_some_and(|elapsed| elapsed < 6.0) {

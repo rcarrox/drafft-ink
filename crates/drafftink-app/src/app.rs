@@ -6337,6 +6337,7 @@ impl ApplicationHandler for App {
                 // Keep script toggles available inside the custom text editor
                 // even when egui still reports keyboard focus from a prior panel.
                 if event.state == ElementState::Pressed
+                    && !event.repeat
                     && state.event_handler.editing_text.is_some()
                     && state.input.shift()
                     && !state.input.ctrl()
