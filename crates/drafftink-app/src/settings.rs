@@ -35,6 +35,9 @@ pub struct UserSettings {
     pub accent_color: [u8; 3],
     pub cursor_outline: [u8; 3],
     pub laser_color: [u8; 3],
+    /// Keep the laser pointer active while the pointer moves without a mouse button.
+    #[serde(default)]
+    pub laser_permanent: bool,
     pub panel_positions: std::collections::BTreeMap<String, [f32; 2]>,
     /// Tool names hidden from the main vertical toolbar (shortcuts remain active).
     #[serde(default)]
@@ -73,6 +76,7 @@ impl Default for UserSettings {
             accent_color: [59, 130, 246],
             cursor_outline: [0, 0, 0],
             laser_color: [255, 0, 0],
+            laser_permanent: false,
             panel_positions: Default::default(),
             hidden_toolbar_tools: Vec::new(),
         }

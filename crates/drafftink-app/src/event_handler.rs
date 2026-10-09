@@ -1775,6 +1775,15 @@ impl EventHandler {
         self.laser_trail.retain(|(_, alpha)| *alpha > 0.0);
     }
 
+    /// Move a permanently active laser pointer without requiring a mouse press.
+    pub fn update_laser_pointer(&mut self, world_point: Point) {
+        self.laser_position = Some(world_point);
+        self.laser_trail.push((world_point, 1.0));
+        if self.laser_trail.len() > 50 {
+            self.laser_trail.remove(0);
+        }
+    }
+
     /// Get the current eraser path for rendering.
     pub fn eraser_path(&self) -> &[Point] {
         &self.eraser_points

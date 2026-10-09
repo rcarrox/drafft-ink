@@ -371,16 +371,16 @@ function inspectCapture(file) {
     await wait(s=>s.shapes.find(i=>i.id===s.editing_text)?.shape.Text.content==='{}');await page.keyboard.press('Control+a');await page.keyboard.press('Backspace');
     await keys('Base ');await wait(s=>!!s.text_caret);
     const normalCaret=(await state()).text_caret;
-    await page.keyboard.press('Control+ArrowUp');const supState=await wait(s=>s.insertion_script===1);
+    await page.keyboard.press('Shift+ArrowUp');const supState=await wait(s=>s.insertion_script===1);
     assert(supState.text_caret[3]-supState.text_caret[1]<normalCaret[3]-normalCaret[1]);assert(supState.text_caret[1]<normalCaret[1]);
-    await keys('AZ09α≤@');await page.keyboard.press('Control+ArrowUp');await keys(' fin');
+    await keys('AZ09α≤@');await page.keyboard.press('Shift+ArrowUp');await keys(' fin');
     const scriptText=s=>s.shapes.find(item=>item.id===s.editing_text)?.shape.Text;
     await wait(s=>scriptText(s)?.content==='Base AZ09α≤@ fin');
     await wait(s=>scriptText(s).char_styles.slice(5,12).every(style=>style.script===1));
-    await page.keyboard.press('Control+a');await page.keyboard.press('Control+ArrowDown');await wait(s=>scriptText(s).char_styles.every(style=>style.script===-1));
+    await page.keyboard.press('Control+a');await page.keyboard.press('Shift+ArrowDown');await wait(s=>scriptText(s).char_styles.every(style=>style.script===-1));
     // Space remains in the script, and an empty next line has its caret below.
     await page.keyboard.press('Escape');await control('New canvas');await wait(s=>s.shapes.length===0);
-    await focusCanvasTool('t');await wait(s=>!!s.editing_text);await keys('x');await page.keyboard.press('Control+ArrowUp');await keys('45 6');
+    await focusCanvasTool('t');await wait(s=>!!s.editing_text);await keys('x');await page.keyboard.press('Shift+ArrowUp');await keys('45 6');
     await wait(s=>scriptText(s)?.content==='x45 6'&&scriptText(s).char_styles.slice(1).every(c=>c.script===1));
     await page.keyboard.press('ArrowRight');await wait(s=>s.insertion_script===0);await page.keyboard.press('Enter');
     const emptyLine=await wait(s=>scriptText(s)?.content==='x45 6\n'&&s.text_caret?.[0]<1);
