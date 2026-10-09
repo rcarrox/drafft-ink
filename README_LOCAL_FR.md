@@ -1,10 +1,10 @@
-# Qurso🌿 0.20.0
+# Qurso🌿 0.25.0
 
 Version personnelle du tableau DrafftInk, sans collaboration reseau.
 
 ## Utilisation sous Windows
 
-Le ZIP **DrafftInk_Windows_Portable_0.20.0.zip** produit par GitHub Actions est deja compile.
+Le ZIP **DrafftInk_Windows_Portable_0.25.0.zip** produit par GitHub Actions est deja compile.
 Il ne faut installer ni Rust, ni wasm-pack, ni Visual Studio.
 
 1. Decompresser le ZIP.
@@ -26,8 +26,8 @@ Workflow : `.github/workflows/build-portable.yml`.
 
 A chaque push sur `main`, deux artefacts sont produits :
 
-- `DrafftInk-Windows-Portable-0.20.0` : version locale Windows precompilee ;
-- `DrafftInk-Web-0.20.0` : fichiers statiques a deposer sur un serveur web.
+- `DrafftInk-Windows-Portable-0.25.0` : version locale Windows precompilee ;
+- `DrafftInk-Web-0.25.0` : fichiers statiques a deposer sur un serveur web.
 
 ## Modifications de cette branche
 
