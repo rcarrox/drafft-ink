@@ -961,7 +961,7 @@ pub mod file_ops {
         let selected = wait_for_file_selection(&input).await;
         input.remove();
         let file = selected?;
-        let mime = file.r#type();
+        let mime = file.type_();
         let is_pdf = mime == "application/pdf" || file.name().to_lowercase().ends_with(".pdf");
         let blobs: Vec<web_sys::Blob> = if is_pdf {
             let value = js_sys::Reflect::get(window.as_ref(), &JsValue::from_str("drafftinkPdfPages"))?;
