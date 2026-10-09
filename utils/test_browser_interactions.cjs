@@ -472,7 +472,7 @@ function inspectCapture(file) {
     // Separate browser context with a public, deterministic 1200x2000 PNG fixture.
     const imageContext = await browser.newContext({viewport:{width:1280,height:720}});
     const imageId='00000000-0000-4000-8000-000000000001';
-    const image={id:imageId,position:{x:200,y:150},width:160,height:120,source_width:1200,source_height:2000,format:'Png',data_base64:fs.readFileSync('work/e2e/fixtures/image-1200x2000.png').toString('base64'),rotation:0,crop:{x0:0,y0:0,x1:1,y1:1},style:{stroke_color:{r:0,g:0,b:0,a:255},stroke_width:2,fill_color:null,opacity:1}};
+    const image={id:imageId,position:{x:600,y:300},width:160,height:120,source_width:1200,source_height:2000,format:'Png',data_base64:fs.readFileSync('work/e2e/fixtures/image-1200x2000.png').toString('base64'),rotation:0,crop:{x0:0,y0:0,x1:1,y1:1},style:{stroke_color:{r:0,g:0,b:0,a:255},stroke_width:2,fill_color:null,opacity:1}};
     // ShapeStyle carries additional defaults, filled from the real Text shape.
     image.style=text(before).style;
     const fixture={id:'image-fixture',name:'Image',shapes:{[imageId]:{Image:image}},z_order:[imageId]};
