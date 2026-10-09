@@ -158,6 +158,31 @@ function inspectCapture(file) {
     await wait(followsPointer);
     await page.mouse.up();await wait(s=>s.selection_rect===null&&s.tool==='Select');
     assert.equal((await state()).selected_count,1);
+    const topBeforeNudge=(await state()).shapes[0].bounds[1];
+    await page.keyboard.press('Control+ArrowDown');
+    const nudged=await wait(s=>s.shapes[0].bounds[1]>topBeforeNudge+20);
+    assert(Math.abs(nudged.shapes[0].bounds[1]-topBeforeNudge-33.6)<2,'Ctrl+ArrowDown should nudge the selection vertically by the normal fast step');
+    await page.keyboard.press('Control+ArrowUp');
+    await wait(s=>Math.abs(s.shapes[0].bounds[1]-topBeforeNudge)<1);
+    await page.mouse.move(780,460);await page.keyboard.press('r');await wait(s=>s.tool==='Rectangle');
+    await page.mouse.down();await page.mouse.move(900,540,{steps:5});await page.mouse.up();await wait(s=>s.shapes.length===2&&s.selected_count===1);
+    await page.keyboard.press('s');await wait(s=>s.tool==='Select');
+    const firstBounds=(await state()).shapes[0].bounds;
+    // Empty rectangles are hit-tested on their outline; Ctrl-click the visible edge.
+    const multiSelectPoint=[firstBounds[0]+1,firstBounds[1]+1];
+    await page.mouse.move(...multiSelectPoint);
+    await page.keyboard.down('Control');await page.mouse.click(...multiSelectPoint);await page.keyboard.up('Control');
+    await wait(s=>s.selected_count===2);
+    await page.keyboard.press('Control+l');await wait(s=>s.shapes.every(shape=>shape.pinned));
+    await page.keyboard.press('Control+z');await wait(s=>s.shapes.every(shape=>!shape.pinned));
+    // Undo restores the document snapshot and clears selection; select both again.
+    await page.mouse.click(...multiSelectPoint);await wait(s=>s.selected_count===1);
+    const secondBounds=(await state()).shapes[1].bounds;
+    const secondPoint=[secondBounds[0]+1,secondBounds[1]+1];
+    await page.keyboard.down('Control');await page.mouse.click(...secondPoint);await page.keyboard.up('Control');
+    await wait(s=>s.selected_count===2);
+    await page.keyboard.press('Control+l');await wait(s=>s.shapes.every(shape=>shape.pinned));
+    await page.keyboard.press('Control+l');await wait(s=>s.shapes.every(shape=>!shape.pinned));
     await snapshot(page,'accent-selection.png');
     await page.mouse.move(700,500);await page.waitForTimeout(100);await control('tool_Ellipse');await wait(s=>s.tool==='Ellipse');
     await captureContext.close();
