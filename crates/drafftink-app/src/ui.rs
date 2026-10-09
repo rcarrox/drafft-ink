@@ -16,11 +16,7 @@ use web_time::Instant as StatusInstant;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant as StatusInstant;
 
-#[cfg(target_arch = "wasm32")]
-use crate::app::file_ops;
-use crate::math_input::{
-    friendly_math_to_latex, normalize_friendly_math_input, open_structured_depth,
-};
+use crate::math_input::friendly_math_to_latex;
 use crate::settings::UserSettings;
 
 // Re-export from widgets crate for consistent styling
@@ -30,7 +26,6 @@ use drafftink_widgets::{
     menu_item as widgets_menu_item, menu_item_enabled as widgets_menu_item_enabled,
     menu_separator as widgets_menu_separator, panel_frame as widgets_panel_frame, primary_btn,
     secondary_btn, section_label as widgets_section_label,
-    vertical_separator as widgets_vertical_separator,
 };
 
 /// Properties of the currently selected shape(s) for the right panel.
@@ -973,7 +968,7 @@ fn render_insert_panel(ctx: &Context, state: &mut UiState) -> Option<UiAction> {
         state.insert_panel_rect = Some(panel.response.rect);
         if action.is_none() && ctx.input(|input| input.pointer.any_click()) {
             if let Some(pointer) = ctx.input(|input| input.pointer.interact_pos()) {
-                let toolbar = state.toolbar_rect.unwrap_or_default();
+                let toolbar = state.toolbar_rect.unwrap_or(Rect::NOTHING);
                 if !panel.response.rect.contains(pointer) && !toolbar.contains(pointer) {
                     state.insert_menu_open = false;
                     state.preset_menu_open = false;
@@ -1470,7 +1465,7 @@ fn render_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                 }
                 ui.separator();
                 if ui.add(IconButton::new(include_image!("../assets/add.svg"), "Insérer")
-                    .style(IconButtonStyle::tool()).show(ui)) {
+                    .style(IconButtonStyle::tool()).show(ui)).clicked() {
                     ui_state.insert_menu_open = !ui_state.insert_menu_open;
                 }
             });
