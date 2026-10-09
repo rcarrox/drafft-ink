@@ -6,6 +6,8 @@ const STORAGE_KEY: &str = "drafftink.user_settings.v1";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UserSettings {
+    #[serde(default)]
+    pub schema_version: u8,
     pub shortcut_select: String,
     pub shortcut_pan: String,
     pub shortcut_draw: String,
@@ -47,6 +49,7 @@ pub struct UserSettings {
 impl Default for UserSettings {
     fn default() -> Self {
         Self {
+            schema_version: 1,
             shortcut_select: "s".into(),
             shortcut_pan: "h".into(),
             shortcut_draw: "d".into(),
@@ -64,7 +67,7 @@ impl Default for UserSettings {
             export_folder_name: String::new(),
             touchpad_zoom_speed: 2.0,
             autosave_enabled: true,
-            autosave_interval_secs: 5,
+            autosave_interval_secs: 600,
             restore_last_document: true,
             show_properties_for_tools: false,
             hide_properties: true,
@@ -161,6 +164,14 @@ impl UserSettings {
     }
 
     pub fn sanitize(&mut self) {
+        if self.schema_version == 0 {
+            // 5 s was the original shipped default; migrate existing users to
+            // the safer ten-minute default while preserving custom intervals.
+            if self.autosave_interval_secs == 5 {
+                self.autosave_interval_secs = 600;
+            }
+            self.schema_version = 1;
+        }
         self.touchpad_zoom_speed = if self.touchpad_zoom_speed.is_finite() {
             self.touchpad_zoom_speed.clamp(0.25, 8.0)
         } else {
@@ -235,7 +246,11 @@ pub fn load_settings() -> UserSettings {
         return UserSettings::default();
     };
     let mut settings = serde_json::from_str::<UserSettings>(&json).unwrap_or_default();
+    let needs_persist = settings.schema_version == 0;
     settings.sanitize();
+    if needs_persist {
+        save_settings(&settings);
+    }
     settings
 }
 
@@ -286,6 +301,21 @@ mod tests {
 #[cfg(test)]
 mod font_settings_regressions {
     use super::*;
+    #[test]
+    fn default_png_autosave_interval_is_ten_minutes() {
+        assert_eq!(UserSettings::default().autosave_interval_secs, 600);
+    }
+
+    #[test]
+    fn old_default_autosave_interval_migrates_without_overwriting_custom_values() {
+        let mut old_default: UserSettings = serde_json::from_str(r#"{"autosave_interval_secs":5}"#).unwrap();
+        old_default.sanitize();
+        assert_eq!(old_default.autosave_interval_secs, 600);
+        let mut customized: UserSettings = serde_json::from_str(r#"{"autosave_interval_secs":45}"#).unwrap();
+        customized.sanitize();
+        assert_eq!(customized.autosave_interval_secs, 45);
+    }
+
     #[test]
     fn old_settings_receive_google_medium_defaults() {
         let settings: UserSettings =

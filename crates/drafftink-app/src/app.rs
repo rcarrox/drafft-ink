@@ -2770,6 +2770,29 @@ impl ApplicationHandler for App {
                     state.window.set_fullscreen(fullscreen);
                     return;
                 }
+                if matches!(event.logical_key, Key::Named(NamedKey::F1))
+                    && !state.canvas.selection.is_empty()
+                    && state.ui_state.math_editor.is_none()
+                    && state.ui_state.inline_formula_draft.is_none()
+                    && state.event_handler.editing_text.is_none()
+                    && state.ui_state.text_command_editor.is_none()
+                    && !state.ui_state.settings_open
+                    && !state.ui_state.shortcuts_modal_open
+                {
+                    let visible = (!state.ui_state.settings.hide_properties
+                        || state.ui_state.context_properties)
+                        && !state.ui_state.properties_hotkey_hidden;
+                    if visible {
+                        state.ui_state.context_properties = false;
+                        state.ui_state.properties_hotkey_hidden = true;
+                    } else {
+                        state.ui_state.properties_hotkey_hidden = false;
+                        state.ui_state.context_properties = true;
+                    }
+                    state.needs_redraw = true;
+                    state.window.request_redraw();
+                    return;
+                }
             }
         }
 
@@ -3422,17 +3445,22 @@ impl ApplicationHandler for App {
                         state.ui_state.update_from_style(shape.style());
                         // Older line/arrow documents store their pattern on the
                         // shape itself; mirror that into the shared outline picker.
-                        if shape.style().stroke_style == drafftink_core::shapes::StrokeStyle::Solid
-                        {
-                            match shape {
-                                Shape::Line(line) => {
-                                    state.ui_state.stroke_style = line.stroke_style
+                        match shape {
+                            Shape::Line(line) => {
+                                if shape.style().stroke_style == drafftink_core::shapes::StrokeStyle::Solid {
+                                    state.ui_state.stroke_style = line.stroke_style;
                                 }
-                                Shape::Arrow(arrow) => {
-                                    state.ui_state.stroke_style = arrow.stroke_style
-                                }
-                                _ => {}
+                                state.ui_state.path_style = line.path_style as u8;
                             }
+                            Shape::Arrow(arrow) => {
+                                if shape.style().stroke_style == drafftink_core::shapes::StrokeStyle::Solid {
+                                    state.ui_state.stroke_style = arrow.stroke_style;
+                                }
+                                state.ui_state.path_style = arrow.path_style as u8;
+                                state.ui_state.arrow_start_head = arrow.start_head as u8;
+                                state.ui_state.arrow_end_head = arrow.end_head as u8;
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -3459,6 +3487,22 @@ impl ApplicationHandler for App {
                 }
                 state.canvas.tool_manager.current_style = tool_style;
                 state.canvas.tool_manager.corner_radius = state.ui_state.corner_radius as f64;
+                state.canvas.tool_manager.path_style = match state.ui_state.path_style {
+                    1 => drafftink_core::shapes::PathStyle::Flowing,
+                    2 => drafftink_core::shapes::PathStyle::Angular,
+                    _ => drafftink_core::shapes::PathStyle::Direct,
+                };
+                state.canvas.tool_manager.stroke_style = state.ui_state.stroke_style;
+                state.canvas.tool_manager.arrow_start_head = match state.ui_state.arrow_start_head {
+                    0 => drafftink_core::shapes::ArrowHeadStyle::None,
+                    2 => drafftink_core::shapes::ArrowHeadStyle::Filled,
+                    _ => drafftink_core::shapes::ArrowHeadStyle::Open,
+                };
+                state.canvas.tool_manager.arrow_end_head = match state.ui_state.arrow_end_head {
+                    0 => drafftink_core::shapes::ArrowHeadStyle::None,
+                    2 => drafftink_core::shapes::ArrowHeadStyle::Filled,
+                    _ => drafftink_core::shapes::ArrowHeadStyle::Open,
+                };
 
                 // Get selected shape properties for the right panel
                 let selection_count = state.canvas.selection.len();
@@ -4433,6 +4477,7 @@ impl ApplicationHandler for App {
                                     1 => StrokeStyle::Dashed,
                                     _ => StrokeStyle::Dotted,
                                 };
+                                state.ui_state.stroke_style = stroke_style;
                                 let has_selection = !state.canvas.selection.is_empty();
                                 // Apply to selected lines/arrows
                                 for &shape_id in &state.canvas.selection.clone() {
@@ -4469,6 +4514,11 @@ impl ApplicationHandler for App {
                                     2 => ArrowHeadStyle::Filled,
                                     _ => ArrowHeadStyle::Open,
                                 };
+                                if is_start {
+                                    state.ui_state.arrow_start_head = level.min(2);
+                                } else {
+                                    state.ui_state.arrow_end_head = level.min(2);
+                                }
                                 let has_selection = !state.canvas.selection.is_empty();
                                 if has_selection {
                                     state.canvas.document.push_undo();
@@ -5951,6 +6001,7 @@ impl ApplicationHandler for App {
                             state.canvas.selection.push(id);
                         }
                         state.ui_state.context_properties = true;
+                        state.ui_state.properties_hotkey_hidden = false;
                         state.needs_redraw = true;
                         state.window.request_redraw();
                     }
@@ -6350,7 +6401,13 @@ impl ApplicationHandler for App {
                         PhysicalKey::Code(KeyCode::ArrowUp | KeyCode::ArrowDown)
                     );
                 if event.state == ElementState::Pressed
-                    && ((state.input.ctrl() && !state.input.alt()) || vertical_nudge_fallback)
+                    && (((state.input.ctrl() && !state.input.alt())
+                        && matches!(event.physical_key, PhysicalKey::Code(KeyCode::ArrowUp | KeyCode::ArrowDown)))
+                        || (state.input.shift()
+                            && !state.input.ctrl()
+                            && !state.input.alt()
+                            && matches!(event.physical_key, PhysicalKey::Code(KeyCode::ArrowLeft | KeyCode::ArrowRight)))
+                        || vertical_nudge_fallback)
                     && state.event_handler.editing_text.is_none()
                     && state.ui_state.math_editor.is_none()
                     && !state.ui_state.settings_open
@@ -8057,16 +8114,13 @@ fn toggle_selected_pinning(state: &mut AppState) {
                     shape.transform(transform.inverse());
                 }
             }
-        } else {
+        } else if !state.canvas.document.is_pinned(id) {
             if let Some(shape) = state.canvas.document.get_shape_mut(id) {
                 shape.transform(transform);
             }
-            state.canvas.document.pinned_shapes.insert(
-                id,
-                PinnedShape {
-                    background: drafftink_core::shapes::SerializableColor::white(),
-                },
-            );
+            state.canvas.document.pinned_shapes.insert(id, PinnedShape {
+                background: drafftink_core::shapes::SerializableColor::white(),
+            });
         }
     }
     state.ui_state.selection_pinned = !all_pinned;

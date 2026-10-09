@@ -534,6 +534,11 @@ impl Shape {
 
     /// Set the rotation angle in radians.
     pub fn set_rotation(&mut self, rotation: f64) {
+        // Path-shaped objects encode rotation directly in their points. This
+        // keeps render, hit testing, serialization, and independently erased
+        // fragments in the same coordinate system.
+        let center = self.bounds().center();
+        let transform = Affine::rotate_about(rotation, center);
         match self {
             Shape::Rectangle(r) => r.rotation = rotation,
             Shape::Ellipse(e) => e.rotation = rotation,
@@ -541,6 +546,9 @@ impl Shape {
             Shape::Image(i) => i.rotation = rotation,
             Shape::Math(m) => m.rotation = rotation,
             Shape::Group(g) => g.rotation = rotation,
+            Shape::Line(line) => line.transform(transform),
+            Shape::Arrow(arrow) => arrow.transform(transform),
+            Shape::Freehand(freehand) => freehand.transform(transform),
             _ => {}
         }
     }
@@ -555,6 +563,9 @@ impl Shape {
                 | Shape::Image(_)
                 | Shape::Math(_)
                 | Shape::Group(_)
+                | Shape::Line(_)
+                | Shape::Arrow(_)
+                | Shape::Freehand(_)
         )
     }
 }

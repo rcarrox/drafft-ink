@@ -98,6 +98,7 @@ pub fn get_handles(shape: &Shape) -> Vec<Handle> {
                 );
                 handles.push(Handle::new(mid, HandleKind::SegmentMidpoint(i)));
             }
+            handles.push(rotation_handle(shape.bounds()));
             handles
         }
         Shape::Arrow(arrow) => {
@@ -116,6 +117,7 @@ pub fn get_handles(shape: &Shape) -> Vec<Handle> {
                 );
                 handles.push(Handle::new(mid, HandleKind::SegmentMidpoint(i)));
             }
+            handles.push(rotation_handle(shape.bounds()));
             handles
         }
         Shape::Rectangle(_) | Shape::Ellipse(_) | Shape::Image(_) => {
@@ -130,15 +132,25 @@ pub fn get_handles(shape: &Shape) -> Vec<Handle> {
             corner_and_rotate_handles(bounds, rotation)
         }
         Shape::Freehand(_) => {
-            // Freehand uses bounding box corners (no rotation)
+            // A manually erased fragment is still an independent shape and
+            // can be rotated without changing its cut geometry.
             let bounds = shape.bounds();
-            corner_handles(bounds)
+            let mut handles = corner_handles(bounds);
+            handles.push(rotation_handle(bounds));
+            handles
         }
         Shape::Group(group) => {
             let bounds = shape.bounds();
             corner_and_rotate_handles(bounds, group.rotation)
         }
     }
+}
+
+fn rotation_handle(bounds: Rect) -> Handle {
+    Handle::new(
+        Point::new(bounds.center().x, bounds.y0 - ROTATE_HANDLE_OFFSET),
+        HandleKind::Rotate,
+    )
 }
 
 /// Generate corner handles for a bounding rectangle.
@@ -264,6 +276,8 @@ pub struct ManipulationState {
     pub current_point: Point,
     /// Original shape state for preview/undo.
     pub original_shape: Shape,
+    /// Rotation gesture angle; path shapes store this as transformed points.
+    pub rotation_angle: Option<f64>,
 }
 
 /// State for moving multiple shapes at once.
@@ -295,6 +309,7 @@ impl ManipulationState {
             start_point,
             current_point: start_point,
             original_shape,
+            rotation_angle: None,
         }
     }
 
@@ -1483,5 +1498,51 @@ mod text_proportions_tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod path_rotation_tests {
+    use super::*;
+    use crate::shapes::{Arrow, Freehand, Line, ShapeTrait};
+
+    #[test]
+    fn lines_arrows_and_erased_freehand_fragments_have_rotation_handles() {
+        let shapes = [
+            Shape::Line(Line::new(Point::ZERO, Point::new(20.0, 0.0))),
+            Shape::Arrow(Arrow::new(Point::ZERO, Point::new(20.0, 0.0))),
+            Shape::Freehand(Freehand::from_points(vec![
+                Point::ZERO,
+                Point::new(10.0, 5.0),
+                Point::new(20.0, 0.0),
+            ])),
+        ];
+        for shape in shapes {
+            assert!(shape.supports_rotation());
+            assert!(get_handles(&shape)
+                .iter()
+                .any(|handle| handle.kind == HandleKind::Rotate));
+        }
+    }
+
+    #[test]
+    fn rotating_a_path_keeps_its_geometry_serializable() {
+        let mut shape = Shape::Line(Line::new(Point::ZERO, Point::new(20.0, 0.0)));
+        shape.set_rotation(std::f64::consts::FRAC_PI_2);
+        let Shape::Line(line) = &shape else { panic!() };
+        assert!((line.start.x - 10.0).abs() < 1e-8);
+        assert!((line.start.y + 10.0).abs() < 1e-8);
+        assert!((line.end.x - 10.0).abs() < 1e-8);
+        assert!((line.end.y - 10.0).abs() < 1e-8);
+        let restored: Shape = serde_json::from_str(&serde_json::to_string(&shape).unwrap()).unwrap();
+        assert!(get_handles(&restored)
+            .iter()
+            .any(|handle| handle.kind == HandleKind::Rotate));
+
+        let mut arrow = Shape::Arrow(Arrow::new(Point::ZERO, Point::new(20.0, 0.0)));
+        let head_size = match &arrow { Shape::Arrow(arrow) => arrow.head_size, _ => unreachable!() };
+        arrow.set_rotation(std::f64::consts::FRAC_PI_2);
+        let Shape::Arrow(arrow) = arrow else { panic!() };
+        assert!((arrow.head_size - head_size).abs() < 1e-8);
     }
 }

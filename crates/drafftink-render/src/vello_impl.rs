@@ -2452,6 +2452,17 @@ impl Renderer for VelloRenderer {
                 background_path.line_to(Point::new(bounds.x1, bounds.y1));
                 background_path.line_to(Point::new(bounds.x0, bounds.y1));
                 background_path.close_path();
+                // A few low-alpha offset layers give pinned cards a soft,
+                // platform-independent shadow without rasterizing the canvas.
+                for (offset, alpha) in [(4.0, 9), (2.0, 16)] {
+                    self.scene.fill(
+                        Fill::NonZero,
+                        Affine::translate((0.0, offset)) * background_transform,
+                        Color::from_rgba8(0, 0, 0, alpha),
+                        None,
+                        &background_path,
+                    );
+                }
                 self.scene.fill(
                     Fill::NonZero,
                     background_transform,
@@ -2475,7 +2486,7 @@ impl Renderer for VelloRenderer {
             pin_mark.line_to(Point::new(16.727, 9.454));
             pin_mark.line_to(Point::new(13.546, 6.272));
             pin_mark.close_path();
-            let marker = Affine::translate((bounds.center().x - 9.0, bounds.y0 - 14.0)) * Affine::scale(0.75);
+            let marker = Affine::translate((bounds.center().x - 12.0, bounds.y0 - 18.0)) * Affine::scale(1.2);
             self.scene.stroke(&Stroke::new(3.2), marker * Affine::translate((0.7, 0.9)),
                 Color::from_rgba8(0, 0, 0, 55), None, &pin_mark);
             self.scene.stroke(&Stroke::new(2.2), marker, Color::from_rgb8(65, 65, 65), None, &pin_mark);
