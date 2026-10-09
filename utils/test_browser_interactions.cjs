@@ -169,6 +169,37 @@ function inspectCapture(file) {
     assert(Math.abs(movedUp.shapes[0].bounds[1]-topBeforeNudge+33.6)<2,'Ctrl+ArrowUp should nudge upward by the same fast step');
     await page.keyboard.press('Control+ArrowDown');
     await wait(s=>Math.abs(s.shapes[0].bounds[1]-topBeforeNudge)<1);
+    // Ctrl+Up/Down can be captured by browser/OS navigation on some Windows
+    // keyboard layouts. Shift+vertical arrows are the explicit fallback.
+    await page.keyboard.press('Shift+ArrowDown');
+    const shiftNudged=await wait(s=>s.shapes[0].bounds[1]>topBeforeNudge+20);
+    assert(Math.abs(shiftNudged.shapes[0].bounds[1]-topBeforeNudge-33.6)<2,'Shift+ArrowDown should provide the fast vertical nudge fallback');
+    await page.keyboard.press('Shift+ArrowUp');
+    await wait(s=>Math.abs(s.shapes[0].bounds[1]-topBeforeNudge)<1);
+    const selectTool=await state();
+    const selectButton=selectTool.controls.tool_Select;
+    const selectIcon=selectTool.controls.tool_Select_icon;
+    assert(Math.abs((selectIcon[0]+selectIcon[2]-selectButton[0]-selectButton[2])/2-4)<0.1,'Select icon should keep its rightward offset in every state');
+
+    await page.keyboard.press('z');await wait(s=>s.tool==='LaserPointer'&&!s.laser_permanent);
+    await page.keyboard.press('z');await wait(s=>s.laser_permanent);
+    await page.keyboard.press('z');await wait(s=>!s.laser_permanent);
+    await page.keyboard.press('e');await wait(s=>s.tool==='Eraser'&&s.eraser_mode==='Classic');
+    await page.keyboard.press('e');await wait(s=>s.eraser_mode==='Manual');
+    await page.keyboard.press('e');await wait(s=>s.eraser_mode==='Classic');
+    await page.keyboard.press('s');await wait(s=>s.tool==='Select');
+
+    let laserTool=(await state()).controls.tool_LaserPointer;
+    await page.mouse.click((laserTool[0]+laserTool[2])/2,(laserTool[1]+laserTool[3])/2,{button:'right',delay:60});
+    const openedPalette=await wait(s=>s.laser_palette_open&&!!s.controls.laser_palette);
+    const originalToolbar=openedPalette.controls.toolbar;
+    const originalPalette=openedPalette.controls.laser_palette;
+    await page.mouse.move((originalToolbar[0]+originalToolbar[2])/2,originalToolbar[1]+4);
+    await page.mouse.down();await page.mouse.move((originalToolbar[0]+originalToolbar[2])/2+35,originalToolbar[1]+34,{steps:8});await page.mouse.up();
+    const movedPalette=await wait(s=>s.controls.toolbar&&s.controls.laser_palette&&Math.abs(s.controls.toolbar[0]-originalToolbar[0]-35)<3);
+    assert(Math.abs(movedPalette.controls.laser_palette[0]-originalPalette[0]-35)<3,'Laser palette should remain anchored as the toolbar moves');
+    await page.mouse.click(1120,650);await wait(s=>!s.laser_palette_open);
+    await page.keyboard.press('s');await wait(s=>s.tool==='Select');
     await page.mouse.move(780,460);await page.keyboard.press('r');await wait(s=>s.tool==='Rectangle');
     await page.mouse.down();await page.mouse.move(900,540,{steps:5});await page.mouse.up();await wait(s=>s.shapes.length===2&&s.selected_count===1);
     await page.keyboard.press('s');await wait(s=>s.tool==='Select');

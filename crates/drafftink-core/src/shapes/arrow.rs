@@ -6,6 +6,21 @@ use kurbo::{Affine, BezPath, Point, Rect, Vec2};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Visual style of one end of an arrow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum ArrowHeadStyle {
+    None,
+    Open,
+    Filled,
+}
+
+impl Default for ArrowHeadStyle {
+    fn default() -> Self {
+        Self::Open
+    }
+}
+
 /// An arrow shape (line with arrowhead).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Arrow {
@@ -25,6 +40,12 @@ pub struct Arrow {
     pub stroke_style: StrokeStyle,
     /// Size of the arrowhead.
     pub head_size: f64,
+    /// Start marker (defaults to none for older document compatibility).
+    #[serde(default = "default_start_head")]
+    pub start_head: ArrowHeadStyle,
+    /// End marker (defaults to the original open arrowhead).
+    #[serde(default)]
+    pub end_head: ArrowHeadStyle,
     /// Style properties.
     pub style: ShapeStyle,
 }
@@ -40,6 +61,8 @@ impl Arrow {
             path_style: PathStyle::Direct,
             stroke_style: StrokeStyle::default(),
             head_size: 15.0,
+            start_head: ArrowHeadStyle::None,
+            end_head: ArrowHeadStyle::Open,
             style: ShapeStyle::default(),
         }
     }
@@ -53,6 +76,8 @@ impl Arrow {
         path_style: PathStyle,
         stroke_style: StrokeStyle,
         head_size: f64,
+        start_head: ArrowHeadStyle,
+        end_head: ArrowHeadStyle,
         style: ShapeStyle,
     ) -> Self {
         Self {
@@ -63,6 +88,8 @@ impl Arrow {
             path_style,
             stroke_style,
             head_size,
+            start_head,
+            end_head,
             style,
         }
     }
@@ -84,6 +111,8 @@ impl Arrow {
             path_style,
             stroke_style: StrokeStyle::default(),
             head_size: 15.0,
+            start_head: ArrowHeadStyle::None,
+            end_head: ArrowHeadStyle::Open,
             style: ShapeStyle::default(),
         }
     }
@@ -114,6 +143,77 @@ impl Arrow {
         let dy = self.end.y - self.start.y;
         (dx * dx + dy * dy).sqrt()
     }
+
+    fn path_points(&self) -> Vec<Point> {
+        match self.path_style {
+            PathStyle::Angular if self.intermediate_points.is_empty() => {
+                let mut points = vec![self.start];
+                points.extend(crate::elbow::compute_elbow_path(self.start, self.end));
+                points.push(self.end);
+                points
+            }
+            _ => self.all_points(),
+        }
+    }
+
+    /// Geometry for a head at the requested end. The direction is calculated
+    /// from that endpoint's adjacent path segment, so bent arrows stay aligned.
+    fn head_points(&self, at_start: bool) -> [Point; 3] {
+        let points = self.path_points();
+        let (tip, adjacent) = if at_start {
+            (points[0], points.get(1).copied().unwrap_or(self.end))
+        } else {
+            let last = points.len().saturating_sub(1);
+            (
+                points[last],
+                points.get(last.saturating_sub(1)).copied().unwrap_or(self.start),
+            )
+        };
+        let mut dx = tip.x - adjacent.x;
+        let mut dy = tip.y - adjacent.y;
+        let len = (dx * dx + dy * dy).sqrt();
+        if len <= f64::EPSILON {
+            dx = if at_start { -1.0 } else { 1.0 };
+            dy = 0.0;
+        } else {
+            dx /= len;
+            dy /= len;
+        }
+        let perp = Vec2::new(-dy, dx);
+        let back = Point::new(tip.x - dx * self.head_size, tip.y - dy * self.head_size);
+        [
+            tip,
+            Point::new(
+                back.x + perp.x * self.head_size * 0.5,
+                back.y + perp.y * self.head_size * 0.5,
+            ),
+            Point::new(
+                back.x - perp.x * self.head_size * 0.5,
+                back.y - perp.y * self.head_size * 0.5,
+            ),
+        ]
+    }
+
+    /// Closed arrowhead geometry for filled heads, used by the renderer.
+    pub fn filled_head_paths(&self) -> Vec<BezPath> {
+        let mut result = Vec::new();
+        for (at_start, style) in [(true, self.start_head), (false, self.end_head)] {
+            if style == ArrowHeadStyle::Filled {
+                let [tip, left, right] = self.head_points(at_start);
+                let mut path = BezPath::new();
+                path.move_to(tip);
+                path.line_to(left);
+                path.line_to(right);
+                path.close_path();
+                result.push(path);
+            }
+        }
+        result
+    }
+}
+
+fn default_start_head() -> ArrowHeadStyle {
+    ArrowHeadStyle::None
 }
 
 impl ShapeTrait for Arrow {
@@ -122,33 +222,20 @@ impl ShapeTrait for Arrow {
     }
 
     fn bounds(&self) -> Rect {
-        // Include all points and arrowhead in bounds
-        let dir = self.direction();
-        let perp = Vec2::new(-dir.y, dir.x);
-
-        let head_back = Point::new(
-            self.end.x - dir.x * self.head_size,
-            self.end.y - dir.y * self.head_size,
-        );
-        let head_left = Point::new(
-            head_back.x + perp.x * self.head_size * 0.5,
-            head_back.y + perp.y * self.head_size * 0.5,
-        );
-        let head_right = Point::new(
-            head_back.x - perp.x * self.head_size * 0.5,
-            head_back.y - perp.y * self.head_size * 0.5,
-        );
-
-        let points = self.all_points();
-        let mut min_x = head_left.x.min(head_right.x);
-        let mut min_y = head_left.y.min(head_right.y);
-        let mut max_x = head_left.x.max(head_right.x);
-        let mut max_y = head_left.y.max(head_right.y);
-        for p in &points {
-            min_x = min_x.min(p.x);
-            min_y = min_y.min(p.y);
-            max_x = max_x.max(p.x);
-            max_y = max_y.max(p.y);
+        let points = self.path_points();
+        let mut min_x = points.iter().map(|p| p.x).fold(f64::INFINITY, f64::min);
+        let mut min_y = points.iter().map(|p| p.y).fold(f64::INFINITY, f64::min);
+        let mut max_x = points.iter().map(|p| p.x).fold(f64::NEG_INFINITY, f64::max);
+        let mut max_y = points.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max);
+        for (at_start, style) in [(true, self.start_head), (false, self.end_head)] {
+            if style != ArrowHeadStyle::None {
+                for point in self.head_points(at_start) {
+                    min_x = min_x.min(point.x);
+                    min_y = min_y.min(point.y);
+                    max_x = max_x.max(point.x);
+                    max_y = max_y.max(point.y);
+                }
+            }
         }
 
         Rect::new(min_x, min_y, max_x, max_y)
@@ -156,7 +243,7 @@ impl ShapeTrait for Arrow {
 
     fn hit_test(&self, point: Point, tolerance: f64) -> bool {
         // Check all line segments
-        let points = self.all_points();
+        let points = self.path_points();
         if points.len() >= 2 {
             let dist = super::point_to_polyline_dist(point, &points);
             if dist <= tolerance + self.style.stroke_width / 2.0 {
@@ -164,35 +251,25 @@ impl ShapeTrait for Arrow {
             }
         }
 
-        // Check arrowhead triangle
-        let dir = self.direction();
-        let perp = Vec2::new(-dir.y, dir.x);
-        let head_back = Point::new(
-            self.end.x - dir.x * self.head_size,
-            self.end.y - dir.y * self.head_size,
-        );
-        let head_left = Point::new(
-            head_back.x + perp.x * self.head_size * 0.5,
-            head_back.y + perp.y * self.head_size * 0.5,
-        );
-        let head_right = Point::new(
-            head_back.x - perp.x * self.head_size * 0.5,
-            head_back.y - perp.y * self.head_size * 0.5,
-        );
-
         // Point in triangle test
         fn sign(p1: Point, p2: Point, p3: Point) -> f64 {
             (p1.x - p3.x) * (p2.y - p3.y) - (p2.x - p3.x) * (p1.y - p3.y)
         }
 
-        let d1 = sign(point, self.end, head_left);
-        let d2 = sign(point, head_left, head_right);
-        let d3 = sign(point, head_right, self.end);
-
-        let has_neg = (d1 < 0.0) || (d2 < 0.0) || (d3 < 0.0);
-        let has_pos = (d1 > 0.0) || (d2 > 0.0) || (d3 > 0.0);
-
-        !(has_neg && has_pos)
+        [(true, self.start_head), (false, self.end_head)]
+            .into_iter()
+            .any(|(at_start, style)| {
+                if style == ArrowHeadStyle::None {
+                    return false;
+                }
+                let [tip, left, right] = self.head_points(at_start);
+                let d1 = sign(point, tip, left);
+                let d2 = sign(point, left, right);
+                let d3 = sign(point, right, tip);
+                let has_neg = d1 < 0.0 || d2 < 0.0 || d3 < 0.0;
+                let has_pos = d1 > 0.0 || d2 > 0.0 || d3 > 0.0;
+                !(has_neg && has_pos)
+            })
     }
 
     fn to_path(&self) -> BezPath {
@@ -203,17 +280,7 @@ impl ShapeTrait for Arrow {
         }
 
         // Get points to draw
-        let points = match self.path_style {
-            PathStyle::Angular if self.intermediate_points.is_empty() => {
-                // Compute elbow path dynamically
-                let elbow_pts = crate::elbow::compute_elbow_path(self.start, self.end);
-                let mut pts = vec![self.start];
-                pts.extend(elbow_pts);
-                pts.push(self.end);
-                pts
-            }
-            _ => self.all_points(),
-        };
+        let points = self.path_points();
 
         if points.len() < 2 {
             return path;
@@ -254,36 +321,15 @@ impl ShapeTrait for Arrow {
             }
         }
 
-        // Arrowhead - compute direction from last segment
-        let last_pt = points[points.len() - 1];
-        let prev_pt = points[points.len() - 2];
-        let dx = last_pt.x - prev_pt.x;
-        let dy = last_pt.y - prev_pt.y;
-        let len = (dx * dx + dy * dy).sqrt();
-        let dir = if len > f64::EPSILON {
-            Vec2::new(dx / len, dy / len)
-        } else {
-            self.direction()
-        };
-        let perp = Vec2::new(-dir.y, dir.x);
-
-        let head_back = Point::new(
-            self.end.x - dir.x * self.head_size,
-            self.end.y - dir.y * self.head_size,
-        );
-        let head_left = Point::new(
-            head_back.x + perp.x * self.head_size * 0.5,
-            head_back.y + perp.y * self.head_size * 0.5,
-        );
-        let head_right = Point::new(
-            head_back.x - perp.x * self.head_size * 0.5,
-            head_back.y - perp.y * self.head_size * 0.5,
-        );
-
-        path.move_to(self.end);
-        path.line_to(head_left);
-        path.move_to(self.end);
-        path.line_to(head_right);
+        for (at_start, style) in [(true, self.start_head), (false, self.end_head)] {
+            if style == ArrowHeadStyle::Open {
+                let [tip, left, right] = self.head_points(at_start);
+                path.move_to(tip);
+                path.line_to(left);
+                path.move_to(tip);
+                path.line_to(right);
+            }
+        }
 
         path
     }
@@ -340,5 +386,24 @@ mod tests {
     fn test_hit_test_head() {
         let arrow = Arrow::new(Point::new(0.0, 0.0), Point::new(100.0, 0.0));
         assert!(arrow.hit_test(Point::new(100.0, 0.0), 1.0));
+    }
+
+    #[test]
+    fn arrow_heads_round_trip_and_old_documents_keep_open_end() {
+        let mut arrow = Arrow::new(Point::new(0.0, 0.0), Point::new(100.0, 0.0));
+        arrow.start_head = ArrowHeadStyle::Filled;
+        arrow.end_head = ArrowHeadStyle::None;
+        let json = serde_json::to_string(&arrow).expect("serialize arrow");
+        let decoded: Arrow = serde_json::from_str(&json).expect("deserialize arrow");
+        assert_eq!(decoded.start_head, ArrowHeadStyle::Filled);
+        assert_eq!(decoded.end_head, ArrowHeadStyle::None);
+        assert_eq!(decoded.filled_head_paths().len(), 1);
+
+        let mut old: serde_json::Value = serde_json::from_str(&json).unwrap();
+        old.as_object_mut().unwrap().remove("start_head");
+        old.as_object_mut().unwrap().remove("end_head");
+        let decoded: Arrow = serde_json::from_value(old).expect("old arrow JSON");
+        assert_eq!(decoded.start_head, ArrowHeadStyle::None);
+        assert_eq!(decoded.end_head, ArrowHeadStyle::Open);
     }
 }

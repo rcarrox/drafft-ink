@@ -1,7 +1,7 @@
 //! Conversion between Shape types and Loro values.
 
 use crate::shapes::{
-    Arrow, Ellipse, FillPattern, FontFamily, FontWeight, Freehand, Group, Image, ImageFormat, Line,
+    Arrow, ArrowHeadStyle, Ellipse, FillPattern, FontFamily, FontWeight, Freehand, Group, Image, ImageFormat, Line,
     Math, PathStyle, Rectangle, SerializableColor, Shape, ShapeStyle, ShapeTrait, Sloppiness,
     StrokeStyle, Text,
 };
@@ -57,6 +57,8 @@ const KEY_INTERMEDIATE_POINTS: &str = "intermediate_points";
 const KEY_PATH_STYLE: &str = "path_style";
 const KEY_STROKE_STYLE: &str = "stroke_style";
 const KEY_HEAD_SIZE: &str = "head_size";
+const KEY_START_HEAD: &str = "start_head";
+const KEY_END_HEAD: &str = "end_head";
 
 // Freehand keys
 const KEY_POINTS: &str = "points";
@@ -162,6 +164,8 @@ pub fn shape_to_loro(shape: &Shape, map: &LoroMap) -> LoroResult<()> {
             map.insert(KEY_END_X, arrow.end.x)?;
             map.insert(KEY_END_Y, arrow.end.y)?;
             map.insert(KEY_HEAD_SIZE, arrow.head_size)?;
+            map.insert(KEY_START_HEAD, arrow_head_to_i64(arrow.start_head))?;
+            map.insert(KEY_END_HEAD, arrow_head_to_i64(arrow.end_head))?;
             map.insert(KEY_PATH_STYLE, path_style_to_i64(arrow.path_style))?;
             map.insert(KEY_STROKE_STYLE, stroke_style_to_i64(arrow.stroke_style))?;
             let pts_list = map.insert_container(KEY_INTERMEDIATE_POINTS, LoroList::new())?;
@@ -349,6 +353,12 @@ fn arrow_from_loro(map: &LoroMapValue) -> Option<Shape> {
             .map(i64_to_stroke_style)
             .unwrap_or_default(),
         get_double(map, KEY_HEAD_SIZE).unwrap_or(15.0),
+        get_i64(map, KEY_START_HEAD)
+            .map(i64_to_arrow_head)
+            .unwrap_or(ArrowHeadStyle::None),
+        get_i64(map, KEY_END_HEAD)
+            .map(i64_to_arrow_head)
+            .unwrap_or(ArrowHeadStyle::Open),
         style_from_loro(map)?,
     )))
 }
@@ -580,6 +590,22 @@ fn i64_to_path_style(v: i64) -> PathStyle {
         0 => PathStyle::Direct,
         1 => PathStyle::Flowing,
         _ => PathStyle::Angular,
+    }
+}
+
+fn arrow_head_to_i64(style: ArrowHeadStyle) -> i64 {
+    match style {
+        ArrowHeadStyle::None => 0,
+        ArrowHeadStyle::Open => 1,
+        ArrowHeadStyle::Filled => 2,
+    }
+}
+
+fn i64_to_arrow_head(value: i64) -> ArrowHeadStyle {
+    match value {
+        0 => ArrowHeadStyle::None,
+        2 => ArrowHeadStyle::Filled,
+        _ => ArrowHeadStyle::Open,
     }
 }
 

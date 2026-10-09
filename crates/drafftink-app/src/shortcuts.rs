@@ -53,10 +53,10 @@ impl ShortcutRegistry {
             Shortcut::new("L / 6", false, false, "Line tool"),
             Shortcut::new("D", false, false, "Draw tool"),
             Shortcut::new("K", false, false, "Highlighter tool"),
-            Shortcut::new("E", false, false, "Eraser tool (Classic / Manual)"),
+            Shortcut::new("E", false, false, "Cycle Eraser: Classic / Manual"),
             Shortcut::new("T / 8", false, false, "Text tool"),
             Shortcut::new("M", false, false, "Math formula tool"),
-            Shortcut::new("Z", false, false, "Laser pointer"),
+            Shortcut::new("Z", false, false, "Laser; press again to toggle Permanent"),
             Shortcut::new(
                 "Space (hold)",
                 false,
@@ -107,17 +107,18 @@ impl ShortcutRegistry {
             Shortcut::new("B", true, false, "Bold selected text"),
             Shortcut::new("I", true, false, "Italic selected text"),
             Shortcut::new("U", true, false, "Underline selected text"),
+            Shortcut::new("Ctrl+Arrow", false, false, "Move selected objects quickly"),
             Shortcut::new(
-                "Ctrl+ArrowUp",
+                "Shift+ArrowUp",
                 false,
                 false,
-                "Text/Math superscript shortcut",
+                "Text superscript / selected-object vertical move fallback",
             ),
             Shortcut::new(
-                "Ctrl+ArrowDown",
+                "Shift+ArrowDown",
                 false,
                 false,
-                "Text/Math subscript shortcut",
+                "Text subscript / selected-object vertical move fallback",
             ),
         ]
     }

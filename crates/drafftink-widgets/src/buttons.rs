@@ -180,7 +180,9 @@ impl<'a> IconButton<'a> {
             let icon_tint = if self.selected {
                 self.style.selected_icon_tint
             } else if response.hovered() {
-                self.style.hover_icon_tint.or(Some(Color32::from_gray(40)))
+                self.style
+                    .hover_icon_tint
+                    .or_else(|| self.style.icon_tint.map(|_| Color32::from_gray(40)))
             } else {
                 self.style.icon_tint
             };

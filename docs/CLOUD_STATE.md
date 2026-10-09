@@ -97,3 +97,11 @@ PR #25 fusionnée sur `main` (commit `4e16cf11b5bafe4aff5e09b20602ffda4adffd0f`)
 
 ### 0.22.0 — export des épingles, barre et raccourcis (en cours)
 Branche `codex/0.22.0-pins-tools-settings` depuis main 0.21.1. Export PNG/clipboard/autosave inclut les objets épinglés à leur position de vue au moment de la capture, avec arrière-plan tourné selon l'objet. `+ Library` retiré des onglets, import bibliothèque déplacé sous Import Mermaid. Icônes Select/Pan cohérentes avec les états hover/actif standards, barre d'outils agrandie, icône Math épaissie. Settings permet de choisir les outils affichés dans la barre. Ctrl+flèche verticale traité avant le garde de focus egui. Draw normalisé après Highlighter. Scénarios de régression ajoutés pour export épinglé, déplacements verticaux et Highlighter→Draw. Compilation/test Rust/WASM exclusivement GitHub Actions ; ne pas annoncer livré avant CI et ZIP vérifié. FTP inchangé.
+
+### 0.23.0 — laser, raccourcis et restauration des canvas (livrée)
+PR #27 fusionnée sur `main` (commit `539cdf1eee93393b832bd9be2d5c0fe87916fce6`). CI PR #27 et CI main verts ; workflow portable 0.23.0 réussi, ZIP portable vérifié avec JS/WASM générés.
+
+### 0.24.0 — flèches, raccourcis verticaux et panneau laser (en validation)
+Branche `codex/0.24.0-laser-arrow-shortcuts` depuis le main 0.23.0 ci-dessus. Select/Pan : garde l’SVG blanc/noir intact pendant le survol et déplace l’icône de 4 px à droite. Ctrl+flèches utilise un suivi explicite des modificateurs avant le garde egui ; Shift+haut/bas est ajouté comme raccourci de secours rapide pour les cas où le navigateur ou le système intercepte Ctrl+vertical. Z active le laser, puis alterne le mode permanent ; E alterne Eraser Classic/Manual. La palette laser est ancrée au bouton et se ferme au clic extérieur, sans croix. Les propriétés Arrow ajoutent des marqueurs indépendants départ/arrivée (aucun, ouvert, plein), y compris double flèche ; sérialisation JSON/CRDT rétrocompatible et géométrie de rendu/hit-test adaptées.
+
+Tests ajoutés : déplacement vertical Shift dans Chromium, alternance E/Z, déplacement du panneau laser avec la barre, offset Select, et sérialisation/valeurs par défaut des têtes de flèche. Aucun Rust compilé localement. CI, fusion et ZIP 0.24 restent en attente ; ne pas annoncer livré avant Actions vert et vérification du ZIP portable.
