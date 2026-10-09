@@ -2133,10 +2133,12 @@ impl VelloRenderer {
     /// Handles are scaled inversely with zoom to maintain constant screen size.
     fn render_shape_handles(&mut self, shape: &Shape, transform: Affine) {
         let handles = get_handles(shape);
-        // Scale handle size inversely with zoom to maintain constant screen size
-        let handle_size = 6.0 / self.zoom;
-        let stroke_width = 1.0 / self.zoom;
-        let dash_len = 4.0 / self.zoom;
+        // Pinned shapes use identity transform and are already in viewport pixels.
+        let screen_space = transform.as_coeffs() == [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+        let pixel_scale = if screen_space { 1.0 } else { 1.0 / self.zoom };
+        let handle_size = 6.0 * pixel_scale;
+        let stroke_width = pixel_scale;
+        let dash_len = 4.0 * pixel_scale;
 
         // For lines/arrows, draw a light dashed line connecting the endpoints
         // For rectangles/ellipses, draw the bounding box
@@ -2176,16 +2178,16 @@ impl VelloRenderer {
 
         // Draw handles
         for handle in handles {
-            self.render_handle(&handle, transform, handle_size);
+            self.render_handle(&handle, transform, handle_size, pixel_scale);
         }
     }
 
     /// Render a single handle.
     /// Stroke widths are scaled inversely with zoom to maintain constant screen size.
-    fn render_handle(&mut self, handle: &Handle, transform: Affine, size: f64) {
+    fn render_handle(&mut self, handle: &Handle, transform: Affine, size: f64, pixel_scale: f64) {
         let pos = handle.position;
-        let stroke_width_thick = 2.0 / self.zoom;
-        let stroke_width_thin = 1.5 / self.zoom;
+        let stroke_width_thick = 2.0 * pixel_scale;
+        let stroke_width_thin = 1.5 * pixel_scale;
 
         // Different handle shapes based on type
         match handle.kind {
@@ -2372,22 +2374,24 @@ impl Renderer for VelloRenderer {
                 );
             }
             self.render_shape(shape, Affine::IDENTITY, ctx.canvas.is_selected(shape.id()));
+            // Match assets/pin.svg; keep it centered at the top with a soft shadow.
             let mut pin_mark = BezPath::new();
-            pin_mark.move_to(Point::new(bounds.x1 - 9.0, bounds.y0 - 1.0));
-            pin_mark.line_to(Point::new(bounds.x1 - 2.0, bounds.y0 + 6.0));
-            pin_mark.move_to(Point::new(bounds.x1 - 7.0, bounds.y0 + 1.0));
-            pin_mark.line_to(Point::new(bounds.x1 - 11.0, bounds.y0 + 5.0));
-            pin_mark.line_to(Point::new(bounds.x1 - 6.0, bounds.y0 + 10.0));
-            pin_mark.line_to(Point::new(bounds.x1 - 2.0, bounds.y0 + 6.0));
-            pin_mark.move_to(Point::new(bounds.x1 - 8.0, bounds.y0 + 8.0));
-            pin_mark.line_to(Point::new(bounds.x1 - 13.0, bounds.y0 + 13.0));
-            self.scene.stroke(
-                &Stroke::new(1.5),
-                Affine::IDENTITY,
-                Color::from_rgb8(20, 20, 20),
-                None,
-                &pin_mark,
-            );
+            pin_mark.move_to(Point::new(4.0, 19.0));
+            pin_mark.line_to(Point::new(8.455, 14.546));
+            pin_mark.move_to(Point::new(12.273, 5.0));
+            pin_mark.line_to(Point::new(18.0, 10.727));
+            pin_mark.line_to(Point::new(13.546, 6.273));
+            pin_mark.line_to(Point::new(9.727, 10.09));
+            pin_mark.curve_to(Point::new(9.727, 10.09), Point::new(7.182, 9.454), Point::new(5.273, 11.363));
+            pin_mark.line_to(Point::new(11.636, 17.726));
+            pin_mark.curve_to(Point::new(13.545, 15.817), Point::new(12.909, 13.272), Point::new(12.909, 13.272));
+            pin_mark.line_to(Point::new(16.727, 9.454));
+            pin_mark.line_to(Point::new(13.546, 6.272));
+            pin_mark.close_path();
+            let marker = Affine::translate((bounds.center().x - 9.0, bounds.y0 - 14.0)) * Affine::scale(0.75);
+            self.scene.stroke(&Stroke::new(3.2), marker * Affine::translate((0.7, 0.9)),
+                Color::from_rgba8(0, 0, 0, 55), None, &pin_mark);
+            self.scene.stroke(&Stroke::new(2.2), marker, Color::from_rgb8(65, 65, 65), None, &pin_mark);
         }
 
         // Draw preview shape if tool is active
