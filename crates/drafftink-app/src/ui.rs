@@ -1464,8 +1464,8 @@ fn render_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                     }
                 }
                 ui.separator();
-                if ui.add(IconButton::new(include_image!("../assets/add.svg"), "Insérer")
-                    .style(IconButtonStyle::tool()).show(ui)).clicked() {
+                if IconButton::new(include_image!("../assets/add.svg"), "Insérer")
+                    .style(IconButtonStyle::tool()).show(ui) {
                     ui_state.insert_menu_open = !ui_state.insert_menu_open;
                 }
             });
