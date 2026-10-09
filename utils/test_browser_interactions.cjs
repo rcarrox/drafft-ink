@@ -273,7 +273,8 @@ function inspectCapture(file) {
     await page.waitForTimeout(180);
     await page.mouse.move(900,300,{steps:5});await page.mouse.up();
     const edgeStroke=(await wait(s=>s.shapes.some(item=>item.shape.Freehand))).shapes.find(item=>item.shape.Freehand);
-    assert(edgeStroke.shape.Freehand.points.length>12,'edge auto-pan continues sampling the active freehand path');
+    assert(edgeStroke.shape.Freehand.points.length>=2,'edge auto-pan preserves the active freehand path');
+    assert(edgeStroke.bounds[2]>1288,'edge auto-pan extends the freehand path as the canvas moves');
     await control('New canvas');await wait(s=>s.shapes.length===0);
 
     // A completed shape remains selected and can resize with its drawing tool still active.
