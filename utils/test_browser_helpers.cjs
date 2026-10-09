@@ -19,7 +19,7 @@ const sandbox={console,Uint8Array,ArrayBuffer,Promise,Map,Math,Number,Infinity,e
   clearTimeout:id=>timers.delete(id), navigator:{permissions:{query:async()=>({state:'prompt'})}},
   window:{dispatchEvent:()=>wakeups++,queryLocalFonts:async()=>{throw Error('Permission API should not be needed')}},
   fetch:async url=>{requests.push(url);
-    if(url==='cursormouse.svg'||url==='cursortext.svg'||url==='cursormath.svg'||url==='cursoreraser.svg'||url==='cursordraw.svg')return{ok:true,text:async()=>fs.readFileSync(path.join(root,'web',url),'utf8')};
+    if(['cursormouse.svg','cursortext.svg','cursormath.svg','cursoreraser.svg','cursoreraserman.svg','cursorcrosshair.svg','cursordraw.svg'].includes(url))return{ok:true,text:async()=>fs.readFileSync(path.join(root,'web',url),'utf8')};
     if(url==='/local-fonts.json')return{ok:true,json:async()=>catalog};
     if(url==='/local-font/GoogleSans-Medium')return{ok:true,arrayBuffer:async()=>new Uint8Array([0,1,0,0]).buffer};
     return{ok:false};},
@@ -43,11 +43,17 @@ vm.createContext(sandbox);vm.runInContext(helper,sandbox);
   sandbox.window.drafftinkSetCursor(2,'#0080ff');
   assert(decodeURIComponent(canvas.style.cursor).includes('M60 26l12 12'));
   sandbox.window.drafftinkSetCursor(3,'#0080ff');
-  assert(canvas.style.cursor.endsWith('4 18, default'));
-  assert(decodeURIComponent(canvas.style.cursor).includes('M12.48 3'));
+  assert(canvas.style.cursor.endsWith('4 14, default'));
+  assert(decodeURIComponent(canvas.style.cursor).includes('M8.086 2.207'));
   sandbox.window.drafftinkSetCursor(4,'#0080ff');
   assert(canvas.style.cursor.endsWith('3 21, default'));
   assert(decodeURIComponent(canvas.style.cursor).includes('M18.62 1.5'));
+  sandbox.window.drafftinkSetCursor(5,'#0080ff');
+  assert(canvas.style.cursor.endsWith('12 12, crosshair'));
+  assert(decodeURIComponent(canvas.style.cursor).includes('M11 3h2v6'));
+  sandbox.window.drafftinkSetCursor(6,'#0080ff');
+  assert(canvas.style.cursor.endsWith('4 14, default'));
+  assert(decodeURIComponent(canvas.style.cursor).includes('M8.086 2.207'));
   canvas.style.cursor='pointer';sandbox.window.drafftinkSetCursor(0,'#000000',true);assert(canvas.style.cursor.endsWith('6 5, default'));
   const date=new Date(2026,9,8,11,26,45);
   assert.equal(sandbox.window.drafftinkSnapshotFilename('Canvas-x01','png',date),'2026-10-08_112645 Canvas-x01.png');

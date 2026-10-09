@@ -20,7 +20,7 @@ use crate::settings::UserSettings;
 
 // Re-export from widgets crate for consistent styling
 use drafftink_widgets::{
-    ColorGrid, ColorSwatch, ColorSwatchWithWheel, FontSizeButton, IconButton, NoColorSwatch,
+    ColorGrid, ColorSwatch, ColorSwatchWithWheel, FontSizeButton, IconButton, IconButtonStyle, NoColorSwatch,
     StrokeWidthButton, TAILWIND_COLORS, ToggleButton, default_btn, input_text,
     menu_item as widgets_menu_item, menu_item_enabled as widgets_menu_item_enabled,
     menu_separator as widgets_menu_separator, panel_frame as widgets_panel_frame, primary_btn,
@@ -232,6 +232,7 @@ pub enum ColorPopover {
     StrokeFull, // Full color grid for stroke
     FillFull,   // Full color grid for fill
     BgFull,     // Full color grid for background
+    PinnedFull, // Full color grid for pinned-object background
 }
 
 /// Peer info for UI display
@@ -1123,30 +1124,36 @@ fn render_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                     } else {
                         tool.label
                     };
-                    let icon = if tool.kind == ToolKind::Ellipse {
+                    let special_pointer_icon = matches!(tool.kind, ToolKind::Select | ToolKind::Pan);
+                    let icon = if tool.kind == ToolKind::Select && is_selected {
+                        include_image!("../assets/select_active.svg")
+                    } else if tool.kind == ToolKind::Pan && is_selected {
+                        include_image!("../assets/pan_active.svg")
+                    } else if tool.kind == ToolKind::Ellipse {
                         match ui_state.geometry {
-                            drafftink_core::shapes::GeometryKind::Triangle => {
-                                include_image!("../assets/triangle.svg")
-                            }
-                            drafftink_core::shapes::GeometryKind::Parallelogram => {
-                                include_image!("../assets/parallelogram.svg")
-                            }
-                            drafftink_core::shapes::GeometryKind::Trapezoid => {
-                                include_image!("../assets/trapezoid.svg")
-                            }
-                            drafftink_core::shapes::GeometryKind::Diamond => {
-                                include_image!("../assets/diamond.svg")
-                            }
+                            drafftink_core::shapes::GeometryKind::Triangle => include_image!("../assets/triangle.svg"),
+                            drafftink_core::shapes::GeometryKind::Parallelogram => include_image!("../assets/parallelogram.svg"),
+                            drafftink_core::shapes::GeometryKind::Trapezoid => include_image!("../assets/trapezoid.svg"),
+                            drafftink_core::shapes::GeometryKind::Diamond => include_image!("../assets/diamond.svg"),
                             _ => tool.icon.clone(),
                         }
                     } else {
                         tool.icon.clone()
                     };
-                    let response = IconButton::new(icon, label)
-                        .shortcut(ui_state.settings.shortcut_for(tool.kind))
-                        .selected(is_selected && !matches!(tool.kind, ToolKind::Select | ToolKind::Pan))
-                        .tool()
-                        .show_response(ui);
+                    let button = IconButton::new(icon, label)
+                        .shortcut(ui_state.settings.shortcut_for(tool.kind));
+                    let response = if special_pointer_icon {
+                        let mut style = IconButtonStyle::tool();
+                        style.bg_color = Color32::TRANSPARENT;
+                        style.hover_color = Color32::TRANSPARENT;
+                        style.selected_color = Color32::TRANSPARENT;
+                        style.icon_tint = None;
+                        style.selected_icon_tint = None;
+                        style.solid_selected = false;
+                        button.style(style).show_response(ui)
+                    } else {
+                        button.selected(is_selected).tool().show_response(ui)
+                    };
                     ui_state.test_controls.insert(
                         format!("tool_{:?}", tool.kind),
                         [
@@ -1511,32 +1518,6 @@ fn render_properties_panel(ctx: &Context, ui_state: &mut UiState) -> Option<UiAc
     .show(ctx, |ui| {
         panel_frame().show(ui, |ui| {
             panel_grip(ui);
-            if ui_state.selection_count > 0 {
-                ui.horizontal(|ui| {
-                    let title = if ui_state.selection_pinned { "Détacher de l’écran" } else { "Épingler à l’écran" };
-                    if IconButton::new(include_image!("../assets/pin.svg"), title)
-                        .small()
-                        .selected(ui_state.selection_pinned)
-                        .show(ui)
-                    {
-                        action = Some(UiAction::TogglePinned);
-                    }
-                    if ui_state.selection_pinned {
-                        ui.label("Fond");
-                        for color in [Color32::WHITE, Color32::from_rgb(255, 249, 196), Color32::from_rgb(255, 224, 230), Color32::from_rgb(220, 245, 255), Color32::TRANSPARENT] {
-                            let (rect, response) = ui.allocate_exact_size(Vec2::splat(16.0), egui::Sense::click());
-                            ui.painter().rect_filled(rect, 3.0, color);
-                            ui.painter().rect_stroke(rect, 3.0, Stroke::new(1.0, Color32::from_gray(110)), egui::StrokeKind::Inside);
-                            if ui_state.pin_background == color && color != Color32::TRANSPARENT {
-                                ui.painter().circle_filled(rect.center(), 2.0, Color32::from_gray(60));
-                            }
-                            if response.clicked() {
-                                action = Some(UiAction::SetPinnedBackground(color));
-                            }
-                        }
-                    }
-                });
-            }
             if ui_state.current_tool == ToolKind::Eraser {
                 ui.horizontal(|ui| {
                     widgets_section_label(ui, "Eraser");
@@ -1839,6 +1820,7 @@ fn render_right_panel(
     }
 
     let mut action = None;
+    let mut pin_background_rect = Rect::NOTHING;
     let panel_width = 260.0;
     let margin = 12.0;
 
@@ -1873,6 +1855,26 @@ fn render_right_panel(
                     ui.spacing_mut().item_spacing = Vec2::new(0.0, 8.0);
 
                     panel_grip(ui);
+                    if props.has_selection {
+                        ui.horizontal(|ui| {
+                            let title = if ui_state.selection_pinned { "Détacher de l’écran" } else { "Épingler à l’écran" };
+                            if IconButton::new(include_image!("../assets/pin.svg"), title)
+                                .small()
+                                .selected(ui_state.selection_pinned)
+                                .show(ui)
+                            {
+                                action = Some(UiAction::TogglePinned);
+                            }
+                            if ui_state.selection_pinned {
+                                ui.label("Fond épinglé");
+                                let (clicked, rect) = color_swatch_current(ui, ui_state.pin_background, "Couleur de fond épinglé");
+                                pin_background_rect = rect;
+                                if clicked {
+                                    ui_state.color_popover = if ui_state.color_popover == ColorPopover::PinnedFull { ColorPopover::None } else { ColorPopover::PinnedFull };
+                                }
+                            }
+                        });
+                    }
                     // Text-specific properties
                     if props.is_text {
                         let visuals = ui.visuals_mut();
@@ -2444,6 +2446,15 @@ fn render_right_panel(
 
     ui_state.context_rects.push(output.response.rect);
     remember_panel(ui_state, "right_panel", &output.response);
+    if ui_state.color_popover == ColorPopover::PinnedFull {
+        if let Some(color) = ColorGrid::new(ui_state.pin_background, "Pinned Object Background")
+            .below()
+            .show(ctx, pin_background_rect)
+        {
+            action = Some(UiAction::SetPinnedBackground(color));
+            ui_state.color_popover = ColorPopover::None;
+        }
+    }
     action
 }
 

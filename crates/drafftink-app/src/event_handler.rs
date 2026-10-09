@@ -1031,10 +1031,16 @@ impl EventHandler {
 
                     // Now push undo and apply the final changes
                     canvas.document.push_undo();
-                    let translation = kurbo::Affine::translate(delta);
                     for (shape_id, original_shape) in &mm.original_shapes {
                         let mut new_shape = original_shape.clone();
-                        new_shape.transform(translation);
+                        // Pinned shapes store screen pixels while the drag delta is
+                        // in world units. Convert back before committing the move.
+                        let shape_delta = if canvas.document.is_pinned(*shape_id) {
+                            delta * canvas.camera.zoom
+                        } else {
+                            delta
+                        };
+                        new_shape.transform(kurbo::Affine::translate(shape_delta));
                         if let Some(shape) = canvas.document.get_shape_mut(*shape_id) {
                             *shape = new_shape;
                         }

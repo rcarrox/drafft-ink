@@ -171,7 +171,7 @@
             return result;
         };
 
-        const cursorTemplates=Promise.all(['cursormouse.svg','cursortext.svg','cursormath.svg','cursoreraser.svg','cursordraw.svg'].map(name=>fetch(name).then(r=>{
+        const cursorTemplates=Promise.all(['cursormouse.svg','cursortext.svg','cursormath.svg','cursoreraser.svg','cursordraw.svg','cursorcrosshair.svg','cursoreraserman.svg'].map(name=>fetch(name).then(r=>{
             if(!r.ok) throw new Error('Cursor unavailable'); return r.text();
         })));
         let cursorSVG=null, cursorCanvas=null, cursorObserver=null;
@@ -183,7 +183,7 @@
             if(cursorCanvas.style.cursor!==cursorValue) cursorCanvas.style.cursor=cursorValue;
         }
         window.drafftinkSetCursor=function(kind,color,overUi=false) {
-            kind=kind===true?1:Math.max(0,Math.min(4,Number(kind)||0));
+            kind=kind===true?1:Math.max(0,Math.min(6,Number(kind)||0));
             forceUiCursor=overUi;
             const canvas=document.querySelector('canvas');
             if(canvas!==cursorCanvas) {
@@ -197,7 +197,7 @@
             cursorKind=kind; cursorOutline=/^#[0-9a-f]{6}$/i.test(color)?color:'#000000';
             if(cursorSVG && changed) {
                 const svg=cursorKind?cursorSVG[cursorKind]:cursorSVG[0].replaceAll('currentColor',cursorOutline);
-                const hotspot=cursorKind===4?'3 21, default':cursorKind===3?'4 18, default':cursorKind?'14 14, text':'6 5, default';
+                const hotspot=cursorKind===4?'3 21, default':cursorKind===3||cursorKind===6?'4 14, default':cursorKind===5?'12 12, crosshair':cursorKind?'14 14, text':'6 5, default';
                 cursorValue=`url("data:image/svg+xml,${encodeURIComponent(svg)}") ${hotspot}`;
             }
             applyCursor();

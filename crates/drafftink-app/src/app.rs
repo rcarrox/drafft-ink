@@ -8,7 +8,7 @@ use drafftink_core::shapes::Shape;
 use drafftink_core::shapes::ShapeId;
 use drafftink_core::shapes::ShapeTrait;
 use drafftink_core::sync::{AwarenessState, ConnectionState, SyncEvent};
-use drafftink_core::tools::ToolKind;
+use drafftink_core::tools::{EraserMode, ToolKind};
 #[cfg(not(target_arch = "wasm32"))]
 use drafftink_render::PngRenderResult;
 use drafftink_render::{
@@ -3696,6 +3696,12 @@ impl ApplicationHandler for App {
                                 }
                             }
                             UiAction::TogglePinned => {
+                                // Finish active Text editing while the anchor is
+                                // still in its current coordinate space.
+                                if state.event_handler.editing_text.is_some_and(|id| state.canvas.selection.contains(&id)) {
+                                    state.event_handler.exit_text_edit(&mut state.canvas);
+                                    state.text_edit_state = None;
+                                }
                                 toggle_selected_pinning(state);
                             }
                             UiAction::SetPinnedBackground(color) => {
@@ -7933,8 +7939,9 @@ fn browser_cursor_kind(state: &AppState) -> (u8, bool) {
     match state.canvas.tool_manager.current_tool {
         ToolKind::Text => (1, false),
         ToolKind::Math => (2, false),
-        ToolKind::Eraser => (3, false),
+        ToolKind::Eraser => (if state.ui_state.eraser_mode == EraserMode::Manual { 6 } else { 3 }, false),
         ToolKind::Freehand | ToolKind::Highlighter => (4, false),
+        ToolKind::Rectangle | ToolKind::Ellipse | ToolKind::Line | ToolKind::Arrow => (5, false),
         _ => {
             let point = state
                 .canvas

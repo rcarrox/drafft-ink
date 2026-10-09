@@ -3,7 +3,7 @@
     if (!('serviceWorker' in navigator) || !window.isSecureContext) return;
     // Existing canvas diagnostic tests deliberately bypass caching; dedicated offline tests exercise it.
     if (new URLSearchParams(location.search).has('drafftink-test') && !new URLSearchParams(location.search).has('offline-test')) return;
-    let registration, noticeTimer, updateRequested = false, started = false;
+    let registration, noticeTimer, unavailableTimer, cacheErrorDetail, updateRequested = false, started = false;
     let hadController = !!navigator.serviceWorker.controller;
     const notice = document.createElement('div');
     notice.id = 'qraphtinc-offline';
@@ -23,6 +23,8 @@
         notice.appendChild(button);
     };
     const unavailable = detail => {
+        clearTimeout(unavailableTimer);
+        cacheErrorDetail = detail || cacheErrorDetail;
         show('Cache hors connexion indisponible. Envoyez tout le dossier web, puis sw.js en dernier.' + (detail ? ' ' + detail : ''));
         const retry = document.createElement('button');
         retry.textContent = 'Réessayer';
@@ -81,7 +83,9 @@
                     installed = true;
                     if (registration.waiting && navigator.serviceWorker.controller) offerUpdate();
                 }
-                if (worker.state === 'redundant' && !installed) unavailable();
+                if (worker.state === 'redundant' && !installed) {
+                    unavailableTimer = setTimeout(() => unavailable(cacheErrorDetail), 400);
+                }
                 });
             };
             watch(registration.installing);

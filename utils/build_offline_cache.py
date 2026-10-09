@@ -2,7 +2,7 @@
 import argparse, base64, hashlib, json
 from pathlib import Path
 
-FILES = ['qlogo.svg', 'cursoreraser.svg', 'cursordraw.svg', 'index.html', 'offline.js', 'favicon.svg', 'cursormouse.svg', 'cursortext.svg',
+FILES = ['qlogo.svg', 'cursoreraser.svg', 'cursoreraserman.svg', 'cursorcrosshair.svg', 'cursordraw.svg', 'index.html', 'offline.js', 'favicon.svg', 'cursormouse.svg', 'cursortext.svg',
          'cursormath.svg', 'pkg/drafftink_app.js', 'pkg/drafftink_app_bg.wasm']
 
 def build(root):
