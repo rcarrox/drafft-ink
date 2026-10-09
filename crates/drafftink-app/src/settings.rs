@@ -36,6 +36,9 @@ pub struct UserSettings {
     pub cursor_outline: [u8; 3],
     pub laser_color: [u8; 3],
     pub panel_positions: std::collections::BTreeMap<String, [f32; 2]>,
+    /// Tool names hidden from the main vertical toolbar (shortcuts remain active).
+    #[serde(default)]
+    pub hidden_toolbar_tools: Vec<String>,
 }
 
 impl Default for UserSettings {
@@ -71,6 +74,7 @@ impl Default for UserSettings {
             cursor_outline: [0, 0, 0],
             laser_color: [255, 0, 0],
             panel_positions: Default::default(),
+            hidden_toolbar_tools: Vec::new(),
         }
     }
 }
@@ -114,6 +118,21 @@ impl UserSettings {
         }
     }
 
+    pub fn tool_visible_in_toolbar(&self, tool: ToolKind) -> bool {
+        !self
+            .hidden_toolbar_tools
+            .iter()
+            .any(|hidden| hidden == &format!("{:?}", tool))
+    }
+
+    pub fn set_tool_visible_in_toolbar(&mut self, tool: ToolKind, visible: bool) {
+        let name = format!("{:?}", tool);
+        self.hidden_toolbar_tools.retain(|hidden| hidden != &name);
+        if !visible {
+            self.hidden_toolbar_tools.push(name);
+        }
+    }
+
     pub fn tool_for_key(&self, key: &str) -> Option<ToolKind> {
         let key = normalized_key(key);
         if key.is_empty() {
@@ -144,6 +163,24 @@ impl UserSettings {
             2.0
         };
         self.autosave_interval_secs = self.autosave_interval_secs.clamp(1, 3600);
+        self.hidden_toolbar_tools.retain(|hidden| {
+            [
+                ToolKind::Select,
+                ToolKind::Pan,
+                ToolKind::Rectangle,
+                ToolKind::Ellipse,
+                ToolKind::Arrow,
+                ToolKind::Line,
+                ToolKind::Freehand,
+                ToolKind::Highlighter,
+                ToolKind::Eraser,
+                ToolKind::Text,
+                ToolKind::Math,
+                ToolKind::LaserPointer,
+            ]
+            .into_iter()
+            .any(|tool| format!("{:?}", tool) == *hidden)
+        });
 
         // Migrate the 0.4.x defaults to the new 0.5.x layout without
         // overwriting users who already customized any of these keys.
@@ -228,6 +265,17 @@ mod tests {
         let mut settings = UserSettings::default();
         settings.shortcut_draw = "q".into();
         assert_eq!(settings.tool_for_key("Q"), Some(ToolKind::Freehand));
+    }
+
+    #[test]
+    fn toolbar_visibility_preferences_round_trip_and_keep_shortcuts_available() {
+        let mut settings = UserSettings::default();
+        settings.set_tool_visible_in_toolbar(ToolKind::Highlighter, false);
+        let restored: UserSettings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert!(!restored.tool_visible_in_toolbar(ToolKind::Highlighter));
+        assert_eq!(restored.tool_for_key("k"), Some(ToolKind::Highlighter));
+        assert!(restored.tool_visible_in_toolbar(ToolKind::Freehand));
     }
 }
 

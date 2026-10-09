@@ -3433,6 +3433,17 @@ impl ApplicationHandler for App {
                 // Sync current style to tool manager for preview shapes.
                 // Geometric tools always start in Architect mode.
                 let mut tool_style = state.ui_state.to_shape_style();
+                // Highlighter strokes are stored as freehand paths with the
+                // highlighter's widened, 50%-alpha style. Do not feed that
+                // derived style back into the regular pen, even when a selected
+                // non-highlighter object comes first in a multi-selection.
+                if state.canvas.tool_manager.current_tool == ToolKind::Freehand
+                    && tool_style.stroke_color.a == 128
+                    && tool_style.stroke_width >= 12.0
+                {
+                    tool_style.stroke_width = 2.0;
+                    tool_style.stroke_color.a = 255;
+                }
                 if matches!(
                     state.canvas.tool_manager.current_tool,
                     ToolKind::Rectangle | ToolKind::Ellipse | ToolKind::Line | ToolKind::Arrow
@@ -3605,8 +3616,22 @@ impl ApplicationHandler for App {
                                     }
                                 }
 
+                                let previous_tool = state.canvas.tool_manager.current_tool;
                                 state.canvas.set_tool(tool);
                                 state.ui_state.current_tool = tool;
+                                if tool == ToolKind::Freehand
+                                    && previous_tool == ToolKind::Highlighter
+                                {
+                                    state.ui_state.stroke_width = 2.0;
+                                    state.ui_state.stroke_color = egui::Color32::from_rgba_unmultiplied(
+                                        state.ui_state.stroke_color.r(),
+                                        state.ui_state.stroke_color.g(),
+                                        state.ui_state.stroke_color.b(),
+                                        255,
+                                    );
+                                    state.canvas.tool_manager.current_style =
+                                        state.ui_state.to_shape_style();
+                                }
                                 if matches!(
                                     tool,
                                     ToolKind::Rectangle
@@ -5101,12 +5126,17 @@ impl ApplicationHandler for App {
                                 let (scene, bounds) = if state.canvas.selection.is_empty() {
                                     state
                                         .shape_renderer
-                                        .build_export_scene(&state.canvas.document, export_scale)
+                                        .build_export_scene_with_pins(
+                                            &state.canvas.document,
+                                            export_scale,
+                                            Some(state.canvas.camera.transform().inverse()),
+                                        )
                                 } else {
-                                    state.shape_renderer.build_export_scene_selection(
+                                    state.shape_renderer.build_export_scene_selection_with_pins(
                                         &state.canvas.document,
                                         &state.canvas.selection,
                                         export_scale,
+                                        Some(state.canvas.camera.transform().inverse()),
                                     )
                                 };
                                 if let Some(bounds) = bounds {
@@ -5173,12 +5203,17 @@ impl ApplicationHandler for App {
                                 let (scene, bounds) = if state.canvas.selection.is_empty() {
                                     state
                                         .shape_renderer
-                                        .build_export_scene(&state.canvas.document, export_scale)
+                                        .build_export_scene_with_pins(
+                                            &state.canvas.document,
+                                            export_scale,
+                                            Some(state.canvas.camera.transform().inverse()),
+                                        )
                                 } else {
-                                    state.shape_renderer.build_export_scene_selection(
+                                    state.shape_renderer.build_export_scene_selection_with_pins(
                                         &state.canvas.document,
                                         &state.canvas.selection,
                                         export_scale,
+                                        Some(state.canvas.camera.transform().inverse()),
                                     )
                                 };
 
@@ -6003,7 +6038,14 @@ impl ApplicationHandler for App {
                             }
 
                             let world_point = state.canvas.camera.screen_to_world(position);
-                            let current_style = state.ui_state.to_shape_style();
+                            let mut current_style = state.ui_state.to_shape_style();
+                            if state.canvas.tool_manager.current_tool == ToolKind::Freehand
+                                && current_style.stroke_color.a == 128
+                                && current_style.stroke_width >= 12.0
+                            {
+                                current_style.stroke_width = 2.0;
+                                current_style.stroke_color.a = 255;
+                            }
                             state.event_handler.handle_release(
                                 &mut state.canvas,
                                 world_point,
@@ -6177,7 +6219,14 @@ impl ApplicationHandler for App {
                                 );
                             }
                             TouchPhase::Ended => {
-                                let current_style = state.ui_state.to_shape_style();
+                                let mut current_style = state.ui_state.to_shape_style();
+                                if state.canvas.tool_manager.current_tool == ToolKind::Freehand
+                                    && current_style.stroke_color.a == 128
+                                    && current_style.stroke_width >= 12.0
+                                {
+                                    current_style.stroke_width = 2.0;
+                                    current_style.stroke_color.a = 255;
+                                }
                                 state.event_handler.handle_release(
                                     &mut state.canvas,
                                     world_point,
@@ -6235,6 +6284,32 @@ impl ApplicationHandler for App {
                 state.window.request_redraw();
             }
             WindowEvent::KeyboardInput { event, .. } => {
+                // A selection nudge belongs to the canvas and must be handled
+                // before egui's focus guard consumes Ctrl+vertical arrows.
+                if event.state == ElementState::Pressed
+                    && state.input.ctrl()
+                    && state.event_handler.editing_text.is_none()
+                    && state.ui_state.math_editor.is_none()
+                    && !state.ui_state.settings_open
+                    && !state.ui_state.shortcuts_modal_open
+                    && !egui_wants_input
+                    && !state.canvas.selection.is_empty()
+                {
+                    let arrow = match event.physical_key {
+                        PhysicalKey::Code(KeyCode::ArrowUp) => Some("ArrowUp"),
+                        PhysicalKey::Code(KeyCode::ArrowDown) => Some("ArrowDown"),
+                        PhysicalKey::Code(KeyCode::ArrowLeft) => Some("ArrowLeft"),
+                        PhysicalKey::Code(KeyCode::ArrowRight) => Some("ArrowRight"),
+                        _ => None,
+                    };
+                    if let Some(arrow) = arrow {
+                        move_selection_by_key(state, arrow, event.repeat, true);
+                        state.needs_redraw = true;
+                        state.window.request_redraw();
+                        return;
+                    }
+                }
+
                 // Skip canvas processing if egui wants keyboard
                 if egui_wants_input {
                     state.needs_redraw = true;
@@ -6617,15 +6692,17 @@ impl ApplicationHandler for App {
                                         let export_scale = state.ui_state.export_scale as f64;
 
                                         let (scene, bounds) = if state.canvas.selection.is_empty() {
-                                            state.shape_renderer.build_export_scene(
+                                            state.shape_renderer.build_export_scene_with_pins(
                                                 &state.canvas.document,
                                                 export_scale,
+                                                Some(state.canvas.camera.transform().inverse()),
                                             )
                                         } else {
-                                            state.shape_renderer.build_export_scene_selection(
+                                            state.shape_renderer.build_export_scene_selection_with_pins(
                                                 &state.canvas.document,
                                                 &state.canvas.selection,
                                                 export_scale,
+                                                Some(state.canvas.camera.transform().inverse()),
                                             )
                                         };
 
@@ -6687,15 +6764,17 @@ impl ApplicationHandler for App {
                                         let export_scale = state.ui_state.export_scale as f64;
 
                                         let (scene, bounds) = if state.canvas.selection.is_empty() {
-                                            state.shape_renderer.build_export_scene(
+                                            state.shape_renderer.build_export_scene_with_pins(
                                                 &state.canvas.document,
                                                 export_scale,
+                                                Some(state.canvas.camera.transform().inverse()),
                                             )
                                         } else {
-                                            state.shape_renderer.build_export_scene_selection(
+                                            state.shape_renderer.build_export_scene_selection_with_pins(
                                                 &state.canvas.document,
                                                 &state.canvas.selection,
                                                 export_scale,
+                                                Some(state.canvas.camera.transform().inverse()),
                                             )
                                         };
                                         if let Some(bounds) = bounds {
@@ -6816,15 +6895,17 @@ impl ApplicationHandler for App {
                                         let export_scale = state.ui_state.export_scale as f64;
 
                                         let (scene, bounds) = if state.canvas.selection.is_empty() {
-                                            state.shape_renderer.build_export_scene(
+                                            state.shape_renderer.build_export_scene_with_pins(
                                                 &state.canvas.document,
                                                 export_scale,
+                                                Some(state.canvas.camera.transform().inverse()),
                                             )
                                         } else {
-                                            state.shape_renderer.build_export_scene_selection(
+                                            state.shape_renderer.build_export_scene_selection_with_pins(
                                                 &state.canvas.document,
                                                 &state.canvas.selection,
                                                 export_scale,
+                                                Some(state.canvas.camera.transform().inverse()),
                                             )
                                         };
 
@@ -7691,6 +7772,13 @@ fn save_canvas_png(state: &mut AppState, render_cx: &vello::util::RenderContext,
     use std::hash::{Hash, Hasher};
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     json.hash(&mut hash);
+    if !state.canvas.document.pinned_shapes.is_empty() {
+        // An automatic screenshot is also changed when the camera moves,
+        // because pinned shapes are flattened at their current view position.
+        state.canvas.camera.offset.x.to_bits().hash(&mut hash);
+        state.canvas.camera.offset.y.to_bits().hash(&mut hash);
+        state.canvas.camera.zoom.to_bits().hash(&mut hash);
+    }
     let signature = hash.finish();
     if automatic && state.last_png_signature == signature {
         return;
@@ -7698,7 +7786,11 @@ fn save_canvas_png(state: &mut AppState, render_cx: &vello::util::RenderContext,
     state.png_save_requests += 1;
     let (scene, bounds) = state
         .shape_renderer
-        .build_export_scene(&state.canvas.document, state.ui_state.export_scale as f64);
+        .build_export_scene_with_pins(
+            &state.canvas.document,
+            state.ui_state.export_scale as f64,
+            Some(state.canvas.camera.transform().inverse()),
+        );
     let Some(bounds) = bounds else {
         return;
     };
