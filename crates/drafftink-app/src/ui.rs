@@ -971,20 +971,6 @@ fn render_tab_bar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                         action = Some(UiAction::NewCanvas);
                     }
 
-                    let load = egui::Button::new(
-                        egui::RichText::new("+ Library")
-                            .size(12.0)
-                            .color(Color32::from_gray(90)),
-                    )
-                    .fill(Color32::TRANSPARENT)
-                    .corner_radius(egui::CornerRadius::same(4));
-                    if ui
-                        .add(load)
-                        .on_hover_text("Load an Excalidraw library (.excalidrawlib) as a new tab")
-                        .clicked()
-                    {
-                        action = Some(UiAction::LoadLibrary);
-                    }
                 });
             });
         });
@@ -1003,7 +989,7 @@ fn floating_area(_ctx: &Context, state: &UiState, id: &str, default: Pos2) -> eg
     // Without these hints, a small tool panel starts as 600x400 and both moves
     // other panels and expands its drag grip to the full available width.
     let size = match id {
-        "toolbar" => Vec2::new(50.0, 440.0),
+        "toolbar" => Vec2::new(58.0, 530.0),
         "right_panel" => Vec2::new(260.0, 400.0),
         "bottom_toolbar" => Vec2::new(440.0, 38.0),
         "properties" => Vec2::new(340.0, 112.0),
@@ -1109,7 +1095,7 @@ fn render_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
         ctx,
         ui_state,
         "toolbar",
-        Pos2::new(12.0, (screen.height() - 440.0).max(24.0) / 2.0),
+        Pos2::new(12.0, (screen.height() - 530.0).max(24.0) / 2.0),
     )
     .show(ctx, |ui| {
         panel_frame().show(ui, |ui| {
@@ -1118,6 +1104,9 @@ fn render_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                 ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
 
                 for tool in &tools {
+                    if !ui_state.settings.tool_visible_in_toolbar(tool.kind) {
+                        continue;
+                    }
                     let is_selected = ui_state.current_tool == tool.kind;
                     let label = if tool.kind == ToolKind::Ellipse {
                         ui_state.geometry.label()
@@ -1125,11 +1114,7 @@ fn render_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                         tool.label
                     };
                     let special_pointer_icon = matches!(tool.kind, ToolKind::Select | ToolKind::Pan);
-                    let icon = if tool.kind == ToolKind::Select && is_selected {
-                        include_image!("../assets/select_active.svg")
-                    } else if tool.kind == ToolKind::Pan && is_selected {
-                        include_image!("../assets/pan_active.svg")
-                    } else if tool.kind == ToolKind::Ellipse {
+                    let icon = if tool.kind == ToolKind::Ellipse {
                         match ui_state.geometry {
                             drafftink_core::shapes::GeometryKind::Triangle => include_image!("../assets/triangle.svg"),
                             drafftink_core::shapes::GeometryKind::Parallelogram => include_image!("../assets/parallelogram.svg"),
@@ -1142,18 +1127,16 @@ fn render_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                     };
                     let button = IconButton::new(icon, label)
                         .shortcut(ui_state.settings.shortcut_for(tool.kind));
-                    let response = if special_pointer_icon {
-                        let mut style = IconButtonStyle::tool();
-                        style.bg_color = Color32::TRANSPARENT;
-                        style.hover_color = Color32::TRANSPARENT;
-                        style.selected_color = Color32::TRANSPARENT;
+                    let mut style = IconButtonStyle::tool();
+                    style.size = Vec2::splat(40.0);
+                    style.icon_size = Vec2::splat(24.0);
+                    if special_pointer_icon {
+                        // Keep the supplied white interior/black outline SVG intact,
+                        // while using the same hover and selected backgrounds as all tools.
                         style.icon_tint = None;
                         style.selected_icon_tint = None;
-                        style.solid_selected = false;
-                        button.style(style).show_response(ui)
-                    } else {
-                        button.selected(is_selected).tool().show_response(ui)
-                    };
+                    }
+                    let response = button.style(style).selected(is_selected).show_response(ui);
                     ui_state.test_controls.insert(
                         format!("tool_{:?}", tool.kind),
                         [
@@ -2541,6 +2524,11 @@ fn render_file_menu(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                             ui_state.menu_open = false;
                         }
 
+                        if menu_item(ui, "Import Library...", "") {
+                            action = Some(UiAction::LoadLibrary);
+                            ui_state.menu_open = false;
+                        }
+
                         widgets_menu_separator(ui);
 
                         if menu_item(ui, "Export PNG", "Ctrl+E") {
@@ -2606,7 +2594,7 @@ fn render_file_menu(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
             let buttons_rect = Rect::from_min_size(Pos2::new(12.0, 12.0), Vec2::new(48.0, 48.0));
             let menu_rect = Rect::from_min_size(
                 Pos2::new(12.0, 56.0),
-                Vec2::new(180.0, 250.0), // Shorter now without collaboration section
+                Vec2::new(180.0, 280.0), // Includes the library import item.
             );
             if let Some(pos) = ctx.input(|i| i.pointer.interact_pos()) {
                 if !buttons_rect.contains(pos) && !menu_rect.contains(pos) {
@@ -3689,6 +3677,17 @@ fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAct
                                     ui.end_row();
                                 }
                             });
+
+                        ui.add_space(14.0);
+                        widgets_section_label(ui, "Outils visibles — barre verticale");
+                        ui.horizontal_wrapped(|ui| {
+                            for (label, tool) in tools {
+                                let mut visible = ui_state.settings.tool_visible_in_toolbar(tool);
+                                if ui.checkbox(&mut visible, label).changed() {
+                                    ui_state.settings.set_tool_visible_in_toolbar(tool, visible);
+                                }
+                            }
+                        });
 
                         ui.add_space(14.0);
                         ui.checkbox(&mut ui_state.settings.hide_properties, "Masquer Properties (clic droit sur un objet ; Stroke reste visible)");

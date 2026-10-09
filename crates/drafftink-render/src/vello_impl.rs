@@ -93,6 +93,22 @@ pub struct VelloRenderer {
 
 const IMAGE_CACHE_BUDGET: usize = 32 * 1024 * 1024;
 const MAX_PREVIEW_SIDE: u32 = 2048;
+
+fn transformed_rect(rect: Rect, transform: Affine) -> Rect {
+    let corners = [
+        transform * Point::new(rect.x0, rect.y0),
+        transform * Point::new(rect.x1, rect.y0),
+        transform * Point::new(rect.x1, rect.y1),
+        transform * Point::new(rect.x0, rect.y1),
+    ];
+    let (x0, x1) = corners.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), p| {
+        (min.min(p.x), max.max(p.x))
+    });
+    let (y0, y1) = corners.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), p| {
+        (min.min(p.y), max.max(p.y))
+    });
+    Rect::new(x0, y0, x1, y1)
+}
 const PATH_CACHE_BUDGET: usize = 4 * 1024 * 1024;
 struct CachedPath {
     path: BezPath,
@@ -608,11 +624,34 @@ impl VelloRenderer {
         document: &drafftink_core::canvas::CanvasDocument,
         scale: f64,
     ) -> (Scene, Option<Rect>) {
+        self.build_export_scene_with_pins(document, scale, None)
+    }
+
+    /// Build an export scene with viewport-pinned objects mapped to the world
+    /// position they occupy in the current view. `screen_to_world` is the
+    /// inverse camera transform captured at the moment of export.
+    pub fn build_export_scene_with_pins(
+        &mut self,
+        document: &drafftink_core::canvas::CanvasDocument,
+        scale: f64,
+        screen_to_world: Option<Affine>,
+    ) -> (Scene, Option<Rect>) {
         self.scene.reset();
         self.full_resolution_images = true;
         self.zoom = scale;
 
-        let bounds = document.bounds();
+        let mut bounds = document.bounds();
+        if let Some(screen_to_world) = screen_to_world {
+            for shape in document.shapes_ordered() {
+                if !document.is_pinned(shape.id()) {
+                    continue;
+                }
+                let rotation = Affine::rotate_about(shape.rotation(), shape.bounds().center());
+                let screen_bounds = shape.bounds().inflate(4.0, 4.0);
+                let world_bounds = transformed_rect(screen_bounds, screen_to_world * rotation);
+                bounds = Some(bounds.map_or(world_bounds, |current| current.union(world_bounds)));
+            }
+        }
 
         // If no shapes, return empty scene
         if bounds.is_none() {
@@ -646,7 +685,21 @@ impl VelloRenderer {
 
         // Render all shapes with scaled transform
         for shape in document.shapes_ordered() {
-            self.render_shape(shape, transform, false);
+            if document.is_pinned(shape.id()) {
+                let Some(screen_to_world) = screen_to_world else { continue };
+                let rotation = Affine::rotate_about(shape.rotation(), shape.bounds().center());
+                let background = shape.bounds().inflate(4.0, 4.0).to_path(0.1);
+                let background_transform = transform * screen_to_world * rotation;
+                if let Some(pin) = document.pinned_shapes.get(&shape.id()) {
+                    let bg = Color::from(pin.background);
+                    if bg.to_rgba8().a > 0 {
+                        self.scene.fill(Fill::NonZero, background_transform, bg, None, &background);
+                    }
+                }
+                self.render_shape(shape, transform * screen_to_world, false);
+            } else {
+                self.render_shape(shape, transform, false);
+            }
         }
 
         // Return scaled bounds for texture dimensions
@@ -666,6 +719,18 @@ impl VelloRenderer {
         selection: &[drafftink_core::shapes::ShapeId],
         scale: f64,
     ) -> (Scene, Option<Rect>) {
+        self.build_export_scene_selection_with_pins(document, selection, scale, None)
+    }
+
+    /// Selection export equivalent that includes pinned objects at their
+    /// current viewport position and preserves their rotated backgrounds.
+    pub fn build_export_scene_selection_with_pins(
+        &mut self,
+        document: &drafftink_core::canvas::CanvasDocument,
+        selection: &[drafftink_core::shapes::ShapeId],
+        scale: f64,
+        screen_to_world: Option<Affine>,
+    ) -> (Scene, Option<Rect>) {
         self.scene.reset();
         self.full_resolution_images = true;
         self.zoom = scale;
@@ -684,12 +749,21 @@ impl VelloRenderer {
         let mut shapes_to_render = Vec::new();
         for &shape_id in selection {
             if let Some(shape) = document.get_shape(shape_id) {
-                let b = shape.bounds();
+                let pinned = document.is_pinned(shape_id);
+                if pinned && screen_to_world.is_none() {
+                    continue;
+                }
+                let placement = if pinned { screen_to_world.unwrap() } else { Affine::IDENTITY };
+                let rotation = Affine::rotate_about(shape.rotation(), shape.bounds().center());
+                let mut b = transformed_rect(shape.bounds(), placement * rotation);
+                if pinned {
+                    b = transformed_rect(shape.bounds().inflate(4.0, 4.0), placement * rotation);
+                }
                 min_x = min_x.min(b.x0);
                 min_y = min_y.min(b.y0);
                 max_x = max_x.max(b.x1);
                 max_y = max_y.max(b.y1);
-                shapes_to_render.push(shape);
+                shapes_to_render.push((shape, pinned, placement, rotation));
             }
         }
 
@@ -723,8 +797,19 @@ impl VelloRenderer {
         );
 
         // Render selected shapes with scaled transform
-        for shape in shapes_to_render {
-            self.render_shape(shape, transform, false);
+        for (shape, pinned, placement, rotation) in shapes_to_render {
+            if pinned {
+                if let Some(pin) = document.pinned_shapes.get(&shape.id()) {
+                    let bg = Color::from(pin.background);
+                    if bg.to_rgba8().a > 0 {
+                        let background = shape.bounds().inflate(4.0, 4.0).to_path(0.1);
+                        self.scene.fill(Fill::NonZero, transform * placement * rotation, bg, None, &background);
+                    }
+                }
+                self.render_shape(shape, transform * placement, false);
+            } else {
+                self.render_shape(shape, transform, false);
+            }
         }
 
         // Return scaled bounds for texture dimensions
@@ -2359,6 +2444,8 @@ impl Renderer for VelloRenderer {
             let bounds = shape.bounds().inflate(4.0, 4.0);
             let bg = Color::from(pin.background);
             if bg.to_rgba8().a > 0 {
+                let background_transform =
+                    Affine::rotate_about(shape.rotation(), shape.bounds().center());
                 let mut background_path = BezPath::new();
                 background_path.move_to(Point::new(bounds.x0, bounds.y0));
                 background_path.line_to(Point::new(bounds.x1, bounds.y0));
@@ -2367,7 +2454,7 @@ impl Renderer for VelloRenderer {
                 background_path.close_path();
                 self.scene.fill(
                     Fill::NonZero,
-                    Affine::IDENTITY,
+                    background_transform,
                     bg,
                     None,
                     &background_path,
@@ -3304,6 +3391,36 @@ mod tests {
 
         let ctx = RenderContext::new(&canvas, kurbo::Size::new(800.0, 600.0));
         renderer.build_scene(&ctx);
+    }
+
+    #[test]
+    fn export_includes_pinned_shapes_at_the_camera_position_at_capture_time() {
+        use drafftink_core::canvas::{Canvas, PinnedShape};
+        use drafftink_core::shapes::SerializableColor;
+
+        let mut canvas = Canvas::new();
+        let mut rectangle = Rectangle::new(Point::new(200.0, 120.0), 50.0, 30.0);
+        rectangle.rotation = std::f64::consts::FRAC_PI_4;
+        let id = rectangle.id();
+        canvas.document.add_shape(Shape::Rectangle(rectangle));
+        canvas.document.pinned_shapes.insert(
+            id,
+            PinnedShape {
+                background: SerializableColor::new(190, 220, 250, 255),
+            },
+        );
+
+        // Camera screen->world transform for a 0.5 zoom and non-zero pan.
+        let screen_to_world = Affine::translate((-120.0, -60.0)) * Affine::scale(2.0);
+        let mut renderer = VelloRenderer::new();
+        let (_, bounds) =
+            renderer.build_export_scene_with_pins(&canvas.document, 1.0, Some(screen_to_world));
+        let bounds = bounds.expect("a pinned-only canvas should export");
+        assert!(bounds.width() > 150.0, "pinned screen position/scale must affect export bounds");
+        assert!(bounds.height() > 130.0, "rotated pinned background must affect export bounds");
+
+        let (_, without_capture_transform) = renderer.build_export_scene(&canvas.document, 1.0);
+        assert!(without_capture_transform.is_none(), "the default exporter must not guess a viewport position");
     }
 }
 

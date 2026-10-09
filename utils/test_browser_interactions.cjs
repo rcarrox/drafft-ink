@@ -164,6 +164,11 @@ function inspectCapture(file) {
     assert(Math.abs(nudged.shapes[0].bounds[1]-topBeforeNudge-33.6)<2,'Ctrl+ArrowDown should nudge the selection vertically by the normal fast step');
     await page.keyboard.press('Control+ArrowUp');
     await wait(s=>Math.abs(s.shapes[0].bounds[1]-topBeforeNudge)<1);
+    await page.keyboard.press('Control+ArrowUp');
+    const movedUp=await wait(s=>s.shapes[0].bounds[1]<topBeforeNudge-20);
+    assert(Math.abs(movedUp.shapes[0].bounds[1]-topBeforeNudge+33.6)<2,'Ctrl+ArrowUp should nudge upward by the same fast step');
+    await page.keyboard.press('Control+ArrowDown');
+    await wait(s=>Math.abs(s.shapes[0].bounds[1]-topBeforeNudge)<1);
     await page.mouse.move(780,460);await page.keyboard.press('r');await wait(s=>s.tool==='Rectangle');
     await page.mouse.down();await page.mouse.move(900,540,{steps:5});await page.mouse.up();await wait(s=>s.shapes.length===2&&s.selected_count===1);
     await page.keyboard.press('s');await wait(s=>s.tool==='Select');
@@ -185,6 +190,14 @@ function inspectCapture(file) {
     await page.keyboard.press('Control+l');await wait(s=>s.shapes.every(shape=>!shape.pinned));
     await snapshot(page,'accent-selection.png');
     await page.mouse.move(700,500);await page.waitForTimeout(100);await control('tool_Ellipse');await wait(s=>s.tool==='Ellipse');
+    await control('tool_Highlighter');await wait(s=>s.tool==='Highlighter');
+    await page.mouse.move(600,590);await page.mouse.down();await page.mouse.move(680,610,{steps:6});await page.mouse.up();
+    const highlighter=await wait(s=>s.shapes.find(item=>item.shape.Freehand?.style.stroke_color.a===128));
+    assert(highlighter.shape.Freehand.style.stroke_width>=12,'highlighter keeps its widened translucent stroke');
+    await control('tool_Freehand');await wait(s=>s.tool==='Freehand');
+    await page.mouse.move(600,650);await page.mouse.down();await page.mouse.move(680,670,{steps:6});await page.mouse.up();
+    const normalDraw=await wait(s=>s.shapes.find(item=>item.id!==highlighter.id&&item.shape.Freehand?.style.stroke_color.a===255));
+    assert.equal(normalDraw.shape.Freehand.style.stroke_width,2,'Draw returns to its normal width after Highlighter');
     await captureContext.close();
     // Math form pointer bounds use egui points, even on a scaled display.
     const dpiContext=await browser.newContext({viewport:{width:1280,height:720},deviceScaleFactor:2});

@@ -91,7 +91,7 @@ jobs:
           cp README_LOCAL_FR.md dist/windows-portable/
           cp README_WEB_FR.md dist/windows-portable/
           rm -f dist/windows-portable/web/sw.template.js
-          (cd dist/windows-portable && zip -qr ../DrafftInk_Windows_Portable_0.21.1.zip .)
+          (cd dist/windows-portable && zip -qr ../DrafftInk_Windows_Portable_0.22.0.zip .)
 
       - name: Assemble web package
         shell: bash
@@ -101,28 +101,28 @@ jobs:
           cp -a web/. dist/web/
           cp README_WEB_FR.md dist/web/
           rm -f dist/web/sw.template.js
-          (cd dist/web && zip -qr ../DrafftInk_Web_0.21.1.zip .)
+          (cd dist/web && zip -qr ../DrafftInk_Web_0.22.0.zip .)
 
       - name: Upload Windows portable ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: DrafftInk-Windows-Portable-0.21.1
-          path: dist/DrafftInk_Windows_Portable_0.21.1.zip
+          name: DrafftInk-Windows-Portable-0.22.0
+          path: dist/DrafftInk_Windows_Portable_0.22.0.zip
           if-no-files-found: error
           retention-days: 30
 
       - name: Upload web ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: DrafftInk-Web-0.21.1
-          path: dist/DrafftInk_Web_0.21.1.zip
+          name: DrafftInk-Web-0.22.0
+          path: dist/DrafftInk_Web_0.22.0.zip
           if-no-files-found: error
           retention-days: 30
 
       - name: Upload combined Local and FTP ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: Qurso-Local-et-FTP-0.21.1
-          path: dist/DrafftInk_Windows_Portable_0.21.1.zip
+          name: Qurso-Local-et-FTP-0.22.0
+          path: dist/DrafftInk_Windows_Portable_0.22.0.zip
           if-no-files-found: error
           retention-days: 30
