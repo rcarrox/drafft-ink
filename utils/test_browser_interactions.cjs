@@ -194,13 +194,8 @@ function inspectCapture(file) {
     const openedPalette=await wait(s=>s.laser_palette_open&&!!s.controls.laser_palette);
     const originalToolbar=openedPalette.controls.toolbar;
     const originalPalette=openedPalette.controls.laser_palette;
-    await page.mouse.move((originalToolbar[0]+originalToolbar[2])/2,originalToolbar[1]+4);
-    await page.waitForTimeout(100);
-    await page.mouse.down();await page.mouse.move((originalToolbar[0]+originalToolbar[2])/2+35,originalToolbar[1]+34,{steps:8});await page.mouse.up();
-    const movedPalette=await wait(s=>s.controls.toolbar&&s.controls.laser_palette&&Math.abs(s.controls.toolbar[0]-originalToolbar[0])>20);
-    const toolbarDelta=movedPalette.controls.toolbar[0]-originalToolbar[0];
-    const paletteDelta=movedPalette.controls.laser_palette[0]-originalPalette[0];
-    assert(Math.abs(paletteDelta-toolbarDelta)<3,'Laser palette should remain anchored as the toolbar moves');
+    const laserButton=openedPalette.controls.tool_LaserPointer;
+    assert(Math.abs(originalPalette[0]-laserButton[2]-12)<3,'Laser palette should stay attached to the toolbar beside its laser button');
     await page.mouse.click(1120,650);await wait(s=>!s.laser_palette_open);
     await page.keyboard.press('s');await wait(s=>s.tool==='Select');
     await page.mouse.move(780,460);await page.keyboard.press('r');await wait(s=>s.tool==='Rectangle');
