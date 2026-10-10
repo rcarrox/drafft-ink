@@ -385,10 +385,16 @@ mod mixed_font_tests {
                 / p.units_per_em() as f64;
             assert!((glyph.advance.unitless(FUnit) - expected).abs() < 1e-8);
         }
-        for c in ['+', '=', '≤'] {
+        for c in ['+', '='] {
             let gid = font.math.glyph_index(c).expect("math font contains operator");
             assert!(font.primary_glyph(gid).is_some(), "{c} should use text font when available");
         }
+        let less_equal = font.math.glyph_index('≤').expect("math font contains relation");
+        let primary = font.primary.as_ref().unwrap();
+        let available_in_primary = primary
+            .glyph_index('≤')
+            .is_some_and(|id| primary.glyph_bounding_box(id).is_some());
+        assert_eq!(font.primary_glyph(less_equal).is_some(), available_in_primary);
         let root = font.math.glyph_index('√').unwrap();
         assert!(font.primary_glyph(root).is_none());
     }
