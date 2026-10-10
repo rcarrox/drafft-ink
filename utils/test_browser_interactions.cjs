@@ -493,6 +493,7 @@ function inspectCapture(file) {
     timeRect=timeState.controls[timeWidgetKey];
     const resizeHandle=timeState.controls[timeResizeKey];
     await page.mouse.move((resizeHandle[0]+resizeHandle[2])/2,(resizeHandle[1]+resizeHandle[3])/2);
+    await page.waitForTimeout(100);
     await page.mouse.down();await page.mouse.move(resizeHandle[2]+35,resizeHandle[3]+24,{steps:6});await page.mouse.up();
     const resizedTime=await wait(s=>s.controls[timeWidgetKey]&&s.controls[timeWidgetKey][2]>timeRect[2]+20);
     timeRect=resizedTime.controls[timeWidgetKey];
