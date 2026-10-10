@@ -1231,6 +1231,7 @@ fn render_stopwatch(ctx: &Context, state: &mut UiState) {
         widget.position = area.response.rect.min;
         let rect_values = |rect: Rect| [rect.min.x, rect.min.y, rect.max.x, rect.max.y];
         state.test_controls.insert(format!("Time widget {}", widget.id), rect_values(area.response.rect));
+        state.test_controls.insert(format!("Time widget size {}", widget.id), [widget.position.x, widget.position.y, widget.position.x + widget.size.x, widget.position.y + widget.size.y]);
         if let Some(rect) = settings_rect { state.test_controls.insert(format!("Time options {}", widget.id), rect_values(rect)); }
         if let Some(rect) = close_rect { state.test_controls.insert(format!("Time close {}", widget.id), rect_values(rect)); }
         if widget.selected {
