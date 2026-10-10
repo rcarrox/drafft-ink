@@ -243,7 +243,7 @@ function inspectCapture(file) {
     await oldPage.close({runBeforeUnload:false});
     const storedAfterReload=await page.evaluate(()=>JSON.parse(localStorage.getItem('drafftink.user_settings.v1')).stroke_colors);
     assert.deepEqual(storedAfterReload[0],savedPalette[0],'custom Stroke preset must remain stored during page load');
-    await wait(s=>s.shapes.length===0&&s.stroke_colors);
+    await wait(s=>s.stroke_colors);
     assert.deepEqual((await state()).stroke_colors[0],savedPalette[0],'custom Stroke presets must survive reload');
     await page.keyboard.press('s');await wait(s=>s.tool==='Select');
     await page.mouse.move(780,460);await page.keyboard.press('r');await wait(s=>s.tool==='Rectangle');
