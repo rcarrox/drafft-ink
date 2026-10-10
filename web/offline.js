@@ -1,12 +1,18 @@
 /* Offline app shell only. Documents/fonts remain in their existing local stores. */
 // PDF.js stays unloaded until the user explicitly imports a PDF.
 let qursoPdfModule;
+window.qursoClockNow = timeZone => {
+    const options = {year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'};
+    if (timeZone && timeZone !== 'Local') options.timeZone = timeZone;
+    const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', options).formatToParts(new Date()).map(({type, value}) => [type, value]));
+    return `${parts.year}-${parts.month}-${parts.day}|${parts.hour}:${parts.minute}:${parts.second}`;
+};
 window.drafftinkPdfPages = async file => {
     window.drafftinkPdfPagesTruncated = false;
     qursoPdfModule ||= import('./pdfjs/pdf.min.js');
     const pdfjs = await qursoPdfModule;
-    pdfjs.GlobalWorkerOptions.workerSrc = new URL('./pdfjs/pdf.worker.min.js', location.href).href;
-    const pdf = await pdfjs.getDocument({data: new Uint8Array(await file.arrayBuffer()), useSystemFonts: true}).promise;
+    pdfjs.GlobalWorkerOptions.workerSrc = new URL('./pdfjs/pdf.worker.min.js', document.baseURI).href;
+    const pdf = await pdfjs.getDocument({data: new Uint8Array(await file.arrayBuffer()), useSystemFonts: true, isEvalSupported: false}).promise;
     try {
         const pages = [];
         const canvas = document.createElement('canvas');
@@ -20,7 +26,8 @@ window.drafftinkPdfPages = async file => {
             const viewport = page.getViewport({scale});
             canvas.width = Math.ceil(viewport.width);
             canvas.height = Math.ceil(viewport.height);
-            await page.render({canvas, canvasContext: canvas.getContext('2d', {alpha: false}), viewport}).promise;
+            const rendering = page.render({canvasContext: canvas.getContext('2d', {alpha: false}), viewport, intent: 'display'});
+            await rendering.promise;
             pages.push(await new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('PDF vers image impossible')), 'image/png')));
             page.cleanup();
         }

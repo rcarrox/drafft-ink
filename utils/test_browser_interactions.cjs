@@ -440,7 +440,15 @@ function inspectCapture(file) {
     assert(emptyLine.text_caret[1]>0);
     await keys('hello world');await wait(s=>scriptText(s)?.content.endsWith('hello world'));
     await page.keyboard.press('Escape');await control('New canvas');await wait(s=>s.shapes.length===0);
-    await focusCanvasTool('t');await wait(s=>!!s.editing_text);await keys('hello world');await wait(s=>scriptText(s)?.content==='hello world');
+    await focusCanvasTool('t');await wait(s=>!!s.editing_text);await keys('Soit AB un vecteur');await wait(s=>scriptText(s)?.content==='Soit AB un vecteur');
+    await page.keyboard.press('Home');for(let i=0;i<5;i++)await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('Shift+ArrowRight');await page.keyboard.press('Shift+ArrowRight');await wait(s=>s.selected_text==='AB');
+    await page.keyboard.press('Control+Shift+b');
+    await wait(s=>scriptText(s)?.content==='Soit AB un vecteur'&&scriptText(s).char_styles.slice(5,7).every(style=>style.overline)&&scriptText(s).char_styles.filter((_,i)=>i<5||i>=7).every(style=>!style.overline));
+    await page.keyboard.press('Home');for(let i=0;i<5;i++)await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('Shift+ArrowRight');await page.keyboard.press('Shift+ArrowRight');await wait(s=>s.selected_text==='AB');
+    await page.keyboard.press('Control+Shift+v');
+    await wait(s=>scriptText(s)?.char_styles.slice(5,7).every(style=>style.overline&&style.vector_arrow)&&scriptText(s).char_styles.filter((_,i)=>i<5||i>=7).every(style=>!style.vector_arrow));
     await page.keyboard.press('Escape');await wait(s=>s.editing_text===null);await control('tool_Select');
     const word=(await state()).shapes.find(i=>i.shape.Text);
     await page.mouse.move(word.bounds[0]+25,(word.bounds[1]+word.bounds[3])/2);await page.waitForTimeout(100);
@@ -461,6 +469,7 @@ function inspectCapture(file) {
     await control('tool_Select');const editMath=(await state()).shapes.find(i=>i.shape.Math);
     await page.mouse.move((editMath.bounds[0]+editMath.bounds[2])/2,(editMath.bounds[1]+editMath.bounds[3])/2);await page.waitForTimeout(100);await page.mouse.dblclick((editMath.bounds[0]+editMath.bounds[2])/2,(editMath.bounds[1]+editMath.bounds[3])/2,{delay:80});await wait(s=>!!s.editing_math&&s.tool==='Select');
     const selectedForm=(await state()).math_form_rect;await page.mouse.move(selectedForm[0]+20,selectedForm[1]+20);await wait(s=>s.cursor_mode===2);
+    await page.mouse.move((editMath.bounds[0]+editMath.bounds[2])/2,(editMath.bounds[1]+editMath.bounds[3])/2);await wait(s=>s.cursor_mode===2);
     await page.mouse.move(500,200);await wait(s=>s.cursor_mode===0);await page.keyboard.press('Escape');await wait(s=>s.editing_math===null);
     await control('New canvas');await wait(s=>s.shapes.length===0);await focusCanvasTool('t');await wait(s=>!!s.editing_text);await keys('save');
     const saveCount=(await state()).png_save_requests;

@@ -651,10 +651,31 @@ fn apply_box_resize(shape: &mut Shape, kind: HandleKind, delta: kurbo::Vec2, asp
         } else if matches!(kind, HandleKind::Corner(Corner::BottomLeft | Corner::BottomRight) | HandleKind::Edge(Edge::Bottom)) {
             sy = (bounds.height() + delta.y) / bounds.height().max(0.001);
         }
-        let anchor = Point::new(
+        if aspect {
+            match kind {
+                HandleKind::Edge(Edge::Left | Edge::Right) => sy = sx,
+                HandleKind::Edge(Edge::Top | Edge::Bottom) => sx = sy,
+                _ => {
+                    let scale = sx.abs().max(sy.abs());
+                    sx = scale.copysign(sx);
+                    sy = scale.copysign(sy);
+                }
+            }
+        }
+        let anchor = match kind {
+            HandleKind::Edge(Edge::Left | Edge::Right) => Point::new(
+                if matches!(kind, HandleKind::Edge(Edge::Left)) { bounds.x1 } else { bounds.x0 },
+                bounds.center().y,
+            ),
+            HandleKind::Edge(Edge::Top | Edge::Bottom) => Point::new(
+                bounds.center().x,
+                if matches!(kind, HandleKind::Edge(Edge::Top)) { bounds.y1 } else { bounds.y0 },
+            ),
+            _ => Point::new(
             if matches!(kind, HandleKind::Corner(Corner::TopLeft | Corner::BottomLeft) | HandleKind::Edge(Edge::Left)) { bounds.x1 } else { bounds.x0 },
             if matches!(kind, HandleKind::Corner(Corner::TopLeft | Corner::TopRight) | HandleKind::Edge(Edge::Top)) { bounds.y1 } else { bounds.y0 },
-        );
+            ),
+        };
         let transform = Affine::translate((anchor.x, anchor.y))
             * Affine::scale_non_uniform(sx, sy)
             * Affine::translate((-anchor.x, -anchor.y));
@@ -713,10 +734,14 @@ fn apply_box_resize(shape: &mut Shape, kind: HandleKind, delta: kurbo::Vec2, asp
         } else {
             0.0
         };
-        if aspect && matches!(kind, HandleKind::Corner(_)) {
-            let magnitude = (signed_w.abs() / w).max(signed_h.abs() / h);
+        if aspect {
+            let magnitude = match kind {
+                HandleKind::Edge(Edge::Left | Edge::Right) => signed_w.abs() / w,
+                HandleKind::Edge(Edge::Top | Edge::Bottom) => signed_h.abs() / h,
+                _ => (signed_w.abs() / w).max(signed_h.abs() / h),
+            };
             signed_w = signed_w.signum() * w * magnitude;
-            signed_h = signed_h.signum() * h * magnitude;
+            signed_h = if matches!(kind, HandleKind::Edge(Edge::Left | Edge::Right)) { h * magnitude } else { signed_h.signum() * h * magnitude };
         }
         let shift = rotate_delta(
             kurbo::Vec2::new(
@@ -784,10 +809,14 @@ fn apply_box_resize(shape: &mut Shape, kind: HandleKind, delta: kurbo::Vec2, asp
         };
         nw = (content.width() * factor + 12.0).copysign(nw);
         nh = (content.height() * factor + 8.0).copysign(nh);
-    } else if aspect && matches!(kind, HandleKind::Corner(_)) {
-        let scale = (nw.abs() / w).max(nh.abs() / h);
+    } else if aspect {
+        let scale = match kind {
+            HandleKind::Edge(Edge::Left | Edge::Right) => nw.abs() / w,
+            HandleKind::Edge(Edge::Top | Edge::Bottom) => nh.abs() / h,
+            _ => (nw.abs() / w).max(nh.abs() / h),
+        };
         nw = (w * scale).copysign(nw);
-        nh = (h * scale).copysign(nh);
+        nh = if matches!(kind, HandleKind::Edge(Edge::Left | Edge::Right)) { h * scale } else { (h * scale).copysign(nh) };
     }
     let shift = rotate_delta(
         kurbo::Vec2::new(
@@ -1512,7 +1541,16 @@ mod image_flip_tests {
 #[cfg(test)]
 mod text_proportions_tests {
     use super::*;
-    use crate::shapes::{Math, Text};
+    use crate::shapes::{Image, ImageFormat, Math, Rectangle, Text};
+    #[test]
+    fn shift_edge_resize_preserves_proportions_for_shapes_and_images() {
+        let rect = Shape::Rectangle(Rectangle::new(Point::ZERO, 100.0, 50.0));
+        let resized = apply_manipulation(&rect, Some(HandleKind::Edge(Edge::Right)), kurbo::Vec2::new(20.0, 0.0), true);
+        assert!((resized.bounds().width() / resized.bounds().height() - 2.0).abs() < 1e-8);
+        let image = Shape::Image(Image::new(Point::ZERO, &[1, 2, 3], 100, 50, ImageFormat::Png));
+        let resized = apply_manipulation(&image, Some(HandleKind::Edge(Edge::Right)), kurbo::Vec2::new(20.0, 0.0), true);
+        assert!((resized.bounds().width() / resized.bounds().height() - 2.0).abs() < 1e-8);
+    }
     #[test]
     fn padded_text_and_math_resize_proportionally_or_freely() {
         let text = Text::new(Point::ZERO, "123456".into());

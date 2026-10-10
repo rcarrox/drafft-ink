@@ -45,6 +45,12 @@ fn math_to_ascii(c: char) -> Option<char> {
     }
 }
 
+/// Use the selected text face for ordinary inline operators when it contains
+/// the glyph; keep stretchy and structural math symbols in the MATH face.
+fn is_text_face_math_glyph(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '+' | '-' | '=' | '<' | '>' | '≤' | '≥' | '≠' | '±' | '×' | '÷' | '·' | '∞' | '∈' | '∉' | '∪' | '∩' | '∧' | '∨' | '¬' | '≈' | '≃' | '≅' | '≡' | '→' | '←' | '↔' | '⇒' | '⇔')
+}
+
 fn math_codepoints(math: &TtfMathFont<'_>) -> &'static HashMap<u16, char> {
     static CODEPOINTS: std::sync::OnceLock<HashMap<u16, char>> = std::sync::OnceLock::new();
     CODEPOINTS.get_or_init(|| {
@@ -83,7 +89,7 @@ impl<'a, 'p> MixedMathFont<'a, 'p> {
         let c = *self.codepoints.get(&Into::<u16>::into(gid))?;
         let c = math_to_ascii(c).unwrap_or(c);
         // Extensible roots, operators and delimiters must retain MATH outlines.
-        if !(c.is_alphanumeric() && c != '\u{FFFC}') {
+        if !is_text_face_math_glyph(c) || c == '\u{FFFC}' {
             return None;
         }
         let id = primary.glyph_index(c)?;
@@ -269,7 +275,7 @@ impl<'f, 'p> FontBackend<TtfMathFont<'f>> for VelloBackend<'_, 'f, 'p> {
                 let lookup_char = math_to_ascii(codepoint).unwrap_or(codepoint);
                 if let Some(primary_gid) = primary
                     .glyph_index(lookup_char)
-                    .filter(|_| lookup_char.is_alphanumeric())
+                    .filter(|_| is_text_face_math_glyph(lookup_char) && lookup_char != '\u{FFFC}')
                 {
                     // Use primary font (slightly smaller to match text tool rendering)
                     let units_per_em = primary.units_per_em() as f64;
@@ -378,6 +384,10 @@ mod mixed_font_tests {
                 * font.math.font().units_per_em() as f64
                 / p.units_per_em() as f64;
             assert!((glyph.advance.unitless(FUnit) - expected).abs() < 1e-8);
+        }
+        for c in ['+', '=', '≤'] {
+            let gid = font.math.glyph_index(c).expect("math font contains operator");
+            assert!(font.primary_glyph(gid).is_some(), "{c} should use text font when available");
         }
         let root = font.math.glyph_index('√').unwrap();
         assert!(font.primary_glyph(root).is_none());

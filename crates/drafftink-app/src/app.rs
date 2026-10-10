@@ -947,7 +947,10 @@ pub mod file_ops {
     pub fn import_media_async(viewport_width: f64, viewport_height: f64, camera_offset_x: f64, camera_offset_y: f64, camera_zoom: f64, optimize: bool, max_side: u32) {
         wasm_bindgen_futures::spawn_local(async move {
             if let Err(error) = import_media_impl(viewport_width, viewport_height, camera_offset_x, camera_offset_y, camera_zoom, optimize, max_side).await {
-                log::error!("Could not import image/PDF: {:?}", error);
+                let message = error.as_string().unwrap_or_else(|| format!("{error:?}"));
+                log::error!("Could not import image/PDF: {message}");
+                PENDING_IMPORT_NOTICE.with(|cell| *cell.borrow_mut() = Some(format!("Import impossible : {message}")));
+                schedule_repaint(0);
             }
         });
     }
@@ -997,7 +1000,6 @@ pub mod file_ops {
         let data = wasm_bindgen_futures::JsFuture::from(blob.array_buffer()).await?;
         let bytes = js_sys::Uint8Array::new(&data).to_vec();
         let mut image = Image::new(Point::new(center_x - width as f64 / 2.0, center_y - height as f64 / 2.0), &bytes, width, height, ImageFormat::Png);
-        if width.max(height) > 2048 { image = image.fit_within(2048.0, 2048.0); image.position = Point::new(center_x - image.width / 2.0, center_y - image.height / 2.0); }
         PENDING_IMPORTED_MEDIA.with(|cell| *cell.borrow_mut() = Some(vec![Shape::Image(image)]));
         schedule_repaint(0);
         Ok(())
@@ -3658,7 +3660,7 @@ impl ApplicationHandler for App {
                 state.canvas.tool_manager.path_style = match state.ui_state.path_style {
                     1 => drafftink_core::shapes::PathStyle::Flowing,
                     2 => drafftink_core::shapes::PathStyle::Angular,
-                    _ => drafftink_core::shapes::PathStyle::Direct,
+                    _ => drafftink_core::shapes::PathStyle::Flowing,
                 };
                 state.canvas.tool_manager.stroke_style = state.ui_state.stroke_style;
                 state.canvas.tool_manager.arrow_start_head = match state.ui_state.arrow_start_head {
@@ -4131,7 +4133,14 @@ impl ApplicationHandler for App {
                                 file_ops::paste_shapes_from_clipboard_async(center_world);
                             }
                             UiAction::ToggleStopwatch => {
-                                state.ui_state.stopwatch_open = !state.ui_state.stopwatch_open;
+                                let id = state.ui_state.next_time_widget_id;
+                                state.ui_state.next_time_widget_id += 1;
+                                let offset = (state.ui_state.time_widgets.len() as f32) * 24.0;
+                                state.ui_state.time_widgets.push(crate::ui::TimeWidgetState::new(
+                                    id,
+                                    egui::Pos2::new(110.0 + offset, 100.0 + offset),
+                                ));
+                                state.ui_state.stopwatch_open = true;
                                 state.needs_redraw = true;
                             }
                             UiAction::ImportMedia => {
@@ -6729,7 +6738,7 @@ impl ApplicationHandler for App {
                             if let Key::Character(c) = &event.logical_key {
                                 let kind = c.to_ascii_lowercase();
                                 let format_kind = if state.input.shift() {
-                                    match kind.as_str() { "o" => Some('o'), "v" => Some('v'), _ => None }
+                                    match kind.as_str() { "b" | "o" => Some('o'), "v" => Some('v'), _ => None }
                                 } else {
                                     match kind.as_str() { "b" => Some('b'), "i" => Some('i'), "u" => Some('u'), _ => None }
                                 };
@@ -8475,12 +8484,19 @@ fn browser_cursor_kind(state: &AppState) -> (u8, bool) {
                 .canvas
                 .camera
                 .screen_to_world(state.input.mouse_position());
-            let text = state
-                .event_handler
-                .editing_text
+            let editing_shape = state.event_handler.editing_text.or_else(|| {
+                state.ui_state.math_editor.as_ref().map(|editor| editor.shape_id)
+            });
+            let editing_kind = editing_shape
                 .and_then(|id| state.canvas.document.get_shape(id))
-                .is_some_and(|s| s.hit_test(point, 0.0));
-            (if text { 1 } else { 0 }, false)
+                .filter(|shape| shape.hit_test(point, 0.0))
+                .map(|shape| match shape {
+                    Shape::Text(_) => 1,
+                    Shape::Math(_) => 2,
+                    _ => 0,
+                })
+                .unwrap_or(0);
+            (editing_kind, false)
         }
     }
 }
