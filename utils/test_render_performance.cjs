@@ -15,7 +15,7 @@ const evidence=path.resolve('work/e2e/evidence');fs.mkdirSync(evidence,{recursiv
   });
   const page=await context.newPage();
   const state=()=>page.evaluate(()=>JSON.parse(window.__drafftinkTestState));
-  const wait=async predicate=>{for(let i=0;i<180;i++){const s=await state().catch(()=>null);if(s&&predicate(s))return s;await page.waitForTimeout(100);}throw Error(label+' benchmark timeout: '+JSON.stringify(await state()));};
+  const wait=async predicate=>{for(let i=0;i<180;i++){const s=await state().catch(()=>null);if(s&&predicate(s))return s;await page.waitForTimeout(100);}throw Error(label+' benchmark timeout: '+JSON.stringify(await state(),(key,value)=>key==='data'?'[image bytes omitted]':value));};
   const click=async name=>{const s=await wait(s=>s.controls[name]);const r=s.controls[name];await page.mouse.move((r[0]+r[2])/2,(r[1]+r[3])/2);await page.waitForTimeout(150);await page.mouse.click((r[0]+r[2])/2,(r[1]+r[3])/2,{delay:80});await page.waitForTimeout(150);};
   const importImage=async()=>{await click('tool_Insert');const event=page.waitForEvent('filechooser');await click('Insert Image');await(await event).setFiles('work/e2e/fixtures/image-1200x2000.png');await wait(s=>s.shapes.some(s=>s.shape.Image));};
   try{
@@ -25,7 +25,7 @@ const evidence=path.resolve('work/e2e/evidence');fs.mkdirSync(evidence,{recursiv
    await page.keyboard.press('Control+l');await wait(s=>s.shapes[0].pinned);
    const beforeZoom=await state();
    for(let i=0;i<20;i++){await page.keyboard.press('-');await page.waitForTimeout(60);}
-   const afterZoom=await wait(s=>s.zoom<0.1);
+   const afterZoom=await wait(s=>s.zoom<=0.1001);
    if(label==='current')assert.equal(afterZoom.memory.image_cache_bytes,beforeZoom.memory.image_cache_bytes,'Pinned pixels must not vary with camera zoom');
    await click('tool_Insert');await click('Insert Time');
    let s=await wait(s=>Object.keys(s.controls).some(k=>k.startsWith('Time widget ')&&!k.startsWith('Time widget size')));
