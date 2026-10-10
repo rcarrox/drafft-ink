@@ -217,14 +217,12 @@ function inspectCapture(file) {
     await wait(s=>s.laser_palette_open&&s.shapes.length===shapesBeforePicker);
     await page.mouse.click(1120,650);await wait(s=>!s.laser_palette_open);
     await page.mouse.click(28,28);
-    let settingsMenu=await wait(s=>!!s.controls['Menu Settings']);
-    let settingsMenuRect=settingsMenu.controls['Menu Settings'];
-    await page.mouse.click((settingsMenuRect[0]+settingsMenuRect[2])/2,(settingsMenuRect[1]+settingsMenuRect[3])/2);
+    await wait(s=>!!s.controls['Menu Settings']);
+    await control('Menu Settings');
     let settingsState=await wait(s=>!!s.controls['Settings stroke color 0']);
-    const appearanceTab=settingsState.controls['Settings tab Apparence'];
-    await page.mouse.click((settingsState.controls['Settings tab Data'][0]+settingsState.controls['Settings tab Data'][2])/2,(settingsState.controls['Settings tab Data'][1]+settingsState.controls['Settings tab Data'][3])/2);
+    await control('Settings tab Data');
     await wait(s=>!s.controls['Settings stroke color 0']);
-    await page.mouse.click((appearanceTab[0]+appearanceTab[2])/2,(appearanceTab[1]+appearanceTab[3])/2);
+    await control('Settings tab Apparence');
     settingsState=await wait(s=>!!s.controls['Settings stroke color 0']);
     await page.keyboard.press('Escape');
     await wait(s=>!s.controls['Settings stroke color 0']);
