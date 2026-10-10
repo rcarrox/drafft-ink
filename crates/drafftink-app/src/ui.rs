@@ -2471,9 +2471,10 @@ fn show_pinned_color_picker(ctx: &Context, state: &mut UiState, anchor: Rect) ->
     let width = if state.pinned_picker_custom_open { 258.0 } else { 220.0 };
     let expanded = state.pinned_picker_custom_open;
     let height = if expanded { previous.map_or(330.0, |r|r.height().max(330.0)) } else { 92.0 };
+    let owner = *state.context_rects.first().unwrap_or(&anchor);
     let pos = Pos2::new(
-        (state.context_rects.first().unwrap_or(&anchor).center().x - width * 0.5).clamp(screen.left() + 4.0, (screen.right() - width - 4.0).max(screen.left() + 4.0)),
-        (anchor.bottom() + 8.0).clamp(screen.top() + 4.0, (screen.bottom() - height - 4.0).max(screen.top() + 4.0)),
+        (owner.center().x - width * 0.5).clamp(screen.left() + 4.0, (screen.right() - width - 4.0).max(screen.left() + 4.0)),
+        (owner.bottom() + 8.0).clamp(screen.top() + 4.0, (screen.bottom() - height - 4.0).max(screen.top() + 4.0)),
     );
     let preset_colors = [
         Color32::WHITE,
