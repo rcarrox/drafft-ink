@@ -8,7 +8,9 @@ mod event_handler;
 mod math_input;
 mod settings;
 mod shortcuts;
+mod shortcut_bindings;
 mod ui;
+mod time_widget;
 
 pub use app::{App, AppConfig};
 pub use shortcuts::{Shortcut, ShortcutRegistry};

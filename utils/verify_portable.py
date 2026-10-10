@@ -4,7 +4,7 @@ from pathlib import Path
 
 def verify(path, version):
     required=['Lancer Qurso.cmd','LIRE_MOI_LOCAL_ET_FTP.md','README_WEB_FR.md','Lancer DrafftInk.cmd','Arreter DrafftInk.cmd','Ouvrir avec Edge.cmd','Ouvrir avec Chrome.cmd',
-              'windows/serve-local.ps1','VERSION_LOCAL.txt','README_LOCAL_FR.md','web/index.html','web/browser-tools.js','web/presets/manifest.json','EVOLUTIONS.md',
+              'windows/serve-local.ps1','VERSION_LOCAL.txt','README_LOCAL_FR.md','web/index.html','web/browser-tools.js','web/Inter-LICENSE.txt','web/presets/manifest.json','EVOLUTIONS.md',
               'web/pkg/drafftink_app.js','web/pkg/drafftink_app_bg.wasm','web/cursormouse.svg','web/cursortext.svg','web/cursormath.svg','web/cursordraw.svg','web/cursorcrosshair.svg','web/cursoreraser.svg','web/cursoreraserman.svg']
     with zipfile.ZipFile(path) as z:
         assert z.testzip() is None, 'ZIP CRC failure'

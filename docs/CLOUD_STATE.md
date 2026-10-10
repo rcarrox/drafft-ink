@@ -140,3 +140,13 @@ Validations locales : six browser helpers, manifeste offline de build historique
 Branche codex/0.31.0-presets-settings-numworks depuis main 0.30.0 (7d283f2). Import multiple PNG, bootstrap du dossier web/presets via manifeste statique généré à la fabrication et actualisé au lancement Windows. Suppressions/renommages persistants sans reseeding. UI presets blanche. Export/import de UserSettings en JSON format/version validés, application immédiate ; autorisations de dossier/fonts restent locales. PDF retiré de l’import et du packaging. Numworks ouvre numworks/ dans un nouvel onglet (fichiers du simulateur à déposer par l’utilisateur). Module browser-tools indépendant restaure les aides images/presets/Time anciennement couplées au cache offline. Ctrl-clic toggle avant poignées de formes, Ctrl-crop images conservé. EVOLUTIONS.md livré à chaque version.
 
 Tests rapides JS et diff vérifiés ; tests Rust de backup et Chromium de presets multi/seed/nom/suppression/source/URL ajoutés. Rust/WASM, CI, fusion et ZIP encore à valider dans Actions.
+
+### État de livraison 0.31.0
+
+PR #37 fusionnée (main 566c3141e5738adfdc863373b709b09a76be1704). CI et Build Portable main 38051549724/38051549735 réussis. ZIP local téléchargé et vérifié CRC, version, JS/WASM, helpers et manifeste ; livraison confirmée dans PR #37. Les mentions précédentes « en validation » sont supersédées.
+
+### 0.32.0 — interactions, Time, raccourcis, caret et rendu (en validation)
+
+Branche codex/0.32.0-panels-time-shortcuts depuis main 0.31.0. Ownership de gestes UI sur les surfaces visibles des palettes ; modals egui pour Settings/Shortcuts ; menu fermé au pointer-down extérieur. Time : Inter officielle 4.1 (licence incluse), quatre faces et colonnes numériques fixes, hitbox et curseur resize communs. Registre central de commandes, bindings persistants et éditables avec conflits, Ctrl+Shift+R et Config Reset. Caret du code friendly projeté via un probe LaTeX de largeur nulle non sérialisé ; bloc actif et clic dans le rendu. Glyphes grecs/moins suivent la face primaire ou son fallback Noto. Texture Vello réutilisée pour les frames UI et caret ; cache images basé sur transform réel/native pixels, reuse voisin ; tick des horloges adapté.
+
+Tests rapides JS et contrôle du diff passés. Tests Rust et scénario Chromium supplémentaires écrits ; validations Rust/WASM, benchmark CI, merge et ZIP 0.32.0 restent à terminer. Aucun Rust/WASM compilé localement ; deployment FTP non modifié.

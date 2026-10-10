@@ -13,6 +13,10 @@ use vello::Scene;
 fn math_to_ascii(c: char) -> Option<char> {
     let cp = c as u32;
     match cp {
+        0x2212 => Some('-'),
+        0x1D6A8..=0x1D7C9 => "ΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΘΣΤΥΦΧΨΩ∇αβγδεζηθικλμνξοπρςστυφχψω∂εθκφρπ".chars().nth(((cp-0x1D6A8)%58) as usize),
+        0x1D7CA => Some('Ϝ'),
+        0x1D7CB => Some('ϝ'),
         // Math Italic Capital A-Z (U+1D434-1D44D)
         0x1D434..=0x1D44D => Some((b'A' + (cp - 0x1D434) as u8) as char),
         // Math Italic Small a-z (U+1D44E-1D467, hole at U+1D455 for 'h')
@@ -74,6 +78,7 @@ pub struct MixedMathFont<'a, 'p> {
     pub math: TtfMathFont<'a>,
     pub primary: Option<ttf_parser::Face<'p>>,
     codepoints: &'static HashMap<u16, char>,
+    fallback: ttf_parser::Face<'static>,
 }
 impl<'a, 'p> MixedMathFont<'a, 'p> {
     pub fn new(math: TtfMathFont<'a>, primary: Option<ttf_parser::Face<'p>>) -> Self {
@@ -82,6 +87,7 @@ impl<'a, 'p> MixedMathFont<'a, 'p> {
             math,
             primary,
             codepoints,
+            fallback: ttf_parser::Face::parse(include_bytes!("../assets/NotoSans-Regular.ttf"),0).expect("embedded Noto Sans"),
         }
     }
     fn primary_glyph(&self, gid: GlyphId) -> Option<(ttf_parser::GlyphId, f64)> {
@@ -99,6 +105,16 @@ impl<'a, 'p> MixedMathFont<'a, 'p> {
             0.75 * self.math.font().units_per_em() as f64 / primary.units_per_em() as f64,
         ))
     }
+    fn text_glyph(&self, gid: GlyphId) -> Option<(&ttf_parser::Face<'_>, ttf_parser::GlyphId, f64)> {
+        if let Some((id,ratio))=self.primary_glyph(gid) { return Some((self.primary.as_ref()?,id,ratio)); }
+        let c=*self.codepoints.get(&Into::<u16>::into(gid))?;
+        let c=math_to_ascii(c).unwrap_or(c);
+        if !is_text_face_math_glyph(c) { return None; }
+        let id=self.fallback.glyph_index(c)?;
+        self.fallback.glyph_bounding_box(id)?;
+        Some((&self.fallback,id,0.75*self.math.font().units_per_em() as f64/self.fallback.units_per_em() as f64))
+    }
+
 }
 impl rex::font::MathFont for MixedMathFont<'_, '_> {
     fn glyph_index(&self, c: char) -> Option<GlyphId> {
@@ -119,8 +135,7 @@ impl rex::font::MathFont for MixedMathFont<'_, '_> {
             italics: original.italics,
             attachment: original.attachment,
         };
-        if let Some((id, ratio)) = self.primary_glyph(gid) {
-            let face = self.primary.as_ref().unwrap();
+        if let Some((face,id,ratio)) = self.text_glyph(gid) {
             let b = face.glyph_bounding_box(id).unwrap();
             let unit = |v: i16| Unit::<FUnit>::new(v as f64 * ratio);
             glyph.bbox = (unit(b.x_min), unit(b.y_min), unit(b.x_max), unit(b.y_max));
@@ -138,14 +153,14 @@ impl rex::font::MathFont for MixedMathFont<'_, '_> {
         h: rex::dimensions::Unit<rex::dimensions::units::FUnit>,
         side: rex::font::kerning::Corner,
     ) -> Option<rex::dimensions::Unit<rex::dimensions::units::FUnit>> {
-        if self.primary_glyph(gid).is_some() {
+        if self.text_glyph(gid).is_some() {
             None
         } else {
             self.math.kern_for(gid, h, side)
         }
     }
     fn italics(&self, gid: GlyphId) -> i16 {
-        if self.primary_glyph(gid).is_some() {
+        if self.text_glyph(gid).is_some() {
             0
         } else {
             self.math.italics(gid)
@@ -191,7 +206,7 @@ impl rex::font::MathFont for MixedMathFont<'_, '_> {
         gid: GlyphId,
         level: rex::font::common::ScriptLevel,
     ) -> Option<GlyphId> {
-        if self.primary_glyph(gid).is_some() {
+        if self.text_glyph(gid).is_some() {
             None
         } else {
             self.math.glyph_script_alternate(gid, level)
@@ -210,14 +225,24 @@ pub struct VelloBackend<'a, 'f, 'p> {
     scene: &'a mut Scene,
     math_font: &'f TtfMathFont<'f>,
     primary_font: Option<&'p ttf_parser::Face<'p>>,
+    fallback_font: ttf_parser::Face<'static>,
     /// Maps math font glyph IDs to codepoints for fallback lookup.
     glyph_to_codepoint: &'static HashMap<u16, char>,
     transform: Affine,
     color_stack: Vec<Color>,
     current_color: Color,
+    collecting_caret: bool,
+    caret: Option<kurbo::Rect>,
 }
 
 impl<'a, 'f, 'p> VelloBackend<'a, 'f, 'p> {
+    pub fn caret_collector(scene: &'a mut Scene, math_font: &'f TtfMathFont<'f>, primary_font: Option<&'p ttf_parser::Face<'p>>) -> Self {
+        let mut backend = Self::new(scene,math_font,primary_font,Affine::IDENTITY,Color::from_rgba8(0,0,0,255));
+        backend.collecting_caret=true;
+        backend
+    }
+    pub fn caret_geometry(&self) -> Option<kurbo::Rect> { self.caret }
+
     pub fn new(
         scene: &'a mut Scene,
         math_font: &'f TtfMathFont<'f>,
@@ -231,10 +256,13 @@ impl<'a, 'f, 'p> VelloBackend<'a, 'f, 'p> {
             scene,
             math_font,
             primary_font,
+            fallback_font: ttf_parser::Face::parse(include_bytes!("../assets/NotoSans-Regular.ttf"),0).expect("embedded Noto Sans"),
             glyph_to_codepoint,
             transform,
             color_stack: Vec::new(),
             current_color: color,
+            collecting_caret: false,
+            caret: None,
         }
     }
 }
@@ -268,11 +296,14 @@ impl ttf_parser::OutlineBuilder for PathBuilder {
 
 impl<'f, 'p> FontBackend<TtfMathFont<'f>> for VelloBackend<'_, 'f, 'p> {
     fn symbol(&mut self, pos: Cursor, gid: GlyphId, scale: f64, _ctx: &TtfMathFont<'f>) {
+        if self.collecting_caret { return; }
         // Try primary font first if available
-        if let Some(primary) = self.primary_font {
+        {
+            let primary = match self.primary_font { Some(primary)=>primary, None=>&self.fallback_font };
             if let Some(&codepoint) = self.glyph_to_codepoint.get(&gid.into()) {
                 // Map math italic/bold Unicode to ASCII for primary font lookup
                 let lookup_char = math_to_ascii(codepoint).unwrap_or(codepoint);
+                let primary = if primary.glyph_index(lookup_char).is_some_and(|id|primary.glyph_bounding_box(id).is_some()) { primary } else { &self.fallback_font };
                 if let Some(primary_gid) = primary
                     .glyph_index(lookup_char)
                     .filter(|_| is_text_face_math_glyph(lookup_char) && lookup_char != '\u{FFFC}')
@@ -339,6 +370,14 @@ impl<'f, 'p> FontBackend<TtfMathFont<'f>> for VelloBackend<'_, 'f, 'p> {
 
 impl GraphicsBackend for VelloBackend<'_, '_, '_> {
     fn rule(&mut self, pos: Cursor, width: f64, height: f64) {
+        if self.collecting_caret {
+            if self.current_color==Color::from_rgba8(1,2,3,255) && height>0.0 {
+                let size = height * 10000.0;
+                let baseline = pos.y + height;
+                self.caret=Some(kurbo::Rect::new(pos.x,baseline-size*0.8,pos.x+1.5,baseline+size*0.18));
+            }
+            return;
+        }
         let rect = kurbo::Rect::new(pos.x, pos.y, pos.x + width, pos.y + height);
         self.scene.fill(
             vello::peniko::Fill::NonZero,
@@ -367,6 +406,22 @@ impl<'f, 'p> Backend<MixedMathFont<'f, 'p>> for VelloBackend<'_, 'f, 'p> {}
 #[cfg(test)]
 mod mixed_font_tests {
     use super::*;
+    #[test]
+    fn minus_and_greek_use_the_matching_text_face_and_metrics() {
+        use rex::dimensions::units::FUnit;
+        assert_eq!(math_to_ascii('\u{2212}'),Some('-'));
+        assert_eq!(math_to_ascii('\u{1d70b}'),Some('π'));
+        let math=TtfMathFont::new(ttf_parser::Face::parse(include_bytes!("../assets/rex-xits.otf"),0).unwrap()).unwrap();
+        let primary=ttf_parser::Face::parse(include_bytes!("../assets/GelPen.ttf"),0).unwrap();
+        let font=MixedMathFont::new(math,Some(primary));
+        for c in ['π','−','+','∞'] {
+            let gid=font.math.glyph_index(c).unwrap();
+            let (face,id,ratio)=font.text_glyph(gid).expect("ordinary glyph has a text face");
+            let actual=font.glyph_from_gid(gid).unwrap().advance.unitless(FUnit);
+            let expected=face.glyph_hor_advance(id).unwrap() as f64*ratio;
+            assert!((actual-expected).abs()<1e-8,"{c}: layout and displayed face must agree");
+        }
+    }
     #[test]
     fn primary_advance_matches_rendered_outline_scale() {
         use rex::dimensions::units::FUnit;

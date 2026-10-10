@@ -2113,6 +2113,9 @@ struct AppState {
     vello_renderer: vello::Renderer,
     render_target: Option<(u32, u32, vello::wgpu::Texture, vello::wgpu::TextureView)>,
     render_target_allocations: u64,
+    canvas_dirty: bool,
+    canvas_render_count: u64,
+    last_canvas_accent: Option<[u8;3]>,
     shape_renderer: VelloRenderer,
     /// Texture blitter for RGBA->surface format conversion (needed for WebGPU/WASM)
     texture_blitter: vello::wgpu::util::TextureBlitter,
@@ -2123,6 +2126,9 @@ struct AppState {
     egui_renderer: egui_wgpu::Renderer,
     ui_state: UiState,
     ui_keyboard_pending: bool,
+    ui_pointer_gesture: bool,
+    pointer_serial: u64,
+    last_color_edit: Option<(u64, &'static str)>,
     pending_png_save: Option<bool>,
     last_png_signature: u64,
     png_save_requests: u64,
@@ -2314,6 +2320,7 @@ fn switch_to_tab(state: &mut AppState, target: usize) {
 
 /// Append a new tab holding `document` and make it active.
 fn add_tab(state: &mut AppState, name: String, document: drafftink_core::canvas::CanvasDocument) {
+    state.canvas_dirty = true;
     snapshot_active_tab(state);
     state.tabs.push(TabState {
         name,
@@ -2461,6 +2468,7 @@ impl App {
                 .entry(egui::FontFamily::Proportional)
                 .or_default()
                 .insert(0, "DrafftInk Noto Sans".to_string());
+            crate::ui::install_time_fonts(&mut fonts);
             egui_ctx.set_fonts(fonts);
         }
         let egui_state = egui_winit::State::new(
@@ -2504,6 +2512,9 @@ impl App {
             vello_renderer,
             render_target: None,
             render_target_allocations: 0,
+            canvas_dirty: true,
+            canvas_render_count: 0,
+            last_canvas_accent: None,
             shape_renderer: VelloRenderer::new(),
             texture_blitter,
             egui_ctx,
@@ -2511,6 +2522,9 @@ impl App {
             egui_renderer,
             ui_state: UiState::default(),
             ui_keyboard_pending: false,
+            ui_pointer_gesture: false,
+            pointer_serial: 0,
+            last_color_edit: None,
             pending_png_save: None,
             last_png_signature: 0,
             png_save_requests: 0,
@@ -2832,7 +2846,7 @@ impl ApplicationHandler for App {
         &mut self,
         event_loop: &ActiveEventLoop,
         _window_id: WindowId,
-        event: WindowEvent,
+        mut event: WindowEvent,
     ) {
         // On WASM, handle async initialization
         #[cfg(target_arch = "wasm32")]
@@ -2910,14 +2924,37 @@ impl ApplicationHandler for App {
         };
 
         // Process input events through WinitInputHelper
+        state.input.clear_shortcut_modifiers();
         state.input.process_window_event(&event);
+        if matches!(event,WindowEvent::MouseInput{state:ElementState::Pressed,button:MouseButton::Left,..}) { state.pointer_serial=state.pointer_serial.wrapping_add(1); }
+        if let WindowEvent::KeyboardInput { event: keyboard, .. } = &mut event {
+            use crate::shortcut_bindings::{Context, Remap};
+            let context = if state.ui_state.modal_open() || state.ui_state.renaming_tab.is_some() { Context::Controls }
+                else if state.ui_state.math_editor.is_some() || state.ui_state.inline_formula_draft.is_some() || state.ui_state.text_command_editor.is_some() { Context::Math }
+                else if state.event_handler.editing_text.is_some() { Context::Text }
+                else if state.egui_ctx.wants_keyboard_input() { Context::Controls } else { Context::Canvas };
+            if matches!(crate::shortcut_bindings::remap_event(keyboard, &mut state.input, &state.ui_state.settings, context),Remap::Blocked) { return; }
+        }
         state.event_handler.text_font = state.ui_state.current_text_font.clone();
         if let WindowEvent::KeyboardInput { event, .. } = &event {
             if event.state == ElementState::Pressed && !event.repeat {
-                if state.input.ctrl()
+                if !state.ui_state.modal_open() && state.event_handler.editing_text.is_none() && state.ui_state.math_editor.is_none() && state.ui_state.text_command_editor.is_none() {
+                    if state.input.ctrl() && state.input.shift() && matches!(&event.logical_key, Key::Character(c) if c.eq_ignore_ascii_case("r")) {
+                        state.ui_state.settings.panel_positions.clear();
+                        state.egui_ctx.memory_mut(|memory|memory.reset_areas());
+                        crate::settings::save_settings(&state.ui_state.settings);
+                        state.needs_redraw=true;state.window.request_redraw();return;
+                    }
+                    if matches!(&event.logical_key, Key::Character(c) if c=="?") && !state.input.ctrl() && !state.input.alt() {
+                        state.ui_state.shortcuts_modal_open=true;
+                        state.needs_redraw=true;state.window.request_redraw();return;
+                    }
+                }
+                if !state.ui_state.modal_open() && state.input.ctrl()
                     && matches!(&event.logical_key, Key::Character(c) if c.eq_ignore_ascii_case("p"))
                 {
                     state.ui_state.presentation_mode = !state.ui_state.presentation_mode;
+                    state.canvas_dirty = true;
                     state.needs_redraw = true;
                     state.window.request_redraw();
                     return;
@@ -2965,6 +3002,7 @@ impl ApplicationHandler for App {
             // exponent marker. Ctrl+ArrowUp / Ctrl+ArrowDown are layout-
             // independent exponent/subscript shortcuts.
             if event.state == ElementState::Pressed
+                && !state.ui_state.modal_open()
                 && (state.ui_state.math_editor.is_some()
                     || state.ui_state.inline_formula_draft.is_some()
                     || state.ui_state.text_command_editor.is_some())
@@ -3041,6 +3079,7 @@ impl ApplicationHandler for App {
         if let WindowEvent::KeyboardInput { event, .. } = &event {
             if event.state == ElementState::Pressed
                 && !event.repeat
+                && !state.ui_state.modal_open()
                 && state.input.ctrl()
                 && matches!(&event.logical_key,Key::Character(c) if c.eq_ignore_ascii_case("s"))
             {
@@ -3117,6 +3156,15 @@ impl ApplicationHandler for App {
             false
         };
 
+        if let Some([ctrl,shift,alt]) = state.input.shortcut_modifiers() {
+            for event in state.egui_state.egui_input_mut().events.iter_mut().rev() {
+                if let egui::Event::Key { modifiers, .. } = event {
+                    *modifiers = egui::Modifiers { ctrl, shift, alt, command:ctrl, mac_cmd:false };
+                    break;
+                }
+            }
+        }
+
         // If egui wants this event exclusively, don't process it for canvas
         // Check both: if egui consumed the event OR if the pointer is over an egui area
         let pointer = state.input.mouse_position();
@@ -3138,6 +3186,19 @@ impl ApplicationHandler for App {
         {
             state.ui_keyboard_pending = true;
         }
+        let point = egui::Pos2::new(pointer.x as f32 / scale, pointer.y as f32 / scale);
+        let mut ui_pointer_owned = state.ui_pointer_gesture;
+        if let WindowEvent::MouseInput { state: press, button: MouseButton::Left, .. } = &event {
+            if *press == ElementState::Pressed {
+                let popup = state.ui_state.menu_open || state.ui_state.color_popover != crate::ui::ColorPopover::None || state.ui_state.laser_color_open || state.ui_state.insert_menu_open || egui::Popup::is_any_open(&state.egui_ctx);
+                ui_pointer_owned = popup || state.ui_state.owns_pointer(point) || pointer_over_ui;
+                state.ui_pointer_gesture = ui_pointer_owned;
+                if state.ui_state.menu_open && !state.ui_state.menu_rect.is_some_and(|r| r.contains(point)) && !egui::Rect::from_min_size(egui::Pos2::new(12.0,12.0), egui::Vec2::splat(48.0)).contains(point) {
+                    state.ui_state.menu_open = false;
+                    state.ui_state.menu_rect = None;
+                }
+            } else { state.ui_pointer_gesture = false; }
+        }
         let returning_to_text = matches!(
             &event,
             WindowEvent::KeyboardInput { .. } | WindowEvent::Ime(_)
@@ -3145,7 +3206,7 @@ impl ApplicationHandler for App {
             && state.ui_state.text_command_editor.is_none()
             && !state.ui_keyboard_pending
             && state.egui_ctx.memory(|m| m.focused().is_none());
-        let egui_wants_input = !canvas_selection_pointer
+        let egui_wants_input = (ui_pointer_owned || state.ui_state.modal_open()) || !canvas_selection_pointer
             && !returning_to_text
             && (egui_consumed
                 || match &event {
@@ -3155,6 +3216,16 @@ impl ApplicationHandler for App {
                     _ => pointer_over_ui || state.egui_ctx.wants_pointer_input(),
                 });
 
+        let canvas_changed = match &event {
+            WindowEvent::Resized(_) => true,
+            WindowEvent::MouseInput { .. } | WindowEvent::KeyboardInput { .. } | WindowEvent::Ime(_) | WindowEvent::MouseWheel { .. } | WindowEvent::Touch(_) => !egui_wants_input,
+            WindowEvent::CursorMoved { .. } => (!egui_wants_input && (state.canvas.tool_manager.is_active() || state.event_handler.is_manipulating() || state.event_handler.is_selecting() || matches!(state.canvas.tool_manager.current_tool,ToolKind::Eraser|ToolKind::LaserPointer))) || state.canvas.tool_manager.current_tool==ToolKind::Eraser,
+            _=>false,
+        };
+        state.canvas_dirty |= canvas_changed;
+        if state.ui_state.modal_open() && matches!(event,WindowEvent::KeyboardInput{..}|WindowEvent::Ime(_)) {
+            state.needs_redraw=true;state.window.request_redraw();return;
+        }
         match event {
             WindowEvent::CloseRequested => {
                 event_loop.exit();
@@ -3181,11 +3252,18 @@ impl ApplicationHandler for App {
                 // Update laser trail (fade out)
                 let elapsed = state.last_redraw.elapsed().as_secs_f64();
                 state.last_redraw = FrameInstant::now();
-                let edge_panning = auto_pan_drag(state, elapsed.min(0.05));
+                if state.ui_state.modal_open() && (state.canvas.tool_manager.is_active() || state.event_handler.is_manipulating() || state.event_handler.is_selecting()) {
+                    state.event_handler.cancel(&mut state.canvas);
+                    state.canvas_dirty=true;
+                }
+                let edge_panning = if state.ui_state.modal_open() {false} else {auto_pan_drag(state,elapsed.min(0.05))};
+                let had_laser_trail = !state.event_handler.laser_trail.is_empty();
                 state.event_handler.update_laser_trail(elapsed);
+                state.canvas_dirty |= edge_panning || had_laser_trail;
 
                 // Check for pending document from async file load
                 if let Some(doc) = file_ops::take_pending_document() {
+                    state.canvas_dirty = true;
                     let restored_name = doc.name.clone();
                     state.canvas.document = doc;
                     state.tabs[state.active_tab].name = if restored_name.trim().is_empty() {
@@ -3214,6 +3292,7 @@ impl ApplicationHandler for App {
 
                 #[cfg(target_arch = "wasm32")]
                 if let Some(settings) = file_ops::take_pending_settings() {
+                    state.canvas_dirty = true;
                     state.ui_state.apply_imported_settings(settings);
                     request_math_font(&state.ui_state.settings.default_math_font);
                     let postscript = state.ui_state.current_text_postscript.clone();
@@ -3370,6 +3449,7 @@ impl ApplicationHandler for App {
                             egui::FontFamily::Name("math_medium".into()),
                             vec!["math_medium".into(), "noto_sans".into()],
                         );
+                        crate::ui::install_time_fonts(&mut fonts);
                         state.egui_ctx.set_fonts(fonts);
                         state.ui_state.math_input_font_ready = true;
                     }
@@ -3377,6 +3457,7 @@ impl ApplicationHandler for App {
                         state
                             .shape_renderer
                             .register_custom_font(&family, &postscript, bytes);
+                    state.canvas_dirty = true;
                     if state.ui_state.current_text_postscript == postscript {
                         state.ui_state.current_text_font.custom = Some(canonical.clone());
                     }
@@ -3417,12 +3498,14 @@ impl ApplicationHandler for App {
 
                 #[cfg(target_arch = "wasm32")]
                 if let Some(shapes) = file_ops::take_pending_imported_media() {
+                    state.canvas_dirty = true;
                     insert_vector_shapes(state, shapes);
                 }
 
                 // Check for pending pasted image (WASM)
                 #[cfg(target_arch = "wasm32")]
                 if let Some(image_shape) = file_ops::take_pending_image() {
+                    state.canvas_dirty = true;
                     state.canvas.document.push_undo();
                     state.canvas.clear_selection();
                     let new_id = image_shape.id();
@@ -3438,6 +3521,7 @@ impl ApplicationHandler for App {
                 // (Excalidraw or Mermaid) resolved by the async WASM reader.
                 #[cfg(target_arch = "wasm32")]
                 if let Some((shapes, cursor_world)) = file_ops::take_pending_excalidraw_shapes() {
+                    state.canvas_dirty = true;
                     place_shapes_centered_at(
                         &mut state.canvas,
                         &mut state.collab,
@@ -3451,6 +3535,7 @@ impl ApplicationHandler for App {
                 // Check for pending dropped images (WASM)
                 #[cfg(target_arch = "wasm32")]
                 for image_shape in file_ops::take_pending_dropped_images() {
+                    state.canvas_dirty = true;
                     state.canvas.document.push_undo();
                     state.canvas.clear_selection();
                     let new_id = image_shape.id();
@@ -3465,6 +3550,7 @@ impl ApplicationHandler for App {
                 // Check for pending dropped document (PNG with embedded scene)
                 #[cfg(target_arch = "wasm32")]
                 if let Some(json) = file_ops::take_pending_dropped_document() {
+                    state.canvas_dirty = true;
                     use drafftink_core::canvas::CanvasDocument;
                     match CanvasDocument::from_json(&json) {
                         Ok(doc) => {
@@ -3481,6 +3567,7 @@ impl ApplicationHandler for App {
                 // Check for pending clipboard text paste (WASM async)
                 #[cfg(target_arch = "wasm32")]
                 if let Some(clipboard_text) = file_ops::take_pending_clipboard_text() {
+                    state.canvas_dirty = true;
                     if let Some(text_id) = state.event_handler.editing_text {
                         if let Some(edit_state) = &mut state.text_edit_state {
                             // Capture state before paste
@@ -3821,9 +3908,10 @@ impl ApplicationHandler for App {
                     position_text_command_panel(state, editor.text_id);
                 }
                 let frame_ctx = state.egui_ctx.clone();
-                let egui_output = frame_ctx.run(egui_input, |ctx| {
+                let mut egui_output = frame_ctx.run(egui_input, |ctx| {
                     if let Some(action) = render_ui(ctx, &mut state.ui_state, &selected_props) {
                         ui_action_taken = true;
+                        state.canvas_dirty = true;
                         match action.clone() {
                             UiAction::SetGeometry(kind) => {
                                 finish_math_editor(state);
@@ -3895,6 +3983,7 @@ impl ApplicationHandler for App {
                                 state.event_handler.eraser_mode = mode;
                             }
                             UiAction::SetStrokeColor(color) => {
+                                if !state.canvas.selection.is_empty() || text_selection_state.is_some() { push_color_undo(state,"stroke"); }
                                 // Update UI state
                                 state.ui_state.stroke_color = color;
 
@@ -3948,6 +4037,7 @@ impl ApplicationHandler for App {
                                 }
                             }
                             UiAction::SetFillColor(color) => {
+                                if !state.canvas.selection.is_empty() { push_color_undo(state,"fill"); }
                                 state.ui_state.fill_color = color;
                                 let style = state.ui_state.to_shape_style();
                                 let has_selection = !state.canvas.selection.is_empty();
@@ -3978,7 +4068,7 @@ impl ApplicationHandler for App {
                             }
                             UiAction::SetPinnedBackground(color) => {
                                 if !state.canvas.selection.is_empty() {
-                                    state.canvas.document.push_undo();
+                                    push_color_undo(state,"pinned");
                                     let background = drafftink_core::shapes::SerializableColor::new(color.r(), color.g(), color.b(), color.a());
                                     for &id in &state.canvas.selection.clone() {
                                         if let Some(pinned) = state.canvas.document.pinned_shapes.get_mut(&id) {
@@ -4373,8 +4463,8 @@ impl ApplicationHandler for App {
                                     }
                                 }
                             }
-                            UiAction::EditTextCommand(source, finished, exit_text) => {
-                                update_text_command(state, source, finished, exit_text);
+                            UiAction::EditTextCommand(source, finished, exit_text, caret) => {
+                                update_text_command(state, source, finished, exit_text, caret);
                             }
                             UiAction::OpenInlineFormula(kind) => {
                                 if let (Some(id), Some(editor)) = (
@@ -5284,6 +5374,14 @@ impl ApplicationHandler for App {
                                 #[cfg(target_arch = "wasm32")]
                                 file_ops::import_settings_async();
                             }
+                            UiAction::ResetSettings => {
+                                let mut settings = crate::settings::UserSettings::default();
+                                settings.sanitize();
+                                state.ui_state.apply_imported_settings(settings);
+                                ctx.memory_mut(|memory| memory.reset_areas());
+                                crate::settings::save_settings(&state.ui_state.settings);
+                                state.ui_state.save_status = "Configuration réinitialisée".into();
+                            }
                             UiAction::SaveSettings => {
                                 state.ui_state.settings.sanitize();
                                 crate::settings::save_settings(&state.ui_state.settings);
@@ -5724,10 +5822,13 @@ impl ApplicationHandler for App {
                     ));
 
                 // Inactive canvases keep encoded sources, not decoded images/text/GPU layouts.
+                let redraw_canvas = state.canvas_dirty || state.render_target.is_none() || state.last_canvas_accent!=Some(state.ui_state.settings.accent_color) || (state.event_handler.editing_text.is_some() && state.text_edit_state.is_none());
+                if redraw_canvas {
                 state
                     .shape_renderer
                     .retain_open_document_caches(std::iter::once(&state.canvas.document));
                 state.shape_renderer.build_scene(&render_ctx);
+                }
                 #[cfg(target_arch = "wasm32")]
                 if let Some(window) = web_sys::window() {
                     use wasm_bindgen::JsValue;
@@ -5746,7 +5847,7 @@ impl ApplicationHandler for App {
                                 let p=to_screen(handle.position);
                                 serde_json::json!({"kind":format!("{:?}",handle.kind),"x":p.x,"y":p.y})
                             }).collect();
-                            serde_json::json!({"id":shape.id(),"shape":shape,"pinned":state.canvas.document.is_pinned(shape.id()),"bounds":[top_left.x,top_left.y,bottom_right.x,bottom_right.y],"handles":handles})
+                            serde_json::json!({"id":shape.id(),"shape":shape,"pinned":state.canvas.document.is_pinned(shape.id()),"pinned_background":state.canvas.document.pinned_shapes.get(&shape.id()).map(|pin|pin.background),"bounds":[top_left.x,top_left.y,bottom_right.x,bottom_right.y],"handles":handles})
                         }).collect();
 
                         let status = serde_json::json!({"shapes":shapes,"presentation":state.ui_state.presentation_mode,"tool":format!("{:?}",state.ui_state.current_tool),"editing_text":state.event_handler.editing_text,"inline_dialog":state.ui_state.inline_formula_draft.is_some(),"inline_error":state.ui_state.inline_formula_error,"zoom":state.canvas.camera.zoom,"camera_offset":[state.canvas.camera.offset.x,state.canvas.camera.offset.y],"cursor_mode":browser_cursor_kind(state).0,"png_save_requests":state.png_save_requests,"active_tab":state.active_tab,"tabs":state.tabs.len(),"memory":{"parked_shapes_total":state.tabs.iter().map(|tab|tab.document.len()).sum::<usize>(),"image_cache_bytes":state.shape_renderer.image_cache_bytes(),"image_cache_budget_bytes":32*1024*1024,"path_cache_payload_bytes":state.shape_renderer.path_cache_bytes(),"history_payload_bytes":state.canvas.document.history_memory_bytes(),"render_target_allocations":state.render_target_allocations,"render_target_bytes":state.surface.config.width as u64*state.surface.config.height as u64*4},"geometry":format!("{:?}",state.ui_state.geometry),"context_properties":state.ui_state.context_properties,"properties_visible":!state.ui_state.context_rects.is_empty(),"selected_text":state.text_edit_state.as_ref().and_then(|e|e.editor().selected_text()).map(|s|s.to_string()),"insertion_script":state.text_edit_state.as_ref().map(|e|e.script_value()),"text_caret":state.text_edit_state.as_ref().and_then(|e|e.cursor_geometry(1.5)).map(|r|[r.x0,r.y0,r.x1,r.y1]),"editing_math":state.ui_state.math_editor.as_ref().map(|e| e.shape_id),"math_form_rect":state.ui_state.math_editor_rect.map(|r|[r.min.x,r.min.y,r.max.x,r.max.y]),"math_input_focused":state.ui_state.math_editor.as_ref().is_some_and(|e|state.egui_ctx.memory(|m|m.focused()==Some(egui::Id::new(("math_source",e.shape_id))))),"command_editor":state.ui_state.text_command_editor.as_ref().map(|e| &e.source),"selected_count":state.canvas.selection.len(),"accent_color":state.ui_state.settings.accent_color,"selection_rect":selection_rect.map(|r|[r.x0,r.y0,r.x1,r.y1]),"controls":state.ui_state.test_controls});
@@ -5754,6 +5855,11 @@ impl ApplicationHandler for App {
                             let mut status = status;
                             status["laser_permanent"] = state.ui_state.settings.laser_permanent.into();
                             status["laser_palette_open"] = state.ui_state.laser_color_open.into();
+                            status["time_widgets"] = state.ui_state.time_widgets.iter().map(|w|serde_json::json!({"id":w.id,"font":w.font,"display":w.displayed,"running":w.stopwatch_running})).collect::<Vec<_>>().into();
+                            status["command_caret"] = state.ui_state.text_command_editor.as_ref().map(|e|e.caret).into();
+                            status["formula_caret"] = serde_json::json!(state.shape_renderer.inline_caret_screen().map(|r|[r.x0,r.y0,r.x1,r.y1]));
+                            status["canvas_render_count"] = state.canvas_render_count.into();
+                            status["image_decode_count"] = state.shape_renderer.image_decode_count().into();
                             status["stroke_colors"] = serde_json::to_value(state.ui_state.settings.stroke_colors).unwrap_or_default();
                             status["eraser_mode"] = format!("{:?}", state.ui_state.eraser_mode).into();
                             status
@@ -5786,12 +5892,37 @@ impl ApplicationHandler for App {
                         // Update cursor blinking
                         if let Some(edit_state) = &mut state.text_edit_state {
                             edit_state.cursor_blink();
+                            if redraw_canvas {
+                            state.shape_renderer.set_inline_caret_active(true);
                             state.shape_renderer.render_text_editing(
                                 text,
                                 edit_state,
                                 camera_transform,
                                 state.event_handler.text_edit_anchor,
                             );
+                            if let Some(editor) = state.ui_state.text_command_editor.as_ref().filter(|e|e.text_id==text_id) {
+                                if let Some(probe) = editor.caret_latex.as_ref() {
+                                    if let Some(range)=crate::math_input::command_active_range(&editor.source,editor.caret) {
+                                        if let (Some(a),Some(b))=(crate::math_input::live_command_caret_latex(&editor.source,range.start),crate::math_input::live_command_caret_latex(&editor.source,range.end)) {
+                                            let start=state.shape_renderer.measure_inline_source_caret(text,edit_state,editor.formula_id,&editor.source,range.start,&a);
+                                            let end=state.shape_renderer.measure_inline_source_caret(text,edit_state,editor.formula_id,&editor.source,range.end,&b);
+                                            if let (Some(start),Some(end))=(start,end) { state.shape_renderer.draw_inline_active_block(start,end); }
+                                        }
+                                    }
+                                    state.shape_renderer.draw_inline_source_caret(text,edit_state,editor.formula_id,&editor.source,editor.caret,probe);
+                                }
+                            }
+                            }
+                            if edit_state.is_cursor_visible() {
+                                if let Some(points)=state.shape_renderer.editing_caret_points(edit_state,state.ui_state.text_command_editor.is_some()) {
+                                    let pixels=egui_output.pixels_per_point as f64;
+                                    let points=points.into_iter().map(|p|egui::Pos2::new((p.x/pixels) as f32,(p.y/pixels) as f32)).collect();
+                                    egui_output.shapes.insert(0,egui::epaint::ClippedShape {
+                                        clip_rect: state.egui_ctx.input(|input|input.content_rect()),
+                                        shape:egui::Shape::convex_polygon(points,egui::Color32::BLACK,egui::Stroke::NONE),
+                                    });
+                                }
+                            }
                         }
                     }
                 }
@@ -5894,6 +6025,7 @@ impl ApplicationHandler for App {
                 }
                 let render_texture_view = &state.render_target.as_ref().unwrap().3;
 
+                if redraw_canvas {
                 // Render Vello to the intermediate texture
                 if let Err(e) = state.vello_renderer.render_to_texture(
                     device,
@@ -5904,6 +6036,11 @@ impl ApplicationHandler for App {
                 ) {
                     log::error!("Failed to render: {:?}", e);
                     return;
+                }
+
+                    state.canvas_dirty = false;
+                    state.last_canvas_accent=Some(state.ui_state.settings.accent_color);
+                    state.canvas_render_count = state.canvas_render_count.wrapping_add(1);
                 }
 
                 state.shape_renderer.recycle_scene(scene);
@@ -6202,6 +6339,12 @@ impl ApplicationHandler for App {
                 button,
                 ..
             } => {
+                if btn_state == ElementState::Pressed && button == MouseButton::Left && !egui_wants_input {
+                    if focus_inline_formula_at_pointer(state) {
+                        state.ui_pointer_gesture = true;
+                        state.needs_redraw = true; state.window.request_redraw(); return;
+                    }
+                }
                 if btn_state == ElementState::Pressed
                     && button == MouseButton::Left
                     && state.ui_state.math_editor.is_some()
@@ -7985,7 +8128,7 @@ fn position_text_command_panel(state: &mut AppState, text_id: drafftink_core::sh
     let left = screen.iter().map(|p| p.x).fold(f64::INFINITY, f64::min);
     let bottom = screen.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max);
     state.ui_state.text_command_pos =
-        egui::Pos2::new((left / scale) as f32, ((bottom + 10.0) / scale) as f32);
+        egui::Pos2::new((left / scale) as f32, (bottom / scale + 10.0) as f32);
 }
 fn activate_text_command(state: &mut AppState) {
     if state.ui_state.text_command_editor.is_some() {
@@ -8036,6 +8179,9 @@ fn activate_text_command(state: &mut AppState) {
     state.ui_state.text_command_editor = Some(crate::ui::TextCommandEditor {
         text_id: id,
         formula_id,
+        caret: source.chars().count(),
+        caret_latex: crate::math_input::live_command_caret_latex(&source,source.chars().count()),
+        pending_caret: None,
         source,
         request_focus: true,
     });
@@ -8060,10 +8206,7 @@ fn open_selected_text_command(state: &mut AppState) -> bool {
     let Some(formula) = text.formulas.iter().find(|f| f.at >= start && f.at < end) else {
         return false;
     };
-    state.ui_state.text_command_editor = Some(crate::ui::TextCommandEditor {
-        text_id: id,
-        formula_id: formula.math.id(),
-        source: match formula.kind.as_str() {
+    let source = match formula.kind.as_str() {
             "Fraction" => format!("frac({},{})", formula.parts[0], formula.parts[1]),
             "Racine" => format!("sqrt({})", formula.parts[0]),
             "Racine n-ième" => format!("root({},{})", formula.parts[0], formula.parts[1]),
@@ -8084,7 +8227,14 @@ fn open_selected_text_command(state: &mut AppState) -> bool {
                 formula.parts[0], formula.parts[1], formula.parts[2]
             ),
             _ => formula.math.source.clone(),
-        },
+        };
+    state.ui_state.text_command_editor = Some(crate::ui::TextCommandEditor {
+        text_id: id,
+        formula_id: formula.math.id(),
+        caret: source.chars().count(),
+        caret_latex: crate::math_input::live_command_caret_latex(&source,source.chars().count()),
+        pending_caret: None,
+        source,
         request_focus: true,
     });
     state.canvas.document.push_undo();
@@ -8097,7 +8247,9 @@ fn open_selected_text_command(state: &mut AppState) -> bool {
     state.ui_keyboard_pending = true;
     true
 }
-fn update_text_command(state: &mut AppState, source: String, finished: bool, exit_text: bool) {
+fn update_text_command(state: &mut AppState, source: String, finished: bool, exit_text: bool, caret: usize) {
+    if let Some(editor) = state.ui_state.text_command_editor.as_mut() { editor.caret = caret; editor.caret_latex = crate::math_input::live_command_caret_latex(&source,caret); }
+    if let Some(edit) = state.text_edit_state.as_mut() { edit.cursor_reset(); }
     let Some(editor) = state.ui_state.text_command_editor.clone() else {
         return;
     };
@@ -8112,12 +8264,15 @@ fn update_text_command(state: &mut AppState, source: String, finished: bool, exi
             .find(|f| f.math.id() == editor.formula_id)
         {
             if valid {
-                formula.math.set_latex(latex.unwrap());
+                let latex = latex.unwrap();
+                if formula.math.latex != latex { formula.math.set_latex(latex); }
             }
-            formula.math.source = source.clone();
-            formula.parts[0] = source;
-            formula.kind = "Code".into();
-            text.invalidate_cache();
+            if formula.math.source != source {
+                formula.math.source = source.clone();
+                formula.parts[0] = source;
+                formula.kind = "Code".into();
+                text.invalidate_cache();
+            }
         }
     }
     if finished {
@@ -8441,6 +8596,7 @@ fn select_text_word_at(state: &mut AppState, point: kurbo::Point) {
 }
 
 fn insert_vector_shapes(state: &mut AppState, shapes: Vec<Shape>) {
+    state.canvas_dirty = true;
     if shapes.is_empty() { return; }
     state.canvas.document.push_undo();
     state.canvas.clear_selection();
@@ -8492,6 +8648,7 @@ fn auto_pan_drag(state: &mut AppState, seconds: f64) -> bool {
 
 fn browser_cursor_kind(state: &AppState) -> (u8, bool) {
     let pointer = state.egui_ctx.input(|i| i.pointer.hover_pos());
+    if state.ui_state.time_resize_cursor.is_some() { return (0, true); }
     let over_ui = state.egui_ctx.is_pointer_over_area();
     if over_ui {
         if egui::Popup::is_any_open(&state.egui_ctx) {
@@ -8545,4 +8702,35 @@ fn browser_cursor_kind(state: &AppState) -> (u8, bool) {
             (editing_kind, false)
         }
     }
+}
+
+fn focus_inline_formula_at_pointer(state: &mut AppState) -> bool {
+    let Some(editor) = state.ui_state.text_command_editor.clone() else { return false; };
+    let Some(Shape::Text(text)) = state.canvas.document.get_shape(editor.text_id) else { return false; };
+    let Some(edit) = state.text_edit_state.as_ref() else { return false; };
+    let Some(formula) = text.formulas.iter().find(|f|f.math.id()==editor.formula_id) else { return false; };
+    let Some(byte) = text.content.char_indices().nth(formula.at).map(|(b,_)|b) else { return false; };
+    let Some(bounds) = edit.formula_bounds(byte) else { return false; };
+    let screen = state.input.mouse_position();
+    let local = state.shape_renderer.editing_point_from_screen(screen);
+    if !bounds.contains(local) { return false; }
+    let candidates = crate::math_input::command_caret_candidates(&editor.source);
+    let mut closest = None;
+    for character in candidates.into_iter().take(256) {
+        let Some(probe) = crate::math_input::live_command_caret_latex(&editor.source,character) else { continue; };
+        let Some(rect) = state.shape_renderer.measure_inline_source_caret(text,edit,editor.formula_id,&editor.source,character,&probe) else { continue; };
+        let point = Point::new(screen.x.clamp(rect.x0,rect.x1), screen.y.clamp(rect.y0,rect.y1));
+        let distance = point.distance_squared(screen);
+        if closest.is_none_or(|(_,previous)|distance<previous) { closest=Some((character,distance)); }
+    }
+    if let Some((character,_)) = closest {
+        if let Some(editor) = state.ui_state.text_command_editor.as_mut() { editor.caret=character; editor.pending_caret=Some(character); editor.request_focus=true; }
+        update_text_command(state,editor.source,false,false,character);
+    }
+    true
+}
+
+fn push_color_undo(state: &mut AppState, target: &'static str) {
+    let token=(state.pointer_serial,target);
+    if state.last_color_edit!=Some(token) { state.canvas.document.push_undo();state.last_color_edit=Some(token); }
 }

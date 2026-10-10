@@ -1,4 +1,4 @@
-# Qurso🌿 0.31.0 — site en ligne
+# Qurso🌿 0.32.0 — site en ligne
 
 Dans le ZIP Web, envoyer le contenu du dossier `web` vers `public_html/qrapht/web/` en mode binaire. `index.html` et le dossier `pkg` doivent se trouver directement à cet emplacement.
 

@@ -18,6 +18,8 @@ use std::time::Instant as StatusInstant;
 
 use crate::math_input::friendly_math_to_latex;
 use crate::settings::UserSettings;
+pub use crate::time_widget::install_time_fonts;
+use crate::time_widget::{draw_time_digits, white_color_picker};
 
 // Re-export from widgets crate for consistent styling
 use drafftink_widgets::{
@@ -278,6 +280,9 @@ pub struct TextCommandEditor {
     pub text_id: ShapeId,
     pub formula_id: ShapeId,
     pub source: String,
+    pub caret: usize,
+    pub caret_latex: Option<String>,
+    pub pending_caret: Option<usize>,
     pub request_focus: bool,
 }
 
@@ -322,6 +327,8 @@ pub struct TimeWidgetState {
     pub text_color: Color32,
     pub background_color: Color32,
     pub text_size: u8,
+    pub font: u8,
+    pub displayed: String,
 }
 
 impl TimeWidgetState {
@@ -335,7 +342,7 @@ impl TimeWidgetState {
             alarm_enabled: false, alarm_hour: 8, alarm_minute: 0, alarm_last_fired: String::new(),
             options_open: false, stopwatch_centiseconds: true, clock_seconds: false,
             timezone: "Local".into(), text_color: Color32::WHITE,
-            background_color: Color32::from_rgb(42, 42, 42), text_size: 2,
+            background_color: Color32::from_rgb(42, 42, 42), text_size: 2, font: 0, displayed: String::new(),
         }
     }
 }
@@ -394,6 +401,9 @@ pub struct UiState {
     pub pin_background: Color32,
     /// Whether the hamburger menu is open.
     pub menu_open: bool,
+    pub menu_rect: Option<Rect>,
+    pub settings_rect: Option<Rect>,
+    pub time_resize_cursor: Option<egui::CursorIcon>,
     /// Which color popover is currently open.
     pub color_popover: ColorPopover,
     pub color_picker_rect: Option<Rect>,
@@ -443,6 +453,7 @@ pub struct UiState {
     pub collab_modal_open: bool,
     /// Whether the keyboard shortcuts modal is open.
     pub shortcuts_modal_open: bool,
+    shortcuts_before_edit: Option<UserSettings>,
     /// Whether the settings dialog is open.
     pub settings_open: bool,
     pub settings_tab: SettingsTab,
@@ -506,11 +517,21 @@ pub struct UiState {
 }
 
 impl UiState {
+    pub fn modal_open(&self) -> bool { self.settings_open || self.shortcuts_modal_open || self.save_dialog_open || self.open_dialog_open || self.open_recent_dialog_open }
+    pub fn owns_pointer(&self, point: Pos2) -> bool {
+        self.modal_open() || self.color_picker_rect.is_some_and(|r| r.contains(point))
+            || self.laser_color_rect.is_some_and(|r| r.contains(point))
+            || self.context_rects.iter().any(|r| r.contains(point))
+            || self.time_widgets.iter().any(|w| w.open && w.rendered_rect.is_some_and(|r| r.expand(if w.selected { 14.0 } else { 0.0 }).contains(point)))
+    }
+
     pub fn apply_imported_settings(&mut self, settings: UserSettings) {
         self.current_text_font = settings.last_text_font.clone().unwrap_or_else(|| TextFont::from_name(&settings.default_font, &settings.default_font_postscript));
         self.current_text_postscript = settings.last_text_postscript.clone().unwrap_or_else(|| settings.default_font_postscript.clone());
         self.settings = settings;
         self.settings_before_edit = None;
+        self.shortcuts_before_edit = None;
+        self.shortcuts_modal_open = false;
         self.settings_open = false;
         self.color_popover = ColorPopover::None;
         self.color_picker_rect = None;
@@ -570,6 +591,9 @@ impl Default for UiState {
             selection_pinned: false,
             pin_background: Color32::WHITE,
             menu_open: false,
+            menu_rect: None,
+            settings_rect: None,
+            time_resize_cursor: None,
             color_popover: ColorPopover::None,
             color_picker_rect: None,
             grid_style: GridStyle::default(),
@@ -596,6 +620,7 @@ impl Default for UiState {
             bg_color: Color32::WHITE,
             collab_modal_open: false,
             shortcuts_modal_open: false,
+            shortcuts_before_edit: None,
             settings_open: false,
             settings_tab: SettingsTab::Appearance,
             settings_before_edit: None,
@@ -697,7 +722,7 @@ pub enum UiAction {
     InsertUserPreset(String),
     InsertTextSymbol(String),
     OpenInlineFormula(String),
-    EditTextCommand(String, bool, bool),
+    EditTextCommand(String, bool, bool, usize),
     CommitInlineFormula(String, String, [String; 4], bool),
     /// Change stroke color.
     SetStrokeColor(Color32),
@@ -844,6 +869,7 @@ pub enum UiAction {
     ShowShortcuts,
     /// Persist the current settings.
     SaveSettings,
+    ResetSettings,
     ExportSettings,
     ImportSettings,
     OpenNumworks,
@@ -966,15 +992,18 @@ pub fn render_ui(
         style.visuals.widgets.active.bg_stroke.color = accent;
         style.visuals.widgets.hovered.bg_stroke.color = accent;
         style.visuals.hyperlink_color = accent;
+        style.visuals.popup_shadow = egui::epaint::Shadow { offset: [0, 1], blur: 6, spread: 0, color: Color32::from_black_alpha(55) };
     });
     ui_state.test_controls.clear();
     if ctx.input(|i| i.pointer.primary_pressed())
+        && !ui_state.modal_open()
         && !egui::Popup::is_any_open(ctx)
         && ctx
             .input(|i| i.pointer.interact_pos())
-            .is_some_and(|p| !ui_state.context_rects.iter().any(|r| r.contains(p)))
+            .is_some_and(|p| !ui_state.context_rects.iter().any(|r| r.contains(p)) && !ui_state.color_picker_rect.is_some_and(|r| r.contains(p)))
     {
         ui_state.context_properties = false;
+        if ui_state.color_popover == ColorPopover::Pinned { ui_state.color_popover=ColorPopover::None; ui_state.color_picker_rect=None; ui_state.pinned_picker_custom_open=false; }
     }
     ui_state.context_rects.clear();
     render_stopwatch(ctx, ui_state);
@@ -1008,9 +1037,10 @@ pub fn render_ui(
     let file_action = render_file_menu(ctx, ui_state);
     let bottom_action = render_bottom_toolbar(ctx, ui_state);
     let right_panel_action = render_right_panel(ctx, ui_state, selected_props);
-    let math_action = render_math_editor(ctx, ui_state);
-    let inline_action = render_inline_formula_dialog(ctx, ui_state);
-    let command_action = render_text_command_editor(ctx, ui_state);
+    let editing_enabled = !ui_state.modal_open();
+    let math_action = editing_enabled.then(||render_math_editor(ctx,ui_state)).flatten();
+    let inline_action = editing_enabled.then(||render_inline_formula_dialog(ctx,ui_state)).flatten();
+    let command_action = editing_enabled.then(||render_text_command_editor(ctx,ui_state)).flatten();
     let settings_action = render_settings_dialog(ctx, ui_state);
     let tab_action = render_tab_bar(ctx, ui_state);
     let insert_action = render_insert_panel(ctx, ui_state);
@@ -1115,8 +1145,10 @@ fn render_stopwatch(ctx: &Context, state: &mut UiState) {
     if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
         for widget in &mut state.time_widgets { widget.options_open = false; }
     }
+    state.time_resize_cursor = None;
     if state.time_widgets.is_empty() { return; }
     let text_sizes = [16.0, 21.0, 27.0, 34.0];
+    let time_pointer_enabled = !state.modal_open();
     let mut remove = Vec::new();
     for widget in &mut state.time_widgets {
         if !widget.open { remove.push(widget.id); continue; }
@@ -1128,14 +1160,20 @@ fn render_stopwatch(ctx: &Context, state: &mut UiState) {
             widget.countdown_started_at = None;
             play_time_alarm();
         }
-        if widget.stopwatch_running || widget.countdown_started_at.is_some() || widget.mode == 2 || widget.alarm_enabled {
-            ctx.request_repaint_after(std::time::Duration::from_millis(100));
-        }
-        let (clock_date, clock) = qurso_clock_now(&widget.timezone);
+        let (clock_date, clock) = if widget.mode==2 || widget.alarm_enabled { qurso_clock_now(&widget.timezone) } else { (String::new(),"00:00:00".into()) };
         let mut segments = clock.split(':');
         let clock_hour = segments.next().and_then(|s| s.parse::<u8>().ok()).unwrap_or(0);
         let clock_minute = segments.next().and_then(|s| s.parse::<u8>().ok()).unwrap_or(0);
         let clock_second = segments.next().and_then(|s| s.parse::<u8>().ok()).unwrap_or(0);
+        if widget.stopwatch_running {
+            let delay=if widget.stopwatch_centiseconds { 0.1 } else { (1.0-elapsed.fract()).max(0.01) };
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(delay));
+        }
+        if widget.countdown_started_at.is_some() {
+            let delay=if widget.stopwatch_centiseconds { 0.1 } else { let fraction=remaining.fract(); if fraction<0.01 { 1.0 } else { fraction } };
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(delay));
+        }
+        if widget.mode==2 || widget.alarm_enabled { ctx.request_repaint_after(crate::time_widget::clock_repaint_delay(clock_second,widget.mode==2&&widget.clock_seconds)); }
         let alarm_key = format!("{clock_date} {clock_hour:02}:{clock_minute:02}");
         if widget.alarm_enabled && clock_hour == widget.alarm_hour && clock_minute == widget.alarm_minute && widget.alarm_last_fired != alarm_key {
             widget.alarm_last_fired = alarm_key;
@@ -1152,8 +1190,9 @@ fn render_stopwatch(ctx: &Context, state: &mut UiState) {
         } else if hours > 0 {
             if widget.stopwatch_centiseconds { format!("{hours:02}:{minutes:02}:{seconds:02}:{centiseconds:02}") } else { format!("{hours:02}:{minutes:02}:{seconds:02}") }
         } else if widget.stopwatch_centiseconds { format!("{minutes:02}:{seconds:02}:{centiseconds:02}") } else { format!("{minutes:02}:{seconds:02}") };
-        let pointer_pressed = ctx.input(|input| input.pointer.primary_pressed());
-        let pointer_down = ctx.input(|input| input.pointer.button_down(egui::PointerButton::Primary));
+        widget.displayed = display.clone();
+        let pointer_pressed = time_pointer_enabled && ctx.input(|input| input.pointer.primary_pressed());
+        let pointer_down = time_pointer_enabled && ctx.input(|input| input.pointer.button_down(egui::PointerButton::Primary));
         let pointer_released = ctx.input(|input| input.pointer.primary_released());
         if pointer_pressed {
             if let Some(pointer) = ctx.input(|input| input.pointer.interact_pos()) {
@@ -1162,7 +1201,7 @@ fn render_stopwatch(ctx: &Context, state: &mut UiState) {
                 widget.selected = widget_rect.expand(14.0).contains(pointer);
                 if widget.selected && was_selected {
                     let corners = [widget_rect.left_top(), widget_rect.right_top(), widget_rect.left_bottom(), widget_rect.right_bottom()];
-                    if let Some(index) = corners.iter().position(|point| point.distance(pointer) <= 14.0) {
+                    if let Some(index) = corners.iter().position(|point| Rect::from_center_size(*point, Vec2::splat(28.0)).contains(pointer)) {
                         widget.active_resize_index = Some(index);
                         widget.resize_origin_size = Some(widget.size);
                         widget.resize_origin_position = Some(widget.position);
@@ -1191,7 +1230,7 @@ fn render_stopwatch(ctx: &Context, state: &mut UiState) {
                     let mut position_delta = Vec2::ZERO;
                     if index % 2 == 0 { size.x -= delta.x; position_delta.x = delta.x; } else { size.x += delta.x; }
                     if index < 2 { size.y -= delta.y; position_delta.y = delta.y; } else { size.y += delta.y; }
-                    let clamped = size.max(Vec2::new(180.0, 75.0));
+                    let clamped = size.max(Vec2::new(180.0, 96.0));
                     if index % 2 == 0 { position_delta.x = origin_size.x - clamped.x; }
                     if index < 2 { position_delta.y = origin_size.y - clamped.y; }
                     widget.size = clamped;
@@ -1215,11 +1254,13 @@ fn render_stopwatch(ctx: &Context, state: &mut UiState) {
         let area = egui::Area::new(egui::Id::new(("qurso_time_widget", widget.id)))
             .current_pos(widget.position).movable(false).order(egui::Order::Foreground).show(ctx, |ui| {
                 let frame = egui::Frame::new().fill(widget.background_color)
-                    .stroke(Stroke::new(2.0, if widget.selected { Color32::from_rgb(80, 145, 255) } else { Color32::from_rgba_unmultiplied(255,255,255,28) }))
+                    .stroke(Stroke::new(2.0, if widget.selected { ctx.style().visuals.selection.bg_fill } else { Color32::from_rgba_unmultiplied(255,255,255,28) }))
                     .corner_radius(CornerRadius::same(12)).inner_margin(Margin::same(12)).show(ui, |ui| {
                         ui.set_min_size(widget.size);
                         ui.set_max_size(widget.size);
-                        if widget.selected {
+                        ui.allocate_ui(Vec2::new(widget.size.x,25.0),|ui| {
+                            ui.set_min_height(25.0);
+                            if widget.selected {
                             ui.horizontal(|ui| {
                                 ui.add_space((widget.size.x - 48.0).max(0.0));
                                 let settings = ui.small_button("⚙").on_hover_text("Options du chronomètre");
@@ -1229,20 +1270,25 @@ fn render_stopwatch(ctx: &Context, state: &mut UiState) {
                                 close_rect = Some(close.rect);
                                 if close.clicked() { widget.open = false; }
                             });
-                        } else {
-                            ui.add_space(18.0);
-                        }
-                        let display_height = (widget.size.y - 48.0).max(24.0);
+                            }
+                        });
+                        let display_height = (widget.size.y - 66.0).max(24.0);
                         ui.allocate_ui(Vec2::new(widget.size.x, display_height), |ui| {
                             ui.centered_and_justified(|ui| {
-                                ui.label(egui::RichText::new(display).size(text_sizes[widget.text_size.min(3) as usize]).monospace().color(widget.text_color));
+                                let digits = draw_time_digits(ui, &display, widget.font, text_sizes[widget.text_size.min(3) as usize], widget.text_color);
+                                for (index, rect) in digits.into_iter().enumerate() {
+                                    state.test_controls.insert(format!("Time digit {} {index}", widget.id), [rect.min.x,rect.min.y,rect.max.x,rect.max.y]);
+                                }
                             });
                         });
+                        ui.allocate_ui(Vec2::new(widget.size.x,25.0),|ui| {
+                            ui.set_min_height(25.0);
                         ui.horizontal(|ui| {
                             if widget.mode != 2 {
                                 let running = if widget.mode == 1 { widget.countdown_started_at.is_some() } else { widget.stopwatch_running };
                                 let icon = if running { include_image!("../assets/time-pause.svg") } else { include_image!("../assets/time-play.svg") };
-                                let response = ui.add(egui::Image::new(icon).fit_to_exact_size(Vec2::splat(25.0)).sense(egui::Sense::click()));
+                                let response = ui.add(egui::Image::new(icon).tint(widget.text_color).fit_to_exact_size(Vec2::splat(25.0)).sense(egui::Sense::click()));
+                                state.test_controls.insert(format!("Time play {}",widget.id),[response.rect.min.x,response.rect.min.y,response.rect.max.x,response.rect.max.y]);
                                 if response.clicked() {
                                     if widget.mode == 1 {
                                         if running { widget.countdown_remaining = remaining; widget.countdown_started_at = None; }
@@ -1255,6 +1301,7 @@ fn render_stopwatch(ctx: &Context, state: &mut UiState) {
                                 if widget.selected { ui.add_space(8.0); }
                             });
                         });
+                        });
                     });
                 if widget.selected {
                     let rect = frame.response.rect;
@@ -1262,11 +1309,16 @@ fn render_stopwatch(ctx: &Context, state: &mut UiState) {
                     let painter = ui.painter();
                     let radius = 4.0;
                     for (index, point) in [rect.left_top(), rect.right_top(), rect.left_bottom(), rect.right_bottom()].into_iter().enumerate() {
-                        let handle_rect = Rect::from_center_size(point, Vec2::splat(14.0));
+                        let handle_rect = Rect::from_center_size(point, Vec2::splat(28.0));
                         resize_rects.push(handle_rect);
-                        ui.interact(handle_rect, egui::Id::new(("qurso_time_resize", widget.id, index)), egui::Sense::hover());
+                        let cursor = if index == 0 || index == 3 { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw };
+                        ui.interact(handle_rect, egui::Id::new(("qurso_time_resize", widget.id, index)), egui::Sense::hover()).on_hover_cursor(cursor);
+                        if ctx.input(|input| input.pointer.hover_pos()).is_some_and(|p| handle_rect.contains(p)) || widget.active_resize_index == Some(index) {
+                            state.time_resize_cursor = Some(cursor);
+                            ctx.set_cursor_icon(cursor);
+                        }
                         painter.circle_filled(point, radius, Color32::WHITE);
-                        painter.circle_stroke(point, radius, Stroke::new(1.2, Color32::from_rgb(65, 135, 255)));
+                        painter.circle_stroke(point, radius, Stroke::new(1.2, ctx.style().visuals.selection.bg_fill));
                     }
                 } else {
                     widget.rendered_rect = Some(frame.response.rect);
@@ -1307,7 +1359,9 @@ fn render_stopwatch(ctx: &Context, state: &mut UiState) {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Options").strong());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button("×").clicked() { close_options_requested = true; }
+                            let close = ui.small_button("×");
+                            state.test_controls.insert(format!("Time options close {}",widget.id),[close.rect.min.x,close.rect.min.y,close.rect.max.x,close.rect.max.y]);
+                            if close.clicked() { close_options_requested = true; }
                         });
                     });
                     ui.separator();
@@ -1339,6 +1393,13 @@ fn render_stopwatch(ctx: &Context, state: &mut UiState) {
                         if ui.button("Tester l’alarme").clicked() { play_time_alarm(); }
                     }
                     ui.separator();
+                    ui.horizontal(|ui| {
+                        ui.label("Police");
+                        let choice = egui::ComboBox::from_id_salt(("qurso_time_font", widget.id)).selected_text(["Monospace", "Inter", "Noto Sans", "GelPen"][widget.font.min(3) as usize]).show_ui(ui, |ui| {
+                            for (index, name) in ["Monospace", "Inter", "Noto Sans", "GelPen"].into_iter().enumerate() { let response=ui.selectable_value(&mut widget.font,index as u8,name); state.test_controls.insert(format!("Time font {} {name}",widget.id),[response.rect.min.x,response.rect.min.y,response.rect.max.x,response.rect.max.y]); }
+                        });
+                        state.test_controls.insert(format!("Time font {}",widget.id),[choice.response.rect.min.x,choice.response.rect.min.y,choice.response.rect.max.x,choice.response.rect.max.y]);
+                    });
                     ui.horizontal(|ui| { ui.label("Taille"); egui::ComboBox::from_id_salt(("qurso_time_size", widget.id)).selected_text(["S", "M", "L", "XL"][widget.text_size.min(3) as usize]).show_ui(ui, |ui| { for (index, size) in ["S", "M", "L", "XL"].iter().enumerate() { ui.selectable_value(&mut widget.text_size, index as u8, *size); } }); });
                     ui.horizontal(|ui| { ui.label("Texte"); ui.color_edit_button_srgba(&mut widget.text_color); ui.label("Fond"); ui.color_edit_button_srgba(&mut widget.background_color); });
                 });
@@ -1821,6 +1882,7 @@ fn render_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                     if custom_clicked { ui_state.laser_picker_expanded = !ui_state.laser_picker_expanded; }
                     if ui_state.laser_picker_expanded {
                         ui.separator();
+                        white_color_picker(ui);
                         let mut color = ui_state.laser_custom_color;
                         let picker = ui.allocate_ui(Vec2::new(230.0, 230.0), |ui| {
                             egui::color_picker::color_picker_color32(ui, &mut color, egui::color_picker::Alpha::Opaque)
@@ -2355,7 +2417,7 @@ fn show_color_picker_popover(
                 .inner_margin(Margin::same(10))
                 .show(ui, |ui| {
                     ui.set_width(width - 20.0);
-                    ui.visuals_mut().override_text_color = Some(Color32::from_gray(45));
+                    white_color_picker(ui);
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(title).strong());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -2406,11 +2468,11 @@ fn show_pinned_color_picker(ctx: &Context, state: &mut UiState, anchor: Rect) ->
         }
     }
     let screen = ctx.input(|input| input.content_rect());
-    let width = 220.0;
+    let width = if state.pinned_picker_custom_open { 258.0 } else { 220.0 };
     let expanded = state.pinned_picker_custom_open;
-    let height = if expanded { 330.0 } else { 92.0 };
+    let height = if expanded { previous.map_or(330.0, |r|r.height().max(330.0)) } else { 92.0 };
     let pos = Pos2::new(
-        (anchor.left() - width - 8.0).clamp(screen.left() + 4.0, (screen.right() - width - 4.0).max(screen.left() + 4.0)),
+        (state.context_rects.first().unwrap_or(&anchor).center().x - width * 0.5).clamp(screen.left() + 4.0, (screen.right() - width - 4.0).max(screen.left() + 4.0)),
         (anchor.bottom() + 8.0).clamp(screen.top() + 4.0, (screen.bottom() - height - 4.0).max(screen.top() + 4.0)),
     );
     let preset_colors = [
@@ -2432,31 +2494,38 @@ fn show_pinned_color_picker(ctx: &Context, state: &mut UiState, anchor: Rect) ->
             Frame::new().fill(Color32::WHITE).stroke(Stroke::new(1.0, Color32::from_gray(205)))
                 .corner_radius(CornerRadius::same(8)).inner_margin(Margin::same(9)).show(ui, |ui| {
                     ui.set_width(width - 18.0);
-                    ui.visuals_mut().override_text_color = Some(Color32::from_gray(45));
+                    white_color_picker(ui);
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Fond épinglé").strong());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| close = ui.small_button("×").clicked());
                     });
                     ui.horizontal(|ui| {
                         for color in preset_colors {
-                            let (clicked, _) = ColorSwatch::new(color, "Couleur de fond").selected(state.pin_background == color).show(ui);
+                            let (clicked, rect) = ColorSwatch::new(color, "Couleur de fond").selected(state.pin_background == color).show(ui);
+                            state.test_controls.insert(format!("Pinned color {}", format!("{:02x}{:02x}{:02x}",color.r(),color.g(),color.b())), [rect.min.x,rect.min.y,rect.max.x,rect.max.y]);
                             if clicked { selected = Some(color); }
                         }
                     });
                     ui.horizontal(|ui| {
+                        let transparent = Rect::from_min_size(ui.next_widget_position(),Vec2::splat(20.0));
+                        state.test_controls.insert("Pinned transparent".into(),[transparent.min.x,transparent.min.y,transparent.max.x,transparent.max.y]);
                         if NoColorSwatch::new("Transparent").selected(state.pin_background == Color32::TRANSPARENT).show(ui) {
                             selected = Some(Color32::TRANSPARENT);
                         }
-                        let (clicked, _) = color_swatch_current(ui, state.pin_background, "Couleur personnalisée");
+                        let (clicked, rect) = color_swatch_current(ui, state.pin_background, "Couleur personnalisée");
+                        state.test_controls.insert("Pinned custom".into(),[rect.min.x,rect.min.y,rect.max.x,rect.max.y]);
                         if clicked { state.pinned_picker_custom_open = !state.pinned_picker_custom_open; }
-                        if state.pinned_picker_custom_open {
-                            let _ = egui::color_picker::color_picker_color32(ui, &mut custom, egui::color_picker::Alpha::Opaque);
-                            if custom != state.pin_background { selected = Some(custom); }
-                        }
                     });
+                    if state.pinned_picker_custom_open {
+                        ui.separator();
+                        let picker=ui.allocate_ui(Vec2::new(width-18.0,230.0),|ui|egui::color_picker::color_picker_color32(ui,&mut custom,egui::color_picker::Alpha::Opaque));
+                        state.test_controls.insert("Pinned picker controls".into(),[picker.response.rect.min.x,picker.response.rect.min.y,picker.response.rect.max.x,picker.response.rect.max.y]);
+                        if custom != state.pin_background { selected = Some(custom); }
+                    }
                 });
         });
     state.color_picker_rect = Some(output.response.rect.expand(4.0));
+    state.test_controls.insert("Pinned palette".into(), [output.response.rect.min.x,output.response.rect.min.y,output.response.rect.max.x,output.response.rect.max.y]);
     if close {
         state.color_popover = ColorPopover::None;
         state.color_picker_rect = None;
@@ -2589,10 +2658,8 @@ fn render_right_panel(
     if !ui_state.selection_pinned && ui_state.color_popover == ColorPopover::Pinned {
         ui_state.color_popover = ColorPopover::None;
     }
-    if ui_state.properties_hotkey_hidden {
-        return None;
-    }
-    if ui_state.settings.hide_properties && !ui_state.context_properties {
+    if ui_state.properties_hotkey_hidden || (ui_state.settings.hide_properties && !ui_state.context_properties) {
+        if ui_state.color_popover==ColorPopover::Pinned { ui_state.color_popover=ColorPopover::None;ui_state.color_picker_rect=None;ui_state.pinned_picker_custom_open=false; }
         return None;
     }
     let mut props = props.clone();
@@ -2667,6 +2734,7 @@ fn render_right_panel(
                                 ui.add_space(5.0);
                                 let (clicked, rect) = color_swatch_current(ui, ui_state.pin_background, "Couleur de fond épinglé");
                                 pin_background_rect = rect;
+                                ui_state.test_controls.insert("Pinned background".into(),[rect.min.x,rect.min.y,rect.max.x,rect.max.y]);
                                 if clicked {
                                     ui_state.color_popover = if ui_state.color_popover == ColorPopover::Pinned { ColorPopover::None } else { ColorPopover::Pinned };
                                     ui_state.color_picker_rect = None;
@@ -3270,6 +3338,7 @@ fn render_right_panel(
     });
 
     ui_state.context_rects.push(output.response.rect);
+    ui_state.test_controls.insert("Properties panel".into(),[output.response.rect.min.x,output.response.rect.min.y,output.response.rect.max.x,output.response.rect.max.y]);
     remember_panel(ui_state, "right_panel", &output.response);
     if ui_state.color_popover == ColorPopover::Pinned {
         if let Some(color) = show_pinned_color_picker(ctx, ui_state, pin_background_rect) {
@@ -3299,7 +3368,7 @@ fn render_file_menu(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
 
     // Dropdown menu (only shown when open)
     if ui_state.menu_open {
-        egui::Area::new(egui::Id::new("file_menu_dropdown"))
+        let menu = egui::Area::new(egui::Id::new("file_menu_dropdown"))
             .anchor(Align2::LEFT_TOP, Vec2::new(12.0, 56.0))
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
@@ -3421,11 +3490,16 @@ fn render_file_menu(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
 
                         widgets_menu_separator(ui);
 
+                        let shortcut_row=Rect::from_min_size(ui.next_widget_position(),Vec2::new(ui.available_width(),28.0));
+                        ui_state.test_controls.insert("Menu Shortcuts".into(),[shortcut_row.min.x,shortcut_row.min.y,shortcut_row.max.x,shortcut_row.max.y]);
                         if menu_item(ui, "Keyboard Shortcuts", "?") {
                             action = Some(UiAction::ShowShortcuts);
                             ui_state.menu_open = false;
                         }
-                        let settings_item = ui.button("Settings");
+                        let (settings_rect, settings_item) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 28.0), egui::Sense::click());
+                        if settings_item.hovered() { ui.painter().rect_filled(settings_rect, CornerRadius::same(4), Color32::from_gray(238)); }
+                        ui.painter().text(Pos2::new(settings_rect.left()+12.0, settings_rect.center().y), Align2::LEFT_CENTER, "Settings", egui::FontId::proportional(13.0), Color32::from_gray(45));
+                        egui::Image::new(include_image!("../assets/settings.svg")).tint(Color32::from_gray(70)).paint_at(ui, Rect::from_center_size(Pos2::new(settings_rect.right()-20.0, settings_rect.center().y), Vec2::splat(18.0)));
                         ui_state.test_controls.insert("Menu Settings".into(), [settings_item.rect.min.x, settings_item.rect.min.y, settings_item.rect.max.x, settings_item.rect.max.y]);
                         if settings_item.clicked() {
                             ui_state.settings_open = true;
@@ -3435,13 +3509,11 @@ fn render_file_menu(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                 });
             });
 
-        // Close menu when clicking outside
-        if ctx.input(|i| i.pointer.any_click()) {
+        ui_state.menu_rect = Some(menu.response.rect);
+        // Close on the press, not after releasing a held mouse button.
+        if ctx.input(|i| i.pointer.primary_pressed()) {
             let buttons_rect = Rect::from_min_size(Pos2::new(12.0, 12.0), Vec2::new(48.0, 48.0));
-            let menu_rect = Rect::from_min_size(
-                Pos2::new(12.0, 56.0),
-                Vec2::new(180.0, 280.0), // Includes the library import item.
-            );
+            let menu_rect = menu.response.rect;
             if let Some(pos) = ctx.input(|i| i.pointer.interact_pos()) {
                 if !buttons_rect.contains(pos) && !menu_rect.contains(pos) {
                     ui_state.menu_open = false;
@@ -3452,7 +3524,7 @@ fn render_file_menu(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
 
     // Render shortcuts modal if open
     if ui_state.shortcuts_modal_open {
-        render_shortcuts_modal(ctx, ui_state);
+        if let Some(settings_action) = render_shortcuts_modal(ctx, ui_state) { action = Some(settings_action); }
     }
 
     // Render save dialog if open
@@ -3977,111 +4049,59 @@ fn render_presence_panel(ctx: &Context, ui_state: &UiState) {
 }
 
 /// Render the keyboard shortcuts modal.
-fn render_shortcuts_modal(ctx: &Context, ui_state: &mut UiState) {
-    use crate::shortcuts::ShortcutRegistry;
-
-    // Backdrop
-    egui::Area::new(egui::Id::new("shortcuts_backdrop"))
-        .fixed_pos(Pos2::ZERO)
-        .order(egui::Order::Background)
-        .show(ctx, |ui| {
-            let screen_rect = ctx.input(|i| i.content_rect());
-            let response = ui.allocate_rect(screen_rect, egui::Sense::click());
-            ui.painter()
-                .rect_filled(screen_rect, 0.0, Color32::from_black_alpha(80));
-            if response.clicked() {
-                ui_state.shortcuts_modal_open = false;
-            }
-        });
-
-    // Modal window
-    egui::Area::new(egui::Id::new("shortcuts_modal"))
-        .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-        .order(egui::Order::Foreground)
-        .show(ctx, |ui| {
-            panel_frame().show(ui, |ui| {
-                ui.set_width(500.0);
-                ui.vertical(|ui| {
-                    // Header
+fn render_shortcuts_modal(ctx: &Context, state: &mut UiState) -> Option<UiAction> {
+    if state.shortcuts_before_edit.is_none() { state.shortcuts_before_edit = Some(state.settings.clone()); }
+    let mut close = ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+    let mut save = false;
+    let output = egui::Modal::new(egui::Id::new("shortcuts_modal")).frame(Frame::NONE).backdrop_color(Color32::from_black_alpha(65)).show(ctx, |ui| {
+        white_color_picker(ui);
+        panel_frame().show(ui, |ui| {
+            ui.set_width(550.0);
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Keyboard Shortcuts").size(16.0).strong());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| { if ui.small_button("×").clicked() { close=true; } });
+            });
+            ui.label("Touche ou combinaison : Ctrl+Shift+R, Alt+L, F2…");
+            let list = crate::shortcut_bindings::definitions();
+            egui::ScrollArea::vertical().max_height((ctx.input(|i|i.content_rect().height())-210.0).clamp(180.0,480.0)).show(ui, |ui| {
+                let mut category = "";
+                for def in list {
+                    if def.category != category { category=def.category; ui.separator(); widgets_section_label(ui,category); }
                     ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new("Keyboard Shortcuts")
-                                .size(16.0)
-                                .strong(),
-                        );
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if default_btn(ui, "X") {
-                                ui_state.shortcuts_modal_open = false;
-                            }
-                        });
+                        let mut value = def.binding(&state.settings).to_string();
+                        let response = ui.add(egui::TextEdit::singleline(&mut value).desired_width(150.0));
+                        state.test_controls.insert(format!("Shortcut {}",def.id), [response.rect.min.x,response.rect.min.y,response.rect.max.x,response.rect.max.y]);
+                        if response.changed() { def.set(&mut state.settings,value); }
+                        ui.label(def.description);
                     });
-
-                    ui.add_space(12.0);
-
-                    // Shortcuts list
-                    egui::ScrollArea::vertical()
-                        .max_height(400.0)
-                        .show(ui, |ui| {
-                            for shortcut in ShortcutRegistry::all() {
-                                let configured_key = match shortcut.description {
-                                    "Selection tool" => {
-                                        Some(ui_state.settings.shortcut_select.as_str())
-                                    }
-                                    "Pan tool" => Some(ui_state.settings.shortcut_pan.as_str()),
-                                    "Draw tool" => Some(ui_state.settings.shortcut_draw.as_str()),
-                                    "Highlighter tool" => {
-                                        Some(ui_state.settings.shortcut_highlighter.as_str())
-                                    }
-                                    "Eraser tool (Classic / Manual)" => {
-                                        Some(ui_state.settings.shortcut_eraser.as_str())
-                                    }
-                                    "Text tool" => Some(ui_state.settings.shortcut_text.as_str()),
-                                    "Math formula tool" => {
-                                        Some(ui_state.settings.shortcut_math.as_str())
-                                    }
-                                    "Rectangle tool" => {
-                                        Some(ui_state.settings.shortcut_rectangle.as_str())
-                                    }
-                                    "Ellipse tool" => {
-                                        Some(ui_state.settings.shortcut_ellipse.as_str())
-                                    }
-                                    "Arrow tool" => Some(ui_state.settings.shortcut_arrow.as_str()),
-                                    "Line tool" => Some(ui_state.settings.shortcut_line.as_str()),
-                                    "Laser pointer" => {
-                                        Some(ui_state.settings.shortcut_laser.as_str())
-                                    }
-                                    _ => None,
-                                };
-                                let shortcut_text = configured_key
-                                    .map(|key| key.to_uppercase())
-                                    .unwrap_or_else(|| shortcut.format());
-                                ui.horizontal(|ui| {
-                                    ui.label(
-                                        egui::RichText::new(shortcut_text)
-                                            .size(12.0)
-                                            .family(egui::FontFamily::Monospace)
-                                            .color(Color32::from_rgb(100, 116, 139)),
-                                    );
-                                    ui.with_layout(
-                                        egui::Layout::right_to_left(egui::Align::Center),
-                                        |ui| {
-                                            ui.label(
-                                                egui::RichText::new(shortcut.description)
-                                                    .size(12.0)
-                                                    .color(Color32::from_gray(200)),
-                                            );
-                                        },
-                                    );
-                                });
-                                ui.add_space(4.0);
-                            }
-                        });
-                });
+                }
+                ui.separator();
+                ui.label("Gestes : Ctrl+clic = ajouter/retirer ; Ctrl+poignée d’image = rogner ; Shift+drag = proportions / angle ; Espace maintenu = Pan temporaire.");
+                ui.label("Dans les champs de formulaire : Échap ferme, Entrée valide, copier/coller suit le comportement de l’éditeur.");
+            });
+            let errors = crate::shortcut_bindings::conflicts(&state.settings);
+            if let Some(error) = errors.first() { ui.label(egui::RichText::new(error).color(Color32::from_rgb(185,40,40))); }
+            ui.horizontal(|ui| {
+                let response=ui.add_enabled(errors.is_empty(),egui::Button::new("Enregistrer"));
+                state.test_controls.insert("Shortcuts save".into(), [response.rect.min.x,response.rect.min.y,response.rect.max.x,response.rect.max.y]);
+                if response.clicked() { save=true; close=true; }
+                if ui.button("Annuler").clicked() { close=true; }
+                if ui.button("Valeurs par défaut").clicked() {
+                    let defaults=UserSettings::default();
+                    for def in crate::shortcut_bindings::definitions() { def.set(&mut state.settings,def.binding(&defaults).to_string()); }
+                }
             });
         });
+    });
+    state.test_controls.insert("Shortcuts panel".into(), [output.response.rect.min.x,output.response.rect.min.y,output.response.rect.max.x,output.response.rect.max.y]);
+    if close {
+        if save { state.settings.sanitize(); state.shortcuts_before_edit=None; }
+        else if let Some(previous)=state.shortcuts_before_edit.take() { state.settings=previous; }
+        state.shortcuts_modal_open=false;
+    }
+    save.then_some(UiAction::SaveSettings)
 }
 
-/// Render the save dialog modal.
 fn render_save_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
     let mut action = None;
 
@@ -4367,6 +4387,7 @@ fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAct
         if let Some(previous) = ui_state.settings_before_edit.take() {
             ui_state.settings = previous;
         }
+        ui_state.settings_rect = None;
         return None;
     }
 
@@ -4379,19 +4400,7 @@ fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAct
     let mut close = false;
     let mut settings_color_anchors = [Rect::NOTHING; 8];
 
-    egui::Area::new(egui::Id::new("settings_backdrop"))
-        .fixed_pos(Pos2::ZERO)
-        .order(egui::Order::Middle)
-        .show(ctx, |ui| {
-            let rect = ctx.input(|i| i.content_rect());
-            ui.painter()
-                .rect_filled(rect, 0.0, Color32::from_black_alpha(65));
-        });
-
-    egui::Area::new(egui::Id::new("settings_dialog"))
-        .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-        .order(egui::Order::Foreground)
-        .show(ctx, |ui| {
+    let settings_output = egui::Modal::new(egui::Id::new("settings_dialog")).frame(Frame::NONE).backdrop_color(Color32::from_black_alpha(65))        .show(ctx, |ui| {
             Frame::new()
                 .fill(Color32::from_rgb(252, 252, 253))
                 .corner_radius(CornerRadius::same(12))
@@ -4592,6 +4601,9 @@ fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAct
                         ui.horizontal(|ui| {
                             if ui.button("Exporter les paramètres").clicked() { action = Some(UiAction::ExportSettings); }
                             if ui.button("Importer les paramètres").clicked() { action = Some(UiAction::ImportSettings); }
+                            let reset=ui.button("Config Reset");
+                            ui_state.test_controls.insert("Config Reset".into(),[reset.rect.min.x,reset.rect.min.y,reset.rect.max.x,reset.rect.max.y]);
+                            if reset.clicked() { action = Some(UiAction::ResetSettings); }
                         });
                         ui.label("Polices, couleurs, raccourcis, panneaux et options dans un fichier JSON.");
                         ui.separator();
@@ -4719,6 +4731,8 @@ fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAct
                 });
         });
 
+    ui_state.settings_rect = Some(settings_output.response.rect);
+    ui_state.test_controls.insert("Settings panel".into(), [settings_output.response.rect.min.x,settings_output.response.rect.min.y,settings_output.response.rect.max.x,settings_output.response.rect.max.y]);
     let settings_color_target = ui_state.color_popover;
     let (settings_color_index, settings_anchor, settings_title, settings_current) = match settings_color_target {
         ColorPopover::SettingsStroke(index) if index < 6 => (
@@ -5262,12 +5276,13 @@ fn render_text_command_editor(ctx: &Context, state: &mut UiState) -> Option<UiAc
                 .desired_width(340.0)
                 .show(ui);
             output.response.request_focus();
+            let requested_focus = editor.request_focus;
             if editor.request_focus {
                 output
                     .state
                     .cursor
                     .set_char_range(Some(egui::text::CCursorRange::one(
-                        egui::text::CCursor::new(editor.source.chars().count()),
+                        egui::text::CCursor::new(editor.pending_caret.take().unwrap_or_else(||editor.source.chars().count()).min(editor.source.chars().count())),
                     )));
                 output.state.store(ctx, id);
                 editor.request_focus = false;
@@ -5284,11 +5299,14 @@ fn render_text_command_editor(ctx: &Context, state: &mut UiState) -> Option<UiAc
                         .color(Color32::from_gray(110)),
                 );
             }
-            if output.response.changed() || finish {
+            let caret = output.state.cursor.char_range().map(|range| range.primary.index).unwrap_or(editor.caret);
+            if output.response.changed() || finish || requested_focus || caret != editor.caret {
+                editor.caret = caret;
                 action = Some(UiAction::EditTextCommand(
                     editor.source.clone(),
                     finish,
                     exit,
+                    caret,
                 ));
             }
             if finish {

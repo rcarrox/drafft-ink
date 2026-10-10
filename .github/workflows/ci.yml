@@ -236,6 +236,21 @@ jobs:
         with:
           name: drafftink-wasm
           path: web/pkg
+      - name: Download Qurso 0.31.0 comparison package
+        id: baseline-package
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: Qurso-Web-0.31.0
+          run-id: 38051549735
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: work/e2e/baseline-package
+      - name: Prepare comparison server
+        if: steps.baseline-package.outcome == 'success'
+        run: |
+          mkdir -p work/e2e/baseline-web
+          unzip -q work/e2e/baseline-package/Qurso_Web_0.31.0.zip -d work/e2e/baseline-web
+          python3 -m http.server 8894 --bind 127.0.0.1 --directory work/e2e/baseline-web > work/e2e/baseline-server.log 2>&1 &
       - name: Install pinned browser test runner
         run: |
           npm install --prefix work/e2e playwright@1.55.1
@@ -247,6 +262,8 @@ jobs:
           node utils/test_browser_interactions.cjs
           node utils/test_online_only.cjs
           node utils/test_presets_settings.cjs
+          node utils/test_ui32.cjs
+          node utils/test_render_performance.cjs
       - name: Upload interaction evidence
         if: always()
         uses: actions/upload-artifact@v4

@@ -20,6 +20,8 @@ pub struct UserSettings {
     pub shortcut_arrow: String,
     pub shortcut_line: String,
     pub shortcut_laser: String,
+    #[serde(default)]
+    pub shortcut_overrides: std::collections::BTreeMap<String, String>,
     pub intro_json: String,
     pub intro_name: String,
     pub export_folder_name: String,
@@ -69,6 +71,7 @@ impl Default for UserSettings {
             shortcut_arrow: "a".into(),
             shortcut_line: "l".into(),
             shortcut_laser: "z".into(),
+            shortcut_overrides: Default::default(),
             intro_json: String::new(),
             intro_name: String::new(),
             export_folder_name: String::new(),
@@ -165,6 +168,9 @@ impl UserSettings {
     }
 
     pub fn tool_for_key(&self, key: &str) -> Option<ToolKind> {
+        if let Some(name) = key.strip_prefix("@tool:") {
+            return [ToolKind::Select,ToolKind::Pan,ToolKind::Rectangle,ToolKind::Ellipse,ToolKind::Arrow,ToolKind::Line,ToolKind::Freehand,ToolKind::Highlighter,ToolKind::Eraser,ToolKind::Text,ToolKind::Math,ToolKind::LaserPointer].into_iter().find(|tool| format!("{tool:?}")==name);
+        }
         let key = normalized_key(key);
         if key.is_empty() {
             return None;
@@ -232,6 +238,7 @@ impl UserSettings {
             self.shortcut_draw = "d".into();
             self.shortcut_math = "m".into();
         }
+        let default_shortcuts = Self::default();
         for tool in [
             ToolKind::Select,
             ToolKind::Pan,
@@ -248,14 +255,15 @@ impl UserSettings {
         ] {
             let value = self.shortcut_for_mut(tool);
             *value = normalized_key(value);
-            if value.chars().count() > 1 {
-                *value = value
-                    .chars()
-                    .next()
-                    .map(|c| c.to_string())
-                    .unwrap_or_default();
-            }
+            if let Some(binding) = crate::shortcut_bindings::Binding::parse(value) { *value = binding.format().to_lowercase(); }
+            else if !value.is_empty() { *value=default_shortcuts.shortcut_for(tool).to_string(); }
         }
+        let definitions=crate::shortcut_bindings::definitions();
+        self.shortcut_overrides.retain(|key,value| {
+            let known=definitions.iter().any(|definition|definition.id==key&&definition.tool.is_none());
+            if let Some(binding)=crate::shortcut_bindings::Binding::parse(value) { *value=binding.format();known }
+            else { known&&value.trim().is_empty() }
+        });
     }
 }
 

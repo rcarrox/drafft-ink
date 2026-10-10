@@ -200,16 +200,16 @@ impl<'a> IconButton<'a> {
         if let Some(shortcut) = self.shortcut {
             response.clone().on_hover_ui(|ui| {
                 ui.horizontal(|ui| {
-                    ui.label(self.tooltip);
+                    ui.label(egui::RichText::new(self.tooltip).color(Color32::from_gray(195)));
                     ui.label(
                         egui::RichText::new(format!("({})", shortcut))
-                            .color(Color32::from_gray(128))
+                            .color(Color32::from_gray(160))
                             .small(),
                     );
                 });
             });
         } else {
-            response.clone().on_hover_text(self.tooltip);
+            response.clone().on_hover_text(egui::RichText::new(self.tooltip).color(Color32::from_gray(195)));
         }
         response.on_hover_cursor(CursorIcon::PointingHand)
     }

@@ -83,23 +83,24 @@
             if ((e.ctrlKey || e.metaKey) && ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)) {
                 e.preventDefault();
             }
+            if (window.qursoCustomShortcutMatches?.(e)) e.preventDefault();
             if ((e.ctrlKey || e.metaKey) && (
                 e.key === 'e' || e.key === 'E' ||
                 e.key === 's' || e.key === 'S' ||
                 e.key === 'g' || e.key === 'G' ||
                 e.key === 'l' || e.key === 'L' ||
-                ['p', 'b', 'i', 'u'].includes(e.key.toLowerCase())
+                ['p', 'b', 'i', 'u', 'r', 'o', 'a', 'd', 'c', 'x', 'v', 'z', 'y'].includes(e.key.toLowerCase())
             )) {
                 e.preventDefault();
             }
         });
 
         document.addEventListener('keydown', function(e) {
-            if (e.key === 'F11' && !e.repeat) {
+            if ((window.qursoShortcutMatches?.('fullscreen','F11',e) ?? e.key === 'F11') && !e.repeat) {
                 e.preventDefault();
                 const task = document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
                 task.catch(err => console.warn('Fullscreen unavailable', err));
-            }
+            } else if (e.key === 'F11') { e.preventDefault(); }
         });
 
         // Chrome/Edge expose precision-touchpad pinch as Ctrl+wheel. Prevent
