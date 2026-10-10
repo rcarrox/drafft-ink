@@ -487,7 +487,9 @@ function inspectCapture(file) {
     const timeOptionsKey=`Time options ${timeWidgetId}`;
     const timeCloseKey=`Time close ${timeWidgetId}`;
     const timeResizeKey=`Time resize ${timeWidgetId} 3`;
+    const timeSizeKey=`Time widget size ${timeWidgetId}`;
     let timeRect=timeState.controls[timeWidgetKey];
+    let timeSizeRect=timeState.controls[timeSizeKey];
     await page.mouse.click((timeRect[0]+timeRect[2])/2,(timeRect[1]+timeRect[3])/2);
     timeState=await wait(s=>s.controls[timeOptionsKey]&&s.controls[timeResizeKey]);
     timeRect=timeState.controls[timeWidgetKey];
@@ -495,8 +497,9 @@ function inspectCapture(file) {
     await page.mouse.move((resizeHandle[0]+resizeHandle[2])/2,(resizeHandle[1]+resizeHandle[3])/2);
     await page.waitForTimeout(100);
     await page.mouse.down();await page.waitForTimeout(100);await page.mouse.move(resizeHandle[2]+35,resizeHandle[3]+24,{steps:6});await page.mouse.up();
-    const resizedTime=await wait(s=>s.controls[timeWidgetKey]&&s.controls[timeWidgetKey][2]>timeRect[2]+20);
+    const resizedTime=await wait(s=>s.controls[timeSizeKey]&&s.controls[timeSizeKey][2]>timeSizeRect[2]+20);
     timeRect=resizedTime.controls[timeWidgetKey];
+    timeSizeRect=resizedTime.controls[timeSizeKey];
     await page.mouse.move((timeRect[0]+timeRect[2])/2,(timeRect[1]+timeRect[3])/2);
     await page.mouse.down();await page.mouse.move((timeRect[0]+timeRect[2])/2+45,(timeRect[1]+timeRect[3])/2+18,{steps:6});await page.mouse.up();
     timeState=await wait(s=>s.controls[timeWidgetKey]&&s.controls[timeWidgetKey][0]>timeRect[0]+20);
