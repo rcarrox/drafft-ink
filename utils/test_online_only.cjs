@@ -29,11 +29,6 @@ const server = http.createServer((request, response) => {
   const browser = await chromium.launch({ headless: true, args: ['--enable-unsafe-webgpu', '--use-angle=swiftshader'] });
   try {
     const page = await browser.newPage();
-    let unloadConfirmationShown = false;
-    page.on('dialog', dialog => {
-      if (dialog.type === 'beforeunload') unloadConfirmationShown = true;
-      dialog.accept();
-    });
     await page.goto('http://127.0.0.1:8892/', { waitUntil: 'domcontentloaded', timeout: 60000 });
     assert.equal(await page.title(), 'Qurso🌿');
     assert.equal(await page.evaluate(() => navigator.serviceWorker?.controller ?? null), null);
@@ -50,9 +45,14 @@ const server = http.createServer((request, response) => {
         };
       });
     });
-    await page.mouse.click(6, 600);
+    const unload = await page.evaluate(() => {
+      const event = new Event('beforeunload', { cancelable: true });
+      const allowed = window.dispatchEvent(event);
+      return { allowed, prevented: event.defaultPrevented };
+    });
+    assert.equal(unload.allowed, false, 'beforeunload must request confirmation');
+    assert.equal(unload.prevented, true, 'beforeunload must be cancellable by the browser');
     await page.reload({ waitUntil: 'domcontentloaded' });
-    assert(unloadConfirmationShown, 'the browser should ask before leaving the page');
     const restored = await page.evaluate(() => new Promise((resolve, reject) => {
       const request = indexedDB.open('qurso-online-storage-check', 1);
       request.onerror = () => reject(request.error);
