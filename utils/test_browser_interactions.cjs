@@ -41,7 +41,10 @@ function inspectCapture(file) {
 (async () => {
   const browser = await chromium.launch({ channel: 'chromium', headless: true, args: ['--enable-unsafe-webgpu', '--use-angle=swiftshader'] });
   const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, permissions: ['clipboard-read','clipboard-write'] });
-  await context.addInitScript(() => localStorage.setItem('drafftink.user_settings.v1', JSON.stringify({ restore_last_document: false, intro_json: '', autosave_enabled: false, hide_properties: false, default_font: 'Noto Sans', default_font_postscript: '' })));
+  await context.addInitScript(() => {
+    const key='drafftink.user_settings.v1';
+    if(!localStorage.getItem(key)) localStorage.setItem(key, JSON.stringify({ restore_last_document: false, intro_json: '', autosave_enabled: false, hide_properties: false, default_font: 'Noto Sans', default_font_postscript: '' }));
+  });
   let page = await context.newPage();
   const logs = [];
   page.on('console', message => logs.push(message.type() + ': ' + message.text()));
