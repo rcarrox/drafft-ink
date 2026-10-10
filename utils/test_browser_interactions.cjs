@@ -485,6 +485,7 @@ function inspectCapture(file) {
     const timeWidgetKey=Object.keys(timeState.controls).find(name=>name.startsWith('Time widget '));
     const timeWidgetId=timeWidgetKey.slice('Time widget '.length);
     const timeOptionsKey=`Time options ${timeWidgetId}`;
+    const timeOptionsOpenKey=`Time options open ${timeWidgetId}`;
     const timeCloseKey=`Time close ${timeWidgetId}`;
     const timeResizeKey=`Time resize ${timeWidgetId} 3`;
     const timeSizeKey=`Time widget size ${timeWidgetId}`;
@@ -505,7 +506,7 @@ function inspectCapture(file) {
     timeState=await wait(s=>s.controls[timeWidgetKey]&&s.controls[timeWidgetKey][0]>timeRect[0]+20);
     const optionsRect=timeState.controls[timeOptionsKey];
     await page.mouse.click((optionsRect[0]+optionsRect[2])/2,(optionsRect[1]+optionsRect[3])/2);
-    await page.getByText('Mode',{exact:true}).waitFor();
+    await wait(s=>s.controls[timeOptionsOpenKey]);
     const closeRect=(await state()).controls[timeCloseKey];
     await page.mouse.click((closeRect[0]+closeRect[2])/2,(closeRect[1]+closeRect[3])/2);
     await wait(s=>!s.controls[timeWidgetKey]);
