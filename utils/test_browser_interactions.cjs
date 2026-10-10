@@ -565,6 +565,8 @@ function inspectCapture(file) {
     assert(wasmMemory.wasm_bytes>0);
     let item=(await imageState()).shapes.find(s=>s.shape.Image);
     await imagePage.mouse.click((item.bounds[0]+item.bounds[2])/2,(item.bounds[1]+item.bounds[3])/2);
+    await imagePage.waitForFunction(() => JSON.parse(window.__drafftinkTestState).selected_count===1);
+    item=(await imageState()).shapes.find(s=>s.shape.Image);
     const handle=item.handles.find(h=>h.kind==='Corner(BottomRight)');
     const fixed=item.handles.find(h=>h.kind==='Corner(TopLeft)');
     await imagePage.mouse.move(handle.x,handle.y);await imagePage.mouse.down();await imagePage.mouse.move(fixed.x-100,fixed.y-80,{steps:20});await imagePage.mouse.up();
