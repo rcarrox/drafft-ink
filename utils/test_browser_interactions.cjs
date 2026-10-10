@@ -481,25 +481,30 @@ function inspectCapture(file) {
     // and closed using visible controls rather than the context menu.
     await control('tool_Insert');
     await control('Insert Time');
-    let timeState=await wait(s=>s.controls['Time widget 0']);
-    let timeRect=timeState.controls['Time widget 0'];
+    let timeState=await wait(s=>Object.keys(s.controls).some(name=>name.startsWith('Time widget ')));
+    const timeWidgetKey=Object.keys(timeState.controls).find(name=>name.startsWith('Time widget '));
+    const timeWidgetId=timeWidgetKey.slice('Time widget '.length);
+    const timeOptionsKey=`Time options ${timeWidgetId}`;
+    const timeCloseKey=`Time close ${timeWidgetId}`;
+    const timeResizeKey=`Time resize ${timeWidgetId} 3`;
+    let timeRect=timeState.controls[timeWidgetKey];
     await page.mouse.click((timeRect[0]+timeRect[2])/2,(timeRect[1]+timeRect[3])/2);
-    timeState=await wait(s=>s.controls['Time options 0']&&s.controls['Time resize 0 3']);
-    timeRect=timeState.controls['Time widget 0'];
-    const resizeHandle=timeState.controls['Time resize 0 3'];
+    timeState=await wait(s=>s.controls[timeOptionsKey]&&s.controls[timeResizeKey]);
+    timeRect=timeState.controls[timeWidgetKey];
+    const resizeHandle=timeState.controls[timeResizeKey];
     await page.mouse.move((resizeHandle[0]+resizeHandle[2])/2,(resizeHandle[1]+resizeHandle[3])/2);
     await page.mouse.down();await page.mouse.move(resizeHandle[2]+35,resizeHandle[3]+24,{steps:6});await page.mouse.up();
-    const resizedTime=await wait(s=>s.controls['Time widget 0']&&s.controls['Time widget 0'][2]>timeRect[2]+20);
-    timeRect=resizedTime.controls['Time widget 0'];
+    const resizedTime=await wait(s=>s.controls[timeWidgetKey]&&s.controls[timeWidgetKey][2]>timeRect[2]+20);
+    timeRect=resizedTime.controls[timeWidgetKey];
     await page.mouse.move((timeRect[0]+timeRect[2])/2,(timeRect[1]+timeRect[3])/2);
     await page.mouse.down();await page.mouse.move((timeRect[0]+timeRect[2])/2+45,(timeRect[1]+timeRect[3])/2+18,{steps:6});await page.mouse.up();
-    timeState=await wait(s=>s.controls['Time widget 0']&&s.controls['Time widget 0'][0]>timeRect[0]+20);
-    const optionsRect=timeState.controls['Time options 0'];
+    timeState=await wait(s=>s.controls[timeWidgetKey]&&s.controls[timeWidgetKey][0]>timeRect[0]+20);
+    const optionsRect=timeState.controls[timeOptionsKey];
     await page.mouse.click((optionsRect[0]+optionsRect[2])/2,(optionsRect[1]+optionsRect[3])/2);
     await page.getByText('Mode',{exact:true}).waitFor();
-    const closeRect=(await state()).controls['Time close 0'];
+    const closeRect=(await state()).controls[timeCloseKey];
     await page.mouse.click((closeRect[0]+closeRect[2])/2,(closeRect[1]+closeRect[3])/2);
-    await wait(s=>!s.controls['Time widget 0']);
+    await wait(s=>!s.controls[timeWidgetKey]);
 
     // Separate browser context with a public, deterministic 1200x2000 PNG fixture.
     const imageContext = await browser.newContext({viewport:{width:1280,height:720}});
