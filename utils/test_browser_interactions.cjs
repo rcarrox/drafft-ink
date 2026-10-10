@@ -477,6 +477,30 @@ function inspectCapture(file) {
     await page.keyboard.press('Control+s');await wait(s=>s.png_save_requests===saveCount+1);
     await page.keyboard.press('Escape');await wait(s=>s.editing_text===null);
 
+    // Qurso Time can be selected, resized, moved from its body, configured,
+    // and closed using visible controls rather than the context menu.
+    await control('tool_Insert');
+    await page.getByRole('button',{name:'Time',exact:true}).click();
+    let timeState=await wait(s=>s.controls['Time widget 0']);
+    let timeRect=timeState.controls['Time widget 0'];
+    await page.mouse.click((timeRect[0]+timeRect[2])/2,(timeRect[1]+timeRect[3])/2);
+    timeState=await wait(s=>s.controls['Time options 0']&&s.controls['Time resize 0 3']);
+    timeRect=timeState.controls['Time widget 0'];
+    const resizeHandle=timeState.controls['Time resize 0 3'];
+    await page.mouse.move((resizeHandle[0]+resizeHandle[2])/2,(resizeHandle[1]+resizeHandle[3])/2);
+    await page.mouse.down();await page.mouse.move(resizeHandle[2]+35,resizeHandle[3]+24,{steps:6});await page.mouse.up();
+    const resizedTime=await wait(s=>s.controls['Time widget 0']&&s.controls['Time widget 0'][2]>timeRect[2]+20);
+    timeRect=resizedTime.controls['Time widget 0'];
+    await page.mouse.move((timeRect[0]+timeRect[2])/2,(timeRect[1]+timeRect[3])/2);
+    await page.mouse.down();await page.mouse.move((timeRect[0]+timeRect[2])/2+45,(timeRect[1]+timeRect[3])/2+18,{steps:6});await page.mouse.up();
+    timeState=await wait(s=>s.controls['Time widget 0']&&s.controls['Time widget 0'][0]>timeRect[0]+20);
+    const optionsRect=timeState.controls['Time options 0'];
+    await page.mouse.click((optionsRect[0]+optionsRect[2])/2,(optionsRect[1]+optionsRect[3])/2);
+    await page.getByText('Mode',{exact:true}).waitFor();
+    const closeRect=(await state()).controls['Time close 0'];
+    await page.mouse.click((closeRect[0]+closeRect[2])/2,(closeRect[1]+closeRect[3])/2);
+    await wait(s=>!s.controls['Time widget 0']);
+
     // Separate browser context with a public, deterministic 1200x2000 PNG fixture.
     const imageContext = await browser.newContext({viewport:{width:1280,height:720}});
     const imageId='00000000-0000-4000-8000-000000000001';

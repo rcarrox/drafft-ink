@@ -1,10 +1,10 @@
-# Qurso🌿 0.28.0
+# Qurso🌿 0.29.0
 
 Version personnelle du tableau DrafftInk, sans collaboration reseau.
 
 ## Utilisation sous Windows
 
-Le ZIP **DrafftInk_Windows_Portable_0.28.0.zip** produit par GitHub Actions est deja compile.
+Le ZIP **DrafftInk_Windows_Portable_0.29.0.zip** produit par GitHub Actions est deja compile.
 Il ne faut installer ni Rust, ni wasm-pack, ni Visual Studio.
 
 1. Decompresser le ZIP.
@@ -26,8 +26,8 @@ Workflow : `.github/workflows/build-portable.yml`.
 
 A chaque push sur `main`, deux artefacts sont produits :
 
-- `DrafftInk-Windows-Portable-0.28.0` : version locale Windows precompilee ;
-- `DrafftInk-Web-0.28.0` : fichiers statiques a deposer sur un serveur web.
+- `DrafftInk-Windows-Portable-0.29.0` : version locale Windows precompilee ;
+- `DrafftInk-Web-0.29.0` : fichiers statiques a deposer sur un serveur web.
 
 ## Modifications de cette branche
 
@@ -177,3 +177,11 @@ Cache hors connexion des fichiers de l’application et mises à jour explicites
 - Palette « Fond épinglé » corrigée ; traits et flèches utilisent le tracé Flowing par défaut, et le redimensionnement avec Shift conserve les proportions sur les poignées de bord.
 - Formules Math utilisent mieux la police sélectionnée pour les chiffres et opérateurs courants ; curseur Math maintenu sur la formule en édition.
 - Dans un même objet Text, Ctrl+Shift+B ajoute une barre au-dessus de la sélection et Ctrl+Shift+V une flèche vectorielle. Le reste du texte reste éditable et inchangé ; le formatage est conservé dans le document.
+
+## Nouveautés 0.29.0
+
+- Cache hors connexion tolérant aux fins de ligne FTP (LF/CRLF) tout en vérifiant le contenu de la page.
+- Barres et flèches au-dessus des sélections de caractères, sans affecter le reste du texte.
+- Qurso Time sélectionnable, redimensionnable, déplaçable sur tout son panneau, avec accès direct aux options et bouton de fermeture.
+- Aperçus d'images mis en cache pour plusieurs niveaux de zoom afin de réduire les décodages répétés.
+- Curseurs de déplacement et redimensionnement visibles sur les objets fraîchement créés; menus et boutons PNG Preset avec contraste corrigé.

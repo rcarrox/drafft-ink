@@ -72,8 +72,9 @@ pub struct VelloRenderer {
     /// Current zoom level (for zoom-independent UI elements).
     zoom: f64,
     /// Image cache to avoid re-decoding images every frame.
-    /// Key is the shape ID (as string), value is the decoded peniko ImageData.
-    image_cache: std::collections::HashMap<u64, CachedImage>,
+    /// Keep nearby zoom previews per encoded source; one preview per source
+    /// caused repeated full decodes while the user zoomed in and out.
+    image_cache: std::collections::HashMap<(u64, u32), CachedImage>,
     image_cache_clock: u64,
     full_resolution_images: bool,
     /// Shape path cache for hand-drawn effects.
@@ -93,6 +94,39 @@ pub struct VelloRenderer {
 
 const IMAGE_CACHE_BUDGET: usize = 32 * 1024 * 1024;
 const MAX_PREVIEW_SIDE: u32 = 2048;
+
+fn decorated_ranges_on_line(
+    text: &drafftink_core::shapes::Text,
+    line_range: std::ops::Range<usize>,
+    vector: bool,
+) -> Vec<std::ops::Range<usize>> {
+    let mut ranges = Vec::new();
+    let mut active_start = None;
+    let mut active_end = 0;
+    for (index, (byte, ch)) in text.content.char_indices().enumerate() {
+        let end = byte + ch.len_utf8();
+        let style = text.char_styles.get(index);
+        let decorated = byte >= line_range.start
+            && end <= line_range.end
+            && ch != '\n'
+            && style.is_some_and(|style| if vector { style.vector_arrow } else { style.overline });
+        if decorated {
+            if active_start.is_none() || active_end != byte {
+                if let Some(start) = active_start.take() {
+                    ranges.push(start..active_end);
+                }
+                active_start = Some(byte);
+            }
+            active_end = end;
+        } else if let Some(start) = active_start.take() {
+            ranges.push(start..active_end);
+        }
+    }
+    if let Some(start) = active_start {
+        ranges.push(start..active_end);
+    }
+    ranges
+}
 
 fn transformed_rect(rect: Rect, transform: Affine) -> Rect {
     let corners = [
@@ -499,7 +533,8 @@ impl VelloRenderer {
                 image_keys(shape, &mut live_images, &mut live_ids);
             }
         }
-        self.image_cache.retain(|key, _| live_images.contains(key));
+        self.image_cache
+            .retain(|(source_key, _), _| live_images.contains(source_key));
         self.math_cache.retain(|id, _| live_ids.contains(id));
         self.text_cache.retain(|(id, _), _| live_ids.contains(id));
         self.shape_cache.retain(|key, _| {
@@ -1149,31 +1184,47 @@ impl VelloRenderer {
         let color = Color::from_rgba8(text.style.stroke_color.r, text.style.stroke_color.g, text.style.stroke_color.b, text.style.stroke_color.a);
         let brush = Brush::Solid(color);
         for line in layout.lines() {
-            for item in line.items() {
-                let PositionedLayoutItem::GlyphRun(run) = item else { continue; };
-                let range = run.run().text_range();
-                let start = text.content[..range.start.min(text.content.len())].chars().count();
-                let end = text.content[..range.end.min(text.content.len())].chars().count();
-                let Some(styles) = text.char_styles.get(start..end) else { continue; };
-                if styles.is_empty() { continue; }
-                let width: f32 = run.glyphs().map(|glyph| glyph.advance).sum();
-                if width <= 0.0 { continue; }
-                let x0 = run.offset() as f64;
-                let x1 = (run.offset() + width) as f64;
-                let y = run.baseline() + text_script_offset(text, range.start) - crate::text_editor::inline_baseline_shift(&line, font_size);
-                // Keep the overbar above accents, with a small gap below the
-                // preceding line even when text wraps.
-                let top = (y - run.run().font_size() * 1.06) as f64;
-                let thickness = (run.run().font_size() / 18.0).max(1.0) as f64;
-                if styles.iter().all(|style| style.overline) {
-                    self.scene.fill(Fill::NonZero, transform, &brush, None, &Rect::new(x0, top, x1, top + thickness));
-                }
-                if styles.iter().all(|style| style.vector_arrow) {
-                    let mut path = BezPath::new();
-                    path.move_to((x0, top)); path.line_to((x1, top));
-                    let head = (run.run().font_size() as f64 * 0.2).max(3.0);
-                    path.move_to((x1 - head, top - head * 0.7)); path.line_to((x1, top)); path.line_to((x1 - head, top + head * 0.7));
-                    self.scene.stroke(&Stroke::new(thickness), transform, &brush, None, &path);
+            let line_range = line.text_range();
+            for vector in [false, true] {
+                for range in decorated_ranges_on_line(text, line_range.clone(), vector) {
+                    let start = parley::editing::Cursor::from_byte_index(
+                        layout,
+                        range.start,
+                        parley::layout::Affinity::Downstream,
+                    )
+                    .geometry(layout, 0.0);
+                    let end = parley::editing::Cursor::from_byte_index(
+                        layout,
+                        range.end,
+                        parley::layout::Affinity::Upstream,
+                    )
+                    .geometry(layout, 0.0);
+                    let x0 = start.x0.min(end.x0) as f64;
+                    let x1 = start.x0.max(end.x0) as f64;
+                    if x1 <= x0 { continue; }
+                    let run = line.items().find_map(|item| match item {
+                        PositionedLayoutItem::GlyphRun(run)
+                            if run.run().text_range().start <= range.start
+                                && run.run().text_range().end > range.start => Some(run),
+                        _ => None,
+                    });
+                    let Some(run) = run else { continue; };
+                    let y = run.baseline()
+                        + text_script_offset(text, range.start)
+                        - crate::text_editor::inline_baseline_shift(&line, font_size);
+                    // Keep the overbar above accents, with a small gap below
+                    // the preceding line even when text wraps.
+                    let top = (y - run.run().font_size() * 1.06) as f64;
+                    let thickness = (run.run().font_size() / 18.0).max(1.0) as f64;
+                    if !vector {
+                        self.scene.fill(Fill::NonZero, transform, &brush, None, &Rect::new(x0, top, x1, top + thickness));
+                    } else {
+                        let mut path = BezPath::new();
+                        path.move_to((x0, top)); path.line_to((x1, top));
+                        let head = (run.run().font_size() as f64 * 0.2).max(3.0);
+                        path.move_to((x1 - head, top - head * 0.7)); path.line_to((x1, top)); path.line_to((x1 - head, top + head * 0.7));
+                        self.scene.stroke(&Stroke::new(thickness), transform, &brush, None, &path);
+                    }
                 }
             }
         }
@@ -1656,18 +1707,14 @@ impl VelloRenderer {
         let image_data = if self.full_resolution_images {
             // Full-quality exports don't replace or retain the display preview.
             decode_image_preview(image, 0)
-        } else if let Some(cached) = self
-            .image_cache
-            .get_mut(&source_key)
-            .filter(|entry| entry.bucket == bucket)
-        {
+        } else if let Some(cached) = self.image_cache.get_mut(&(source_key, bucket)) {
             cached.last_used = self.image_cache_clock;
             Some(cached.image.clone())
         } else {
             let decoded = decode_image_preview(image, bucket);
             if let Some(data) = &decoded {
                 self.image_cache.insert(
-                    source_key,
+                    (source_key, bucket),
                     CachedImage {
                         image: data.clone(),
                         bucket,
@@ -3602,6 +3649,19 @@ mod inline_formula_render_tests {
             );
         }
     }
+
+    #[test]
+    fn text_decorations_keep_independent_selection_ranges() {
+        let mut renderer = VelloRenderer::new();
+        let mut text = Text::new(Point::ZERO, "Soit AB un vecteur".into());
+        text.toggle_format(5..7, 'v');
+        text.toggle_format(11..18, 'o');
+        renderer.render_text(&text, Affine::IDENTITY);
+        let layout = &renderer.text_cache.values().next().unwrap().layout;
+        let line = layout.lines().next().unwrap();
+        assert_eq!(decorated_ranges_on_line(&text, line.text_range(), true), vec![5..7]);
+        assert_eq!(decorated_ranges_on_line(&text, line.text_range(), false), vec![11..18]);
+    }
     #[test]
     fn unavailable_custom_font_still_renders_and_edits() {
         let mut renderer = VelloRenderer::new();
@@ -3740,7 +3800,7 @@ mod memory_budget_tests {
         let source = image.data_base64.clone();
         let mut renderer = VelloRenderer::new();
         renderer.render_image(&image, Affine::IDENTITY);
-        let cached = &renderer.image_cache[&image.data_base64.key()];
+        let cached = &renderer.image_cache[&(image.data_base64.key(), 256)];
         assert_eq!((cached.image.width, cached.image.height), (153, 256));
         assert_eq!(renderer.image_cache_bytes(), 156672);
         let full = decode_image_preview(&image, 0).unwrap();
@@ -3757,14 +3817,19 @@ mod memory_budget_tests {
         renderer.render_image(&image, Affine::IDENTITY);
         assert!(renderer.image_cache_bytes() > 156672);
         assert!(renderer.image_cache_bytes() <= IMAGE_CACHE_BUDGET);
+        assert!(renderer.image_cache.contains_key(&(image.data_base64.key(), 256)));
+        renderer.zoom = 1.0;
+        let cached_before = renderer.image_cache_bytes();
+        renderer.render_image(&image, Affine::IDENTITY);
+        assert_eq!(renderer.image_cache_bytes(), cached_before, "returning to a nearby zoom should reuse its decoded preview");
         assert_eq!(source, image.data_base64);
     }
     #[test]
     fn lru_budget_evicts_oldest_and_switching_canvas_releases_decoded_images() {
         let mut renderer = VelloRenderer::new();
         for key in 0..33u64 {
-            renderer.image_cache.insert(
-                key,
+        renderer.image_cache.insert(
+                (key, 512),
                 CachedImage {
                     image: peniko::ImageData {
                         data: peniko::Blob::new(std::sync::Arc::new(vec![0u8; 512 * 512 * 4])),
@@ -3780,7 +3845,7 @@ mod memory_budget_tests {
         }
         renderer.trim_image_cache();
         assert_eq!(renderer.image_cache_bytes(), IMAGE_CACHE_BUDGET);
-        assert!(!renderer.image_cache.contains_key(&0) && renderer.image_cache.contains_key(&32));
+        assert!(!renderer.image_cache.contains_key(&(0, 512)) && renderer.image_cache.contains_key(&(32, 512)));
         let empty = drafftink_core::canvas::CanvasDocument::new();
         renderer.retain_open_document_caches(std::iter::once(&empty));
         assert_eq!(renderer.image_cache_bytes(), 0);

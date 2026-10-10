@@ -4,7 +4,12 @@ const fs=require('node:fs'),path=require('node:path'),http=require('node:http');
 const assert=require('node:assert/strict'),{execFileSync}=require('node:child_process');
 const root=path.resolve('work/e2e/offline-site');
 fs.mkdirSync(root,{recursive:true});fs.cpSync('web',root,{recursive:true});
+const indexPath=path.join(root,'index.html');
+const sourceIndex=fs.readFileSync(indexPath,'utf8');
 const build=()=>execFileSync('python3',['utils/build_offline_cache.py','--web-dir',root]);build();
+// Simulate FTP ASCII mode after a complete upload: the manifest is generated
+// from LF files, while index.html reaches the browser with CRLF line endings.
+fs.writeFileSync(indexPath,sourceIndex.replace(/\r?\n/g,'\r\n'));
 const prefix='/qrapht/web/';
 const server=http.createServer((request,response)=>{
   const name=new URL(request.url,'http://localhost').pathname;
@@ -60,7 +65,7 @@ const server=http.createServer((request,response)=>{
     assert.equal(await page.title(),'Qurso🌿');
     assert.equal(await page.evaluate(async()=>new Uint8Array(await (await fetch('./pkg/drafftink_app_bg.wasm')).arrayBuffer())[1]),97);
     // A worker from a partial FTP upload must fail without replacing the good cache.
-    const indexFile=path.join(root,'index.html'),original=fs.readFileSync(indexFile,'utf8');
+    const indexFile=indexPath,original=fs.readFileSync(indexFile,'utf8');
     const newer=original.replace('<title>Qurso🌿</title>','<title>Qurso🌿 update test</title>');
     fs.writeFileSync(indexFile,newer);build();fs.writeFileSync(indexFile,original);
     // Prepare the partial upload before reconnecting; the online event also
