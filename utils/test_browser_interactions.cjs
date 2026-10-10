@@ -228,6 +228,8 @@ function inspectCapture(file) {
     const settingsPicker=settingsState.controls['Color picker Couleur rapide du trait'];
     await page.mouse.click(settingsPicker[0]+70,settingsPicker[1]+100);
     settingsState=await wait(s=>JSON.stringify(s.stroke_colors[0])!==JSON.stringify(originalStrokePreset));
+    await page.mouse.click(settingsPicker[2]-18,settingsPicker[1]+17);
+    await wait(s=>!s.controls['Color picker Couleur rapide du trait']);
     await page.keyboard.press('Enter');
     await wait(s=>!s.controls['Settings stroke color 0']);
     const savedPalette=await page.evaluate(()=>JSON.parse(localStorage.getItem('drafftink.user_settings.v1')).stroke_colors);
@@ -235,7 +237,7 @@ function inspectCapture(file) {
     page.once('dialog',dialog=>dialog.accept());
     await page.reload();
     const storedAfterReload=await page.evaluate(()=>JSON.parse(localStorage.getItem('drafftink.user_settings.v1')).stroke_colors);
-    console.log('Stroke preset persisted before/after reload:',JSON.stringify(savedPalette[0]),JSON.stringify(storedAfterReload[0]));
+    assert.deepEqual(storedAfterReload[0],savedPalette[0],'custom Stroke preset must remain stored during page load');
     await wait(s=>s.shapes.length===0&&s.stroke_colors);
     assert.deepEqual((await state()).stroke_colors[0],savedPalette[0],'custom Stroke presets must survive reload');
     await page.keyboard.press('s');await wait(s=>s.tool==='Select');
