@@ -289,6 +289,9 @@ pub struct TimeWidgetState {
     pub size: Vec2,
     pub resize_origin_size: Option<Vec2>,
     pub resize_origin_position: Option<Pos2>,
+    pub resize_origin_pointer: Option<Pos2>,
+    pub move_origin_position: Option<Pos2>,
+    pub move_origin_pointer: Option<Pos2>,
     pub mode: u8,
     pub stopwatch_running: bool,
     pub stopwatch_elapsed: f64,
@@ -313,7 +316,8 @@ impl TimeWidgetState {
     pub fn new(id: u64, position: Pos2) -> Self {
         Self {
             id, open: true, selected: false, position, size: Vec2::new(260.0, 112.0),
-            resize_origin_size: None, resize_origin_position: None, mode: 0,
+            resize_origin_size: None, resize_origin_position: None, resize_origin_pointer: None,
+            move_origin_position: None, move_origin_pointer: None, mode: 0,
             stopwatch_running: false, stopwatch_elapsed: 0.0, stopwatch_started_at: None,
             countdown_seconds: 300, countdown_remaining: 300.0, countdown_started_at: None,
             alarm_enabled: false, alarm_hour: 8, alarm_minute: 0, alarm_last_fired: String::new(),
@@ -1118,7 +1122,29 @@ fn render_stopwatch(ctx: &Context, state: &mut UiState) {
         let mut close_rect = None;
         let mut resize_rects = Vec::new();
         let area = egui::Area::new(egui::Id::new(("qurso_time_widget", widget.id)))
-            .current_pos(widget.position).movable(true).order(egui::Order::Foreground).show(ctx, |ui| {
+            .current_pos(widget.position).movable(false).order(egui::Order::Foreground).show(ctx, |ui| {
+                // Register a background drag target before the content and corner handles.
+                // Later child interactions take priority, so buttons and resize grips remain usable.
+                let move_rect = Rect::from_min_size(widget.position, widget.size + Vec2::splat(24.0));
+                let move_response = ui.interact(move_rect, egui::Id::new(("qurso_time_move", widget.id)), egui::Sense::drag());
+                if move_response.drag_started() {
+                    widget.move_origin_position = Some(widget.position);
+                    widget.move_origin_pointer = ctx.input(|input| input.pointer.interact_pos());
+                    widget.selected = true;
+                }
+                if move_response.dragged() {
+                    if let (Some(origin), Some(pointer_origin), Some(pointer)) = (
+                        widget.move_origin_position,
+                        widget.move_origin_pointer,
+                        ctx.input(|input| input.pointer.interact_pos()),
+                    ) {
+                        widget.position = origin + pointer - pointer_origin;
+                    }
+                }
+                if move_response.drag_stopped() {
+                    widget.move_origin_position = None;
+                    widget.move_origin_pointer = None;
+                }
                 let frame = egui::Frame::new().fill(widget.background_color)
                     .stroke(Stroke::new(2.0, if widget.selected { Color32::from_rgb(80, 145, 255) } else { Color32::from_rgba_unmultiplied(255,255,255,28) }))
                     .corner_radius(CornerRadius::same(12)).inner_margin(Margin::same(12)).show(ui, |ui| {
@@ -1173,9 +1199,14 @@ fn render_stopwatch(ctx: &Context, state: &mut UiState) {
                         if response.drag_started() {
                             widget.resize_origin_size = Some(widget.size);
                             widget.resize_origin_position = Some(widget.position);
+                            widget.resize_origin_pointer = ctx.input(|input| input.pointer.interact_pos());
+                            widget.selected = true;
                         }
                         if response.dragged() {
-                            let delta = response.drag_delta();
+                            let delta = match (widget.resize_origin_pointer, ctx.input(|input| input.pointer.interact_pos())) {
+                                (Some(origin), Some(pointer)) => pointer - origin,
+                                _ => response.drag_delta(),
+                            };
                             let origin_size = widget.resize_origin_size.unwrap_or(widget.size);
                             let origin_position = widget.resize_origin_position.unwrap_or(widget.position);
                             let mut size = origin_size;
@@ -1193,6 +1224,7 @@ fn render_stopwatch(ctx: &Context, state: &mut UiState) {
                         if response.drag_stopped() {
                             widget.resize_origin_size = None;
                             widget.resize_origin_position = None;
+                            widget.resize_origin_pointer = None;
                         }
                     }
                 }
