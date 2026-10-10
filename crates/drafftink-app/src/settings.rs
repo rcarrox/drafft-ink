@@ -388,3 +388,36 @@ mod font_settings_regressions {
         assert_eq!(restored.panel_positions, settings.panel_positions);
     }
 }
+
+pub fn settings_backup_json(settings: &UserSettings) -> Result<String, serde_json::Error> {
+    serde_json::to_string_pretty(&serde_json::json!({"format":"qurso-settings", "version":1, "settings":settings}))
+}
+
+pub fn parse_settings_backup(json: &str) -> Result<UserSettings, String> {
+    let value: serde_json::Value = serde_json::from_str(json).map_err(|error| error.to_string())?;
+    if value["format"] != "qurso-settings" || value["version"] != 1 {
+        return Err("Ce fichier n'est pas une configuration Qurso compatible.".into());
+    }
+    let mut settings: UserSettings = serde_json::from_value(value["settings"].clone()).map_err(|error| error.to_string())?;
+    settings.sanitize();
+    Ok(settings)
+}
+
+#[cfg(test)]
+mod backup_tests {
+    use super::*;
+    #[test]
+    fn settings_backup_preserves_customizations_and_rejects_documents() {
+        let mut settings = UserSettings::default();
+        settings.stroke_colors[0] = [12,34,56];
+        settings.shortcut_draw = "q".into();
+        settings.intro_json = "{\"shapes\":[]}".into();
+        settings.panel_positions.insert("toolbar".into(), [50.0,80.0]);
+        let restored = parse_settings_backup(&settings_backup_json(&settings).unwrap()).unwrap();
+        assert_eq!(restored.stroke_colors,settings.stroke_colors);
+        assert_eq!(restored.shortcut_draw,"q");
+        assert_eq!(restored.intro_json,settings.intro_json);
+        assert_eq!(restored.panel_positions,settings.panel_positions);
+        assert!(parse_settings_backup("{\"shapes\":[]}").is_err());
+    }
+}

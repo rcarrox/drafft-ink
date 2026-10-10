@@ -781,6 +781,23 @@ impl EventHandler {
                 // If not clicking on text, will create new text on release
             }
             ToolKind::Select => {
+                // Ctrl-click toggles the object even where its selection handles overlap.
+                // Image handles retain Ctrl-drag cropping.
+                let image_crop_handle = input.ctrl() && canvas.selection.iter().any(|id| {
+                    canvas.document.get_shape(*id).is_some_and(|shape| {
+                        matches!(shape, Shape::Image(_)) && hit_test_handles(
+                            shape, shape_point(canvas, *id, world_point),
+                            if canvas.document.is_pinned(*id) { HANDLE_HIT_TOLERANCE } else { HANDLE_HIT_TOLERANCE / canvas.camera.zoom },
+                        ).is_some()
+                    })
+                });
+                if input.ctrl() && !image_crop_handle {
+                    if let Some(id) = shapes_at_pointer(canvas, world_point, 5.0 / canvas.camera.zoom).first().copied() {
+                        if canvas.is_selected(id) { canvas.selection.retain(|selected| *selected != id); }
+                        else { canvas.add_to_selection(id); }
+                        return;
+                    }
+                }
                 // Check for double-click on text shape to enter edit mode
                 if input.is_double_click() {
                     let hits = shapes_at_pointer(canvas, world_point, 5.0 / canvas.camera.zoom);

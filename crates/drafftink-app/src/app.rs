@@ -42,7 +42,7 @@ pub mod file_ops {
     use drafftink_core::canvas::CanvasDocument;
     use std::sync::Mutex;
 
-    /// Media import is implemented in the browser build, which supports raster decoding and PDF.js.
+    /// Media import is implemented in the browser build, which supports raster decoding.
     pub fn import_media() {
         log::warn!("Media insertion is available in the browser build.");
     }
@@ -294,6 +294,7 @@ pub mod file_ops {
         static PENDING_CLIPBOARD_TEXT: RefCell<Option<String>> = const { RefCell::new(None) };
         static PENDING_MATH_CLIPBOARD: RefCell<Option<String>> = const { RefCell::new(None) };
         static PENDING_PRESETS: RefCell<Option<Vec<PresetInfo>>> = const { RefCell::new(None) };
+        static PENDING_SETTINGS: RefCell<Option<UserSettings>> = const { RefCell::new(None) };
         static PENDING_LIBRARY: RefCell<Option<(String, CanvasDocument)>> = const { RefCell::new(None) };
         static PENDING_INTRO_JSON: RefCell<Option<(String, String)>> = const { RefCell::new(None) };
         static PENDING_EXPORT_FOLDER: RefCell<Option<String>> = const { RefCell::new(None) };
@@ -843,7 +844,7 @@ pub mod file_ops {
         Ok(())
     }
 
-    fn download_file(filename: &str, content: &str, mime_type: &str) {
+    pub fn download_file(filename: &str, content: &str, mime_type: &str) {
         let blob_parts = js_sys::Array::new();
         blob_parts.push(&JsValue::from_str(content));
         let options = web_sys::BlobPropertyBag::new();
@@ -943,12 +944,12 @@ pub mod file_ops {
         });
     }
 
-    /// Import raster images or PDF pages as regular editable image shapes.
+    /// Import raster images as regular editable image shapes.
     pub fn import_media_async(viewport_width: f64, viewport_height: f64, camera_offset_x: f64, camera_offset_y: f64, camera_zoom: f64, optimize: bool, max_side: u32) {
         wasm_bindgen_futures::spawn_local(async move {
             if let Err(error) = import_media_impl(viewport_width, viewport_height, camera_offset_x, camera_offset_y, camera_zoom, optimize, max_side).await {
                 let message = error.as_string().unwrap_or_else(|| format!("{error:?}"));
-                log::error!("Could not import image/PDF: {message}");
+                log::error!("Could not import image: {message}");
                 PENDING_IMPORT_NOTICE.with(|cell| *cell.borrow_mut() = Some(format!("Import impossible : {message}")));
                 schedule_repaint(0);
             }
@@ -973,6 +974,27 @@ pub mod file_ops {
             if let Err(error) = result { log::error!("Preset operation failed: {:?}", error); }
         });
     }
+
+    pub fn import_settings_async() {
+        wasm_bindgen_futures::spawn_local(async {
+            let result = async {
+                let window = web_sys::window().ok_or("No window")?;
+                let function: js_sys::Function = js_sys::Reflect::get(window.as_ref(), &JsValue::from_str("qursoPickSettings"))?.dyn_into()?;
+                let value = wasm_bindgen_futures::JsFuture::from(function.call0(window.as_ref())?.dyn_into::<js_sys::Promise>()?).await?;
+                if let Some(json) = value.as_string() {
+                    let settings = crate::settings::parse_settings_backup(&json).map_err(|error| JsValue::from_str(&error))?;
+                    PENDING_SETTINGS.with(|cell| *cell.borrow_mut() = Some(settings));
+                    schedule_repaint(0);
+                }
+                Ok::<(), JsValue>(())
+            }.await;
+            if let Err(error) = result {
+                PENDING_IMPORT_NOTICE.with(|cell| *cell.borrow_mut() = Some(format!("Paramètres non importés : {}", error.as_string().unwrap_or_default())));
+                schedule_repaint(0);
+            }
+        });
+    }
+    pub fn take_pending_settings() -> Option<UserSettings> { PENDING_SETTINGS.with(|cell| cell.borrow_mut().take()) }
 
     pub fn list_presets_async() { run_preset_command("qursoPresetList", vec![]); }
     pub fn add_preset_async() { run_preset_command("qursoPresetAdd", vec![]); }
@@ -1008,7 +1030,7 @@ pub mod file_ops {
 
     /// Load an image chosen through the native file dialog in the desktop target.
     pub fn import_media() {
-        log::warn!("Use the browser version to import images and PDF pages.");
+        log::warn!("Use the browser version to import images.");
     }
 
     async fn import_media_impl(viewport_width: f64, viewport_height: f64, camera_offset_x: f64, camera_offset_y: f64, camera_zoom: f64, optimize: bool, max_side: u32) -> Result<(), JsValue> {
@@ -1018,24 +1040,13 @@ pub mod file_ops {
         let document = window.document().ok_or("No document")?;
         let input: web_sys::HtmlInputElement = document.create_element("input")?.dyn_into()?;
         input.set_type("file");
-        input.set_accept("image/png,image/jpeg,image/webp,.pdf,application/pdf");
+        input.set_accept("image/png,image/jpeg,image/webp");
         input.style().set_property("display", "none").ok();
         document.body().ok_or("No body")?.append_child(&input)?;
         let selected = wait_for_file_selection(&input).await;
         input.remove();
         let file = selected?;
-        let mime = file.type_();
-        let is_pdf = mime == "application/pdf" || file.name().to_lowercase().ends_with(".pdf");
-        let blobs: Vec<web_sys::Blob> = if is_pdf {
-            let value = js_sys::Reflect::get(window.as_ref(), &JsValue::from_str("drafftinkPdfPages"))?;
-            let function: js_sys::Function = value.dyn_into().map_err(|_| JsValue::from_str("Le lecteur PDF local n'est pas disponible"))?;
-            let promise: js_sys::Promise = function.call1(window.as_ref(), file.as_ref())?.dyn_into()?;
-            let pages = wasm_bindgen_futures::JsFuture::from(promise).await?;
-            if js_sys::Reflect::get(window.as_ref(), &JsValue::from_str("drafftinkPdfPagesTruncated"))?.as_bool().unwrap_or(false) {
-                PENDING_IMPORT_NOTICE.with(|cell| *cell.borrow_mut() = Some("PDF limité aux 20 premières pages pour préserver la mémoire.".into()));
-            }
-            js_sys::Array::from(&pages).iter().map(|value| value.dyn_into::<web_sys::Blob>()).collect::<Result<Vec<_>, _>>()?
-        } else if optimize {
+        let blobs: Vec<web_sys::Blob> = if optimize {
             let prepare: js_sys::Function = js_sys::Reflect::get(window.as_ref(), &JsValue::from_str("qursoPrepareImage"))?.dyn_into()?;
             let prepared = wasm_bindgen_futures::JsFuture::from(prepare.call2(window.as_ref(), file.as_ref(), &JsValue::from_f64(max_side as f64))?.dyn_into::<js_sys::Promise>()?).await?;
             vec![js_sys::Reflect::get(&prepared, &JsValue::from_str("blob"))?.dyn_into::<web_sys::Blob>()?]
@@ -1064,7 +1075,7 @@ pub mod file_ops {
             y += image.height + 24.0;
             images.push(Shape::Image(image));
         }
-        if images.is_empty() { return Err(JsValue::from_str("Aucune page trouvée dans le PDF")); }
+        if images.is_empty() { return Err(JsValue::from_str("Aucune image importée")); }
         PENDING_IMPORTED_MEDIA.with(|cell| *cell.borrow_mut() = Some(images));
         schedule_repaint(0);
         Ok(())
@@ -2566,6 +2577,7 @@ impl App {
         {
             if let Some(ref state) = self.state {
                 file_ops::try_load_last_document(&state.ui_state.settings);
+                file_ops::list_presets_async();
             }
         }
 
@@ -3200,6 +3212,20 @@ impl ApplicationHandler for App {
                     add_tab(state, name, document);
                 }
 
+                #[cfg(target_arch = "wasm32")]
+                if let Some(settings) = file_ops::take_pending_settings() {
+                    state.ui_state.apply_imported_settings(settings);
+                    request_math_font(&state.ui_state.settings.default_math_font);
+                    let postscript = state.ui_state.current_text_postscript.clone();
+                    if !postscript.is_empty() {
+                        file_ops::restore_local_font_async(state.ui_state.current_text_font.custom.clone().unwrap_or_default(), postscript);
+                    }
+                    state.egui_ctx.memory_mut(|memory| memory.reset_areas());
+                    crate::settings::save_settings(&state.ui_state.settings);
+                    state.ui_state.save_status = "Paramètres importés. Réautorisez le dossier PNG si nécessaire.".into();
+                    state.needs_redraw = true;
+                }
+
                 // Check for pending document list (WASM)
                 #[cfg(target_arch = "wasm32")]
                 if let Some(docs) = file_ops::take_pending_document_list() {
@@ -3383,7 +3409,7 @@ impl ApplicationHandler for App {
                     state.needs_redraw = true;
                 }
 
-                // Add imported image/PDF pages as one undoable insertion.
+                // Add imported images as one undoable insertion.
                 #[cfg(target_arch = "wasm32")]
                 if let Some(notice) = file_ops::take_pending_import_notice() {
                     state.ui_state.save_status = notice;
@@ -5238,6 +5264,25 @@ impl ApplicationHandler for App {
                             UiAction::ShowShortcuts => {
                                 state.ui_state.shortcuts_modal_open =
                                     !state.ui_state.shortcuts_modal_open;
+                            }
+                            UiAction::OpenNumworks => {
+                                #[cfg(target_arch = "wasm32")]
+                                if let Some(window) = web_sys::window() {
+                                    use wasm_bindgen::JsCast;
+                                    if let Ok(value) = js_sys::Reflect::get(window.as_ref(), &"qursoOpenNumworks".into()) {
+                                        if let Ok(function) = value.dyn_into::<js_sys::Function>() { let _ = function.call0(window.as_ref()); }
+                                    }
+                                }
+                            }
+                            UiAction::ExportSettings => {
+                                #[cfg(target_arch = "wasm32")]
+                                if let Ok(json) = crate::settings::settings_backup_json(&state.ui_state.settings) {
+                                    file_ops::download_file("Qurso_Settings.json", &json, "application/json");
+                                }
+                            }
+                            UiAction::ImportSettings => {
+                                #[cfg(target_arch = "wasm32")]
+                                file_ops::import_settings_async();
                             }
                             UiAction::SaveSettings => {
                                 state.ui_state.settings.sanitize();

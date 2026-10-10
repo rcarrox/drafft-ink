@@ -505,6 +505,18 @@ pub struct UiState {
     pub tab_rename_buffer: String,
 }
 
+impl UiState {
+    pub fn apply_imported_settings(&mut self, settings: UserSettings) {
+        self.current_text_font = settings.last_text_font.clone().unwrap_or_else(|| TextFont::from_name(&settings.default_font, &settings.default_font_postscript));
+        self.current_text_postscript = settings.last_text_postscript.clone().unwrap_or_else(|| settings.default_font_postscript.clone());
+        self.settings = settings;
+        self.settings_before_edit = None;
+        self.settings_open = false;
+        self.color_popover = ColorPopover::None;
+        self.color_picker_rect = None;
+    }
+}
+
 impl Default for UiState {
     fn default() -> Self {
         let settings = crate::settings::load_settings();
@@ -832,6 +844,9 @@ pub enum UiAction {
     ShowShortcuts,
     /// Persist the current settings.
     SaveSettings,
+    ExportSettings,
+    ImportSettings,
+    OpenNumworks,
     /// Import a JSON document as the startup intro.
     ImportIntroJson,
     /// Clear the startup intro document.
@@ -1030,12 +1045,13 @@ fn render_insert_panel(ctx: &Context, state: &mut UiState) -> Option<UiAction> {
                     ui.visuals_mut().widgets.inactive.bg_fill = Color32::TRANSPARENT;
                     ui.visuals_mut().widgets.hovered.bg_fill = Color32::from_gray(235);
                     ui.visuals_mut().widgets.active.bg_fill = Color32::from_gray(225);
-                    let image_pdf = ui.add(egui::Button::new("Image / PDF").fill(Color32::TRANSPARENT).stroke(Stroke::NONE));
-                    state.test_controls.insert("Insert Image / PDF".into(), [image_pdf.rect.min.x, image_pdf.rect.min.y, image_pdf.rect.max.x, image_pdf.rect.max.y]);
+                    let image_pdf = ui.add(egui::Button::new("Image").fill(Color32::TRANSPARENT).stroke(Stroke::NONE));
+                    state.test_controls.insert("Insert Image".into(), [image_pdf.rect.min.x, image_pdf.rect.min.y, image_pdf.rect.max.x, image_pdf.rect.max.y]);
                     if image_pdf.clicked() { action = Some(UiAction::ImportMedia); state.insert_menu_open = false; }
                     let time = ui.add(egui::Button::new("Time").fill(Color32::TRANSPARENT).stroke(Stroke::NONE));
                     state.test_controls.insert("Insert Time".into(), [time.rect.min.x, time.rect.min.y, time.rect.max.x, time.rect.max.y]);
                     if time.clicked() { action = Some(UiAction::ToggleStopwatch); state.insert_menu_open = false; }
+                    if ui.add(egui::Button::new("Numworks").fill(Color32::WHITE)).clicked() { action = Some(UiAction::OpenNumworks); state.insert_menu_open = false; }
                     let label = if state.preset_menu_open { "Preset  ‹" } else { "Preset  ›" };
                     let preset = ui.add(egui::Button::new(label).fill(Color32::TRANSPARENT).stroke(Stroke::NONE));
                     state.test_controls.insert("Insert Preset".into(), [preset.rect.min.x, preset.rect.min.y, preset.rect.max.x, preset.rect.max.y]);
@@ -1046,7 +1062,7 @@ fn render_insert_panel(ctx: &Context, state: &mut UiState) -> Option<UiAction> {
                     if state.preset_menu_open {
                         ui.separator();
                         for preset in &state.presets {
-                            if ui.button(&preset.name).clicked() { action = Some(UiAction::InsertUserPreset(preset.id.clone())); state.insert_menu_open = false; }
+                            if ui.add(egui::Button::new(egui::RichText::new(&preset.name).color(Color32::BLACK)).fill(Color32::WHITE)).clicked() { action = Some(UiAction::InsertUserPreset(preset.id.clone())); state.insert_menu_open = false; }
                         }
                         if state.presets.is_empty() { ui.label("Aucun preset"); }
                     }
@@ -1068,15 +1084,16 @@ fn render_insert_panel(ctx: &Context, state: &mut UiState) -> Option<UiAction> {
             .open(&mut state.preset_manager_open).collapsible(false).resizable(false)
             .frame(Frame::window(&ctx.style()).fill(Color32::WHITE).stroke(Stroke::new(1.0, Color32::from_gray(220))).shadow(egui::epaint::Shadow::NONE))
             .default_pos(Pos2::new(80.0, 160.0)).show(ctx, |ui| {
-                ui.visuals_mut().override_text_color = Some(Color32::WHITE);
-                ui.visuals_mut().widgets.inactive.bg_fill = Color32::from_gray(38);
-                ui.visuals_mut().widgets.inactive.fg_stroke.color = Color32::WHITE;
-                ui.visuals_mut().widgets.hovered.bg_fill = Color32::from_gray(65);
-                ui.visuals_mut().widgets.hovered.fg_stroke.color = Color32::WHITE;
-                ui.visuals_mut().widgets.active.bg_fill = Color32::from_gray(85);
-                ui.visuals_mut().widgets.active.fg_stroke.color = Color32::WHITE;
+                ui.visuals_mut().override_text_color = Some(Color32::from_gray(45));
+                ui.visuals_mut().extreme_bg_color = Color32::WHITE;
+                ui.visuals_mut().widgets.inactive.bg_fill = Color32::WHITE;
+                ui.visuals_mut().widgets.inactive.fg_stroke.color = Color32::from_gray(45);
+                ui.visuals_mut().widgets.hovered.bg_fill = Color32::from_gray(240);
+                ui.visuals_mut().widgets.hovered.fg_stroke.color = Color32::BLACK;
+                ui.visuals_mut().widgets.active.bg_fill = Color32::from_gray(230);
+                ui.visuals_mut().widgets.active.fg_stroke.color = Color32::BLACK;
                 ui.label("Images PNG enregistrées dans ce navigateur.");
-                if ui.button("＋ Ajouter un PNG…").clicked() { action = Some(UiAction::AddPreset); }
+                if ui.button("＋ Ajouter des PNG…").clicked() { action = Some(UiAction::AddPreset); }
                 ui.separator();
                 let mut rename_action = None;
                 let mut delete_action = None;
@@ -4571,6 +4588,13 @@ fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAct
                         ui.add_space(16.0);
                         ui.separator();
                         ui.add_space(10.0);
+                        widgets_section_label(ui, "Configuration personnalisée");
+                        ui.horizontal(|ui| {
+                            if ui.button("Exporter les paramètres").clicked() { action = Some(UiAction::ExportSettings); }
+                            if ui.button("Importer les paramètres").clicked() { action = Some(UiAction::ImportSettings); }
+                        });
+                        ui.label("Polices, couleurs, raccourcis, panneaux et options dans un fichier JSON.");
+                        ui.separator();
                         widgets_section_label(ui, "Document d'introduction");
                         ui.add_space(5.0);
                         ui.horizontal(|ui| {

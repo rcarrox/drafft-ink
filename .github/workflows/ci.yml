@@ -25,6 +25,7 @@ jobs:
           node utils/test_browser_helpers.cjs
           node utils/test_image_prepare.cjs
           node utils/test_file_saving.cjs
+          node --check web/browser-tools.js
           node --check web/offline.js
           node --check utils/test_offline_cache.cjs
           python3 utils/test_offline_manifest.py
@@ -245,6 +246,7 @@ jobs:
           python3 scripts/cloud/preview.py --port 8888 > work/e2e/server.log 2>&1 &
           node utils/test_browser_interactions.cjs
           node utils/test_online_only.cjs
+          node utils/test_presets_settings.cjs
       - name: Upload interaction evidence
         if: always()
         uses: actions/upload-artifact@v4

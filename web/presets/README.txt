@@ -1,0 +1,1 @@
+Placez les PNG dans ce dossier. En local, la liste est actualisée au lancement. Avant envoi FTP, double-cliquez sur Actualiser presets.cmd puis envoyez les PNG et manifest.json. Le premier lancement les importe dans PNG Preset. Renommer/supprimer reste mémorisé dans le navigateur.
