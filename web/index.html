@@ -206,6 +206,7 @@
         }
         window.drafftinkSetCursor=function(kind,color,overUi=false,resizeCursor='') {
             kind=kind===true?1:Math.max(0,Math.min(6,Number(kind)||0));
+            const previousResizeCursor=forceResizeCursor;
             forceUiCursor=overUi;
             forceResizeCursor=/^(nwse|nesw|ns|ew)-resize$/.test(resizeCursor)?resizeCursor:'';
             const canvas=document.querySelector('canvas');
@@ -216,6 +217,7 @@
                     cursorObserver.observe(canvas,{attributes:true,attributeFilter:['style']});
                 }
             }
+            if(previousResizeCursor && !forceResizeCursor && canvas?.style.cursor===previousResizeCursor) canvas.style.cursor='auto';
             const changed=cursorKind!==kind || cursorOutline!==color || !cursorValue;
             cursorKind=kind; cursorOutline=/^#[0-9a-f]{6}$/i.test(color)?color:'#000000';
             if(cursorSVG && changed) {
@@ -225,7 +227,7 @@
             }
             applyCursor();
         };
-        cursorTemplates.then(svg=>{cursorSVG=svg;cursorValue='';window.drafftinkSetCursor(cursorKind,cursorOutline,forceUiCursor);})
+        cursorTemplates.then(svg=>{cursorSVG=svg;cursorValue='';window.drafftinkSetCursor(cursorKind,cursorOutline,forceUiCursor,forceResizeCursor);})
             .catch(error=>console.warn('Custom cursors unavailable:',error));
 
         const snapshotTimes=new Map();
