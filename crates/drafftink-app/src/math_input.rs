@@ -689,7 +689,7 @@ pub fn command_example(source: &str) -> Option<&'static str> {
 
 /// A zero-width layout probe, never stored in the document or exported.
 pub fn live_command_caret_latex(source: &str, character: usize) -> Option<String> {
-    const MARKER: &str = r"\color{#010203}{\rule{0em}{0.0001em}}";
+    const MARKER: &str = r"\color{red}{\rule{0em}{0.0001em}}";
     let length = source.chars().count();
     if character >= length && source.trim_end().ends_with(')') {
         return Some(format!("{}{}", live_command_latex(source)?, MARKER));
@@ -754,9 +754,9 @@ mod live_caret_tests {
         let source = "frac(123,7895)";
         let caret = source.find('5').unwrap();
         let probe = live_command_caret_latex(source,caret).unwrap();
-        assert!(probe.contains(r"789\color{#010203}{\rule{0em}{0.0001em}}5"));
+        assert!(probe.contains(r"789\color{red}{\rule{0em}{0.0001em}}5"));
         let nested = live_command_caret_latex("frac(1,frac(π,95))",14).unwrap();
-        assert!(nested.contains("#010203"));
+        assert!(nested.contains("red"));
         assert_eq!(source,"frac(123,7895)");
         assert!(!command_caret_candidates(source).contains(&2));
         assert!(command_caret_candidates(source).contains(&caret));

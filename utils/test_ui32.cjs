@@ -1,11 +1,11 @@
 // Real WASM pointer ownership, typography, editable bindings, and formula carets.
-const {chromium}=require('../work/e2e/node_modules/playwright');
+const {chromium}=require(process.env.QURSO_PLAYWRIGHT||'../work/e2e/node_modules/playwright');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
 const evidence=path.resolve('work/e2e/evidence');fs.mkdirSync(evidence,{recursive:true});
 (async()=>{
- const browser=await chromium.launch({headless:true,args:['--enable-unsafe-webgpu','--use-angle=swiftshader']});
+ const browser=await chromium.launch({headless:true,executablePath:process.env.QURSO_TEST_BROWSER,args:['--enable-unsafe-webgpu','--use-angle=swiftshader']});
  const context=await browser.newContext({viewport:{width:1280,height:720},permissions:['clipboard-read','clipboard-write']});
  await context.addInitScript(()=>localStorage.setItem('drafftink.user_settings.v1',JSON.stringify({restore_last_document:false,autosave_enabled:false,intro_json:'',default_font:'Noto Sans',default_font_postscript:'',hide_properties:true})));
  const page=await context.newPage();
@@ -15,7 +15,7 @@ const evidence=path.resolve('work/e2e/evidence');fs.mkdirSync(evidence,{recursiv
  const menu=async()=>{await page.mouse.move(28,28);await page.waitForTimeout(120);await page.mouse.click(28,28,{delay:70});await wait(s=>s.controls['Menu Settings']);};
  const key=async value=>{await page.keyboard.press(value);await page.waitForTimeout(130);};
  try {
-  await page.goto('http://127.0.0.1:8888/?drafftink-test=1');await wait(s=>s.shapes.length===0);
+  await page.goto((process.env.QURSO_TEST_URL||'http://127.0.0.1:8888/')+'?drafftink-test=1');await wait(s=>s.shapes.length===0);
   await key('d');await wait(s=>s.tool==='Freehand');
   await menu();
   const settingsRow=(await state()).controls['Menu Settings'];
@@ -56,7 +56,8 @@ const evidence=path.resolve('work/e2e/evidence');fs.mkdirSync(evidence,{recursiv
   s=await wait(s=>s.controls['Pinned picker controls']&&s.controls['Properties panel']);
   const picker=s.controls['Pinned picker controls'],properties=s.controls['Properties panel'];
   assert(Math.abs((s.controls['Pinned palette'][0]+s.controls['Pinned palette'][2]-properties[0]-properties[2])/2)<5,'Pinned palette should be centered on Properties');
-  const point=[picker[0]+55,picker[1]+95];
+  const point=[picker[0]+55,Math.max(picker[1]+95,properties[3]+18)];
+  assert(point[1]<picker[3]-30,'Picker extends below Properties and its square/hue remains interactive');
   assert(point[1]>properties[3]||point[1]<properties[1]||point[0]<properties[0]||point[0]>properties[2],'Exercise the picker outside the Properties rectangle');
   const before=s.shapes[0].shape.Image;
   const oldBg=JSON.stringify(s.shapes[0].pinned_background);
@@ -94,5 +95,5 @@ const evidence=path.resolve('work/e2e/evidence');fs.mkdirSync(evidence,{recursiv
   assert.equal(a.canvas_render_count,b.canvas_render_count,'Timer animation must reuse the unchanged canvas texture');
   await page.screenshot({path:path.join(evidence,'time-inter-stable.png')});
   console.log('UI32 checks passed: modal/menu gestures, white pinned picker overflow, Undo, editable pin binding, config reset, source caret, Inter digits and resize cursor, UI-only redraw.');
- }finally{await browser.close();}
+ }catch(error){await page.screenshot({path:path.join(evidence,'ui32-failure.png')});fs.writeFileSync(path.join(evidence,'ui32-failure-state.json'),JSON.stringify(await state(),null,2));throw error;}finally{await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

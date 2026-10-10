@@ -371,7 +371,7 @@ impl<'f, 'p> FontBackend<TtfMathFont<'f>> for VelloBackend<'_, 'f, 'p> {
 impl GraphicsBackend for VelloBackend<'_, '_, '_> {
     fn rule(&mut self, pos: Cursor, width: f64, height: f64) {
         if self.collecting_caret {
-            if self.current_color==Color::from_rgba8(1,2,3,255) && height>0.0 {
+            if self.current_color==Color::from_rgba8(255,0,0,255) && height>0.0 {
                 let size = height * 10000.0;
                 let baseline = pos.y + height;
                 self.caret=Some(kurbo::Rect::new(pos.x,baseline-size*0.8,pos.x+1.5,baseline+size*0.18));
@@ -414,13 +414,22 @@ mod mixed_font_tests {
         let math=TtfMathFont::new(ttf_parser::Face::parse(include_bytes!("../assets/rex-xits.otf"),0).unwrap()).unwrap();
         let primary=ttf_parser::Face::parse(include_bytes!("../assets/GelPen.ttf"),0).unwrap();
         let font=MixedMathFont::new(math,Some(primary));
-        for c in ['π','−','+','∞'] {
+        for c in ['π','−','+'] {
             let gid=font.math.glyph_index(c).unwrap();
             let (face,id,ratio)=font.text_glyph(gid).expect("ordinary glyph has a text face");
             let actual=font.glyph_from_gid(gid).unwrap().advance.unitless(FUnit);
             let expected=face.glyph_hor_advance(id).unwrap() as f64*ratio;
             assert!((actual-expected).abs()<1e-8,"{c}: layout and displayed face must agree");
         }
+    }
+    #[test]
+    fn missing_infinity_keeps_the_real_math_glyph() {
+        let math=TtfMathFont::new(ttf_parser::Face::parse(include_bytes!("../assets/rex-xits.otf"),0).unwrap()).unwrap();
+        let primary=ttf_parser::Face::parse(include_bytes!("../assets/GelPen.ttf"),0).unwrap();
+        let font=MixedMathFont::new(math,Some(primary));
+        let gid=font.glyph_index('∞').unwrap();
+        assert!(font.text_glyph(gid).is_none());
+        assert!(font.glyph_from_gid(gid).unwrap().advance>rex::dimensions::Unit::new(0.0));
     }
     #[test]
     fn primary_advance_matches_rendered_outline_scale() {

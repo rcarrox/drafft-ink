@@ -4174,13 +4174,13 @@ mod inline_source_caret_tests {
         let mut renderer=VelloRenderer::new();
         renderer.render_text_editing(&text,&mut edit,Affine::IDENTITY,None);
         let source="frac(123,7895)";
-        let middle=renderer.measure_inline_source_caret(&text,&edit,id,source,12,r"\frac{123}{789\color{#010203}{\rule{0em}{0.0001em}}5}").unwrap();
-        let numerator=renderer.measure_inline_source_caret(&text,&edit,id,source,7,r"\frac{12\color{#010203}{\rule{0em}{0.0001em}}3}{7895}").unwrap();
-        let end=renderer.measure_inline_source_caret(&text,&edit,id,source,14,r"\frac{123}{7895}\color{#010203}{\rule{0em}{0.0001em}}").unwrap();
+        let middle=renderer.measure_inline_source_caret(&text,&edit,id,source,12,r"\frac{123}{789\color{red}{\rule{0em}{0.0001em}}5}").unwrap();
+        let numerator=renderer.measure_inline_source_caret(&text,&edit,id,source,7,r"\frac{12\color{red}{\rule{0em}{0.0001em}}3}{7895}").unwrap();
+        let end=renderer.measure_inline_source_caret(&text,&edit,id,source,14,r"\frac{123}{7895}\color{red}{\rule{0em}{0.0001em}}").unwrap();
         assert!(middle.center().y>numerator.center().y+5.0);
         assert!(middle.x0<end.x0-2.0,"caret between 9 and 5 must not be after the fraction");
         assert_eq!(text.formulas[0].math.latex,r"\frac{123}{7895}");
-        let nested=renderer.measure_inline_source_caret(&text,&edit,id,"nested",0,r"\frac{1}{\frac{9\color{#010203}{\rule{0em}{0.0001em}}5}{2}}").unwrap();
+        let nested=renderer.measure_inline_source_caret(&text,&edit,id,"nested",0,r"\frac{1}{\frac{9\color{red}{\rule{0em}{0.0001em}}5}{2}}").unwrap();
         assert!(nested.height()<end.height(),"nested scripts adapt caret size");
     }
 }
