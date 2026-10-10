@@ -1138,7 +1138,7 @@ fn render_stopwatch(ctx: &Context, state: &mut UiState) {
                         widget.move_origin_pointer,
                         ctx.input(|input| input.pointer.interact_pos()),
                     ) {
-                        widget.position = origin + pointer - pointer_origin;
+                        widget.position = origin + (pointer - pointer_origin);
                     }
                 }
                 if move_response.drag_stopped() {
