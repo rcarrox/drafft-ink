@@ -449,7 +449,8 @@ function inspectCapture(file) {
     await page.keyboard.press('Shift+ArrowRight');await page.keyboard.press('Shift+ArrowRight');await wait(s=>s.selected_text==='AB');
     await page.keyboard.press('Control+Shift+v');
     await wait(s=>scriptText(s)?.char_styles.slice(5,7).every(style=>style.overline&&style.vector_arrow)&&scriptText(s).char_styles.filter((_,i)=>i<5||i>=7).every(style=>!style.vector_arrow));
-    await page.keyboard.press('Escape');await wait(s=>s.editing_text===null);await control('tool_Select');
+    await page.keyboard.press('Escape');await wait(s=>s.editing_text===null);await control('New canvas');await wait(s=>s.shapes.length===0);
+    await focusCanvasTool('t');await wait(s=>!!s.editing_text);await keys('hello world');await wait(s=>scriptText(s)?.content==='hello world');await page.keyboard.press('Escape');await wait(s=>s.editing_text===null);await control('tool_Select');
     const word=(await state()).shapes.find(i=>i.shape.Text);
     await page.mouse.move(word.bounds[0]+25,(word.bounds[1]+word.bounds[3])/2);await page.waitForTimeout(100);
     await page.mouse.dblclick(word.bounds[0]+25,(word.bounds[1]+word.bounds[3])/2,{delay:80});await wait(s=>s.selected_text==='hello'&&s.cursor_mode===1);
