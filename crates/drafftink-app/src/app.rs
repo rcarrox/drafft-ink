@@ -5709,6 +5709,7 @@ impl ApplicationHandler for App {
                             let mut status = status;
                             status["laser_permanent"] = state.ui_state.settings.laser_permanent.into();
                             status["laser_palette_open"] = state.ui_state.laser_color_open.into();
+                            status["stroke_colors"] = serde_json::to_value(state.ui_state.settings.stroke_colors).unwrap_or_default();
                             status["eraser_mode"] = format!("{:?}", state.ui_state.eraser_mode).into();
                             status
                         };

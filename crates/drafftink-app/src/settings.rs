@@ -40,6 +40,9 @@ pub struct UserSettings {
     pub last_text_postscript: Option<String>,
     pub accent_color: [u8; 3],
     pub cursor_outline: [u8; 3],
+    /// The six configurable quick colors used by the Stroke panel.
+    #[serde(default = "default_stroke_colors")]
+    pub stroke_colors: [[u8; 3]; 6],
     pub laser_color: [u8; 3],
     /// Keep the laser pointer active while the pointer moves without a mouse button.
     #[serde(default)]
@@ -84,6 +87,7 @@ impl Default for UserSettings {
             last_text_postscript: None,
             accent_color: [59, 130, 246],
             cursor_outline: [0, 0, 0],
+            stroke_colors: default_stroke_colors(),
             laser_color: [255, 0, 0],
             laser_permanent: false,
             panel_positions: Default::default(),
@@ -94,6 +98,17 @@ impl Default for UserSettings {
 
 fn default_optimize_images() -> bool { true }
 fn default_image_max_side() -> u32 { 2048 }
+
+fn default_stroke_colors() -> [[u8; 3]; 6] {
+    [
+        [59, 130, 246],  // blue
+        [239, 68, 68],   // red
+        [16, 185, 129],  // emerald
+        [245, 158, 11],  // amber
+        [168, 85, 247],  // purple
+        [100, 116, 139], // slate
+    ]
+}
 
 fn normalized_key(value: &str) -> String {
     value.trim().to_lowercase()
@@ -305,6 +320,16 @@ mod tests {
         assert!(!restored.tool_visible_in_toolbar(ToolKind::Highlighter));
         assert_eq!(restored.tool_for_key("k"), Some(ToolKind::Highlighter));
         assert!(restored.tool_visible_in_toolbar(ToolKind::Freehand));
+    }
+
+    #[test]
+    fn custom_stroke_palette_survives_reload_and_old_settings_get_defaults() {
+        let mut settings = UserSettings::default();
+        settings.stroke_colors[2] = [12, 34, 56];
+        let restored: UserSettings = serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(restored.stroke_colors[2], [12, 34, 56]);
+        let older: UserSettings = serde_json::from_str(r#"{"shortcut_pan":"h"}"#).unwrap();
+        assert_eq!(older.stroke_colors, default_stroke_colors());
     }
 }
 

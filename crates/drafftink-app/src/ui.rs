@@ -21,7 +21,7 @@ use crate::settings::UserSettings;
 
 // Re-export from widgets crate for consistent styling
 use drafftink_widgets::{
-    ColorGrid, ColorSwatch, ColorSwatchWithWheel, FontSizeButton, IconButton, IconButtonStyle, NoColorSwatch,
+    ColorSwatch, ColorSwatchWithWheel, FontSizeButton, IconButton, IconButtonStyle, NoColorSwatch,
     StrokeWidthButton, TAILWIND_COLORS, ToggleButton, default_btn, input_text,
     menu_item as widgets_menu_item, menu_item_enabled as widgets_menu_item_enabled,
     menu_separator as widgets_menu_separator, panel_frame as widgets_panel_frame, primary_btn,
@@ -234,10 +234,20 @@ const STROKE_WIDTHS: &[(f32, &str)] = &[
 #[derive(Clone, Copy, PartialEq)]
 pub enum ColorPopover {
     None,
-    StrokeFull, // Full color grid for stroke
-    FillFull,   // Full color grid for fill
-    BgFull,     // Full color grid for background
-    PinnedFull, // Full color grid for pinned-object background
+    Stroke,
+    Fill,
+    Background,
+    Pinned,
+    SettingsStroke(usize),
+    SettingsAccent,
+    SettingsCursor,
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub enum SettingsTab {
+    #[default]
+    Appearance,
+    Data,
 }
 
 /// Peer info for UI display
@@ -386,6 +396,7 @@ pub struct UiState {
     pub menu_open: bool,
     /// Which color popover is currently open.
     pub color_popover: ColorPopover,
+    pub color_picker_rect: Option<Rect>,
     /// Current grid style.
     pub grid_style: GridStyle,
     /// Current zoom level (1.0 = 100%).
@@ -434,6 +445,7 @@ pub struct UiState {
     pub shortcuts_modal_open: bool,
     /// Whether the settings dialog is open.
     pub settings_open: bool,
+    pub settings_tab: SettingsTab,
     settings_before_edit: Option<UserSettings>,
     /// Persistent user settings.
     pub settings: UserSettings,
@@ -474,6 +486,9 @@ pub struct UiState {
     pub math_input_font_ready: bool,
     pub laser_color_open: bool,
     pub laser_color_rect: Option<Rect>,
+    pub laser_picker_expanded: bool,
+    pub laser_custom_color: Color32,
+    pub pinned_picker_custom_open: bool,
     pub geometry: drafftink_core::shapes::GeometryKind,
     pub context_properties: bool,
     /// F1 can temporarily hide properties even when Settings normally shows them.
@@ -544,6 +559,7 @@ impl Default for UiState {
             pin_background: Color32::WHITE,
             menu_open: false,
             color_popover: ColorPopover::None,
+            color_picker_rect: None,
             grid_style: GridStyle::default(),
             zoom_level: drafftink_core::camera::BASE_ZOOM,
             grid_snap_enabled: false,
@@ -569,6 +585,7 @@ impl Default for UiState {
             collab_modal_open: false,
             shortcuts_modal_open: false,
             settings_open: false,
+            settings_tab: SettingsTab::Appearance,
             settings_before_edit: None,
             settings,
             save_dialog_open: false,
@@ -594,6 +611,9 @@ impl Default for UiState {
             math_input_font_ready: false,
             laser_color_open: false,
             laser_color_rect: None,
+            laser_picker_expanded: false,
+            laser_custom_color: Color32::RED,
+            pinned_picker_custom_open: false,
             geometry: Default::default(),
             context_properties: false,
             properties_hotkey_hidden: false,
@@ -1075,6 +1095,9 @@ fn render_insert_panel(ctx: &Context, state: &mut UiState) -> Option<UiAction> {
 }
 
 fn render_stopwatch(ctx: &Context, state: &mut UiState) {
+    if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+        for widget in &mut state.time_widgets { widget.options_open = false; }
+    }
     if state.time_widgets.is_empty() { return; }
     let text_sizes = [16.0, 21.0, 27.0, 34.0];
     let mut remove = Vec::new();
@@ -1244,28 +1267,33 @@ fn render_stopwatch(ctx: &Context, state: &mut UiState) {
                 state.test_controls.insert(format!("Time resize {} {index}", widget.id), rect_values(rect));
             }
         }
-        area.response.context_menu(|ui| {
-            if ui.button("Options…").clicked() { widget.options_open = true; ui.close(); }
-            if ui.button("Fermer").clicked() { widget.open = false; ui.close(); }
-        });
         if widget.options_open {
             state.test_controls.insert(format!("Time options open {}", widget.id), [0.0; 4]);
         }
         if widget.options_open {
+            let mut close_options_requested = false;
             egui::Window::new("").id(egui::Id::new(("qurso_time_options", widget.id)))
                 .open(&mut widget.options_open).collapsible(false).resizable(false).title_bar(false)
-                .frame(Frame::window(&ctx.style()).fill(Color32::from_gray(228)).stroke(Stroke::new(2.0, Color32::from_rgba_unmultiplied(255, 255, 255, 24))).shadow(egui::epaint::Shadow::NONE))
+                .frame(Frame::window(&ctx.style()).fill(Color32::WHITE).stroke(Stroke::new(1.0, Color32::from_gray(210))).shadow(egui::epaint::Shadow::NONE))
                 .default_pos(widget.position + Vec2::new(widget.size.x + 8.0, 0.0)).show(ctx, |ui| {
                     {
                         let visuals = ui.visuals_mut();
                         visuals.override_text_color = Some(Color32::from_gray(30));
-                        visuals.widgets.inactive.bg_fill = Color32::from_rgb(14, 14, 14);
-                        visuals.widgets.inactive.fg_stroke.color = Color32::WHITE;
-                        visuals.widgets.hovered.bg_fill = Color32::from_gray(35);
-                        visuals.widgets.hovered.fg_stroke.color = Color32::WHITE;
-                        visuals.widgets.active.bg_fill = Color32::from_gray(45);
-                        visuals.widgets.active.fg_stroke.color = Color32::WHITE;
+                        visuals.widgets.inactive.bg_fill = Color32::WHITE;
+                        visuals.widgets.inactive.weak_bg_fill = Color32::WHITE;
+                        visuals.widgets.inactive.fg_stroke.color = Color32::from_gray(45);
+                        visuals.widgets.hovered = visuals.widgets.inactive;
+                        visuals.widgets.hovered.bg_fill = Color32::from_gray(242);
+                        visuals.widgets.active = visuals.widgets.inactive;
+                        visuals.widgets.active.bg_fill = Color32::from_gray(235);
                     }
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Options").strong());
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.small_button("×").clicked() { close_options_requested = true; }
+                        });
+                    });
+                    ui.separator();
                     ui.label("Mode");
                     egui::ComboBox::from_id_salt(("qurso_time_mode", widget.id)).selected_text(["Chronomètre", "Compte à rebours", "Heure / alarme"][widget.mode.min(2) as usize]).show_ui(ui, |ui| {
                         ui.selectable_value(&mut widget.mode, 0, "Chronomètre");
@@ -1297,6 +1325,7 @@ fn render_stopwatch(ctx: &Context, state: &mut UiState) {
                     ui.horizontal(|ui| { ui.label("Taille"); egui::ComboBox::from_id_salt(("qurso_time_size", widget.id)).selected_text(["S", "M", "L", "XL"][widget.text_size.min(3) as usize]).show_ui(ui, |ui| { for (index, size) in ["S", "M", "L", "XL"].iter().enumerate() { ui.selectable_value(&mut widget.text_size, index as u8, *size); } }); });
                     ui.horizontal(|ui| { ui.label("Texte"); ui.color_edit_button_srgba(&mut widget.text_color); ui.label("Fond"); ui.color_edit_button_srgba(&mut widget.background_color); });
                 });
+            if close_options_requested { widget.options_open = false; }
         }
     }
     state.time_widgets.retain(|widget| !remove.contains(&widget.id) && widget.open);
@@ -1686,6 +1715,9 @@ fn render_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                     }
                     if tool.kind == ToolKind::LaserPointer && response.secondary_clicked() {
                         ui_state.laser_color_open = !ui_state.laser_color_open;
+                        ui_state.laser_picker_expanded = false;
+                        let rgb = ui_state.settings.laser_color;
+                        ui_state.laser_custom_color = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
                     }
                 }
                 ui.separator();
@@ -1735,6 +1767,14 @@ fn render_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
     {
         ui_state.laser_color_open = false;
         ui_state.laser_color_rect = None;
+        ui_state.laser_picker_expanded = false;
+    }
+    if ui_state.laser_color_open
+        && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+    {
+        ui_state.laser_color_open = false;
+        ui_state.laser_color_rect = None;
+        ui_state.laser_picker_expanded = false;
     }
     if ui_state.laser_color_open {
         let output = floating_area(ctx, ui_state, "laser_palette", ui_state.laser_color_pos).show(
@@ -1754,14 +1794,25 @@ fn render_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                                 ui_state.settings.laser_color == [color.r(), color.g(), color.b()],
                             ) {
                                 action = Some(UiAction::SetLaserColor(color));
+                                ui_state.laser_custom_color = color;
                             }
                         }
                     });
-                    let mut color = ui_state.settings.laser_color;
-                    if ui.color_edit_button_srgb(&mut color).changed() {
-                        action = Some(UiAction::SetLaserColor(Color32::from_rgb(
-                            color[0], color[1], color[2],
-                        )));
+                    let laser = Color32::from_rgb(ui_state.settings.laser_color[0], ui_state.settings.laser_color[1], ui_state.settings.laser_color[2]);
+                    let (custom_clicked, custom_rect) = color_swatch_current(ui, laser, "Couleur personnalisée");
+                    ui_state.test_controls.insert("laser_custom_button".into(), [custom_rect.min.x, custom_rect.min.y, custom_rect.max.x, custom_rect.max.y]);
+                    if custom_clicked { ui_state.laser_picker_expanded = !ui_state.laser_picker_expanded; }
+                    if ui_state.laser_picker_expanded {
+                        ui.separator();
+                        let mut color = ui_state.laser_custom_color;
+                        let picker = ui.allocate_ui(Vec2::new(230.0, 230.0), |ui| {
+                            egui::color_picker::color_picker_color32(ui, &mut color, egui::color_picker::Alpha::Opaque)
+                        });
+                        ui_state.test_controls.insert("laser_custom_picker".into(), [picker.response.rect.min.x, picker.response.rect.min.y, picker.response.rect.max.x, picker.response.rect.max.y]);
+                        if picker.inner {
+                            ui_state.laser_custom_color = color;
+                            action = Some(UiAction::SetLaserColor(color));
+                        }
                     }
                     let mut permanent = ui_state.settings.laser_permanent;
                     let permanent_response = ui.checkbox(&mut permanent, "Permanent");
@@ -1887,11 +1938,12 @@ fn render_bottom_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiActi
                         color_swatch_current(ui, ui_state.bg_color, "Background color");
                     bg_color_rect = rect;
                     if clicked {
-                        ui_state.color_popover = if ui_state.color_popover == ColorPopover::BgFull {
+                        ui_state.color_popover = if ui_state.color_popover == ColorPopover::Background {
                             ColorPopover::None
                         } else {
-                            ColorPopover::BgFull
+                            ColorPopover::Background
                         };
+                        ui_state.color_picker_rect = None;
                     }
 
                     ui.add_space(8.0);
@@ -2041,14 +2093,16 @@ fn render_bottom_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiActi
 
     remember_panel(ui_state, "bottom_toolbar", &output.response);
     // Render background color popover if open
-    if ui_state.color_popover == ColorPopover::BgFull {
-        // Position popover above the button (since we're at the bottom of the screen)
-        if let Some(selected_color) = ColorGrid::new(ui_state.bg_color, "Background Color")
-            .above()
-            .show(ctx, bg_color_rect)
-        {
+    if ui_state.color_popover == ColorPopover::Background {
+        if let Some(selected_color) = show_color_picker_popover(
+            ctx,
+            ui_state,
+            ColorPopover::Background,
+            bg_color_rect,
+            "Couleur du tableau",
+            ui_state.bg_color,
+        ) {
             action = Some(UiAction::SetBgColor(selected_color));
-            ui_state.color_popover = ColorPopover::None;
         }
     }
 
@@ -2094,12 +2148,12 @@ fn render_properties_panel(ctx: &Context, ui_state: &mut UiState) -> Option<UiAc
                     widgets_section_label(ui, "Stroke");
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = Vec2::new(3.0, 0.0);
-                        for &idx in QUICK_COLORS {
-                            let color = TAILWIND_COLORS[idx].shades[6];
+                        for (index, rgb) in ui_state.settings.stroke_colors.iter().enumerate() {
+                            let color = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
                             if color_swatch_selectable(
                                 ui,
                                 color,
-                                TAILWIND_COLORS[idx].name,
+                                ["Stroke color 1", "Stroke color 2", "Stroke color 3", "Stroke color 4", "Stroke color 5", "Stroke color 6"][index],
                                 ui_state.stroke_color == color,
                             ) {
                                 action = Some(UiAction::SetStrokeColor(color));
@@ -2111,11 +2165,12 @@ fn render_properties_panel(ctx: &Context, ui_state: &mut UiState) -> Option<UiAc
                         stroke_rect = rect;
                         if clicked {
                             ui_state.color_popover =
-                                if ui_state.color_popover == ColorPopover::StrokeFull {
+                                if ui_state.color_popover == ColorPopover::Stroke {
                                     ColorPopover::None
                                 } else {
-                                    ColorPopover::StrokeFull
+                                    ColorPopover::Stroke
                                 };
+                            ui_state.color_picker_rect = None;
                         }
                     });
                     widgets_section_label(ui, "Fill");
@@ -2151,11 +2206,12 @@ fn render_properties_panel(ctx: &Context, ui_state: &mut UiState) -> Option<UiAc
                         fill_rect = rect;
                         if clicked {
                             ui_state.color_popover =
-                                if ui_state.color_popover == ColorPopover::FillFull {
+                                if ui_state.color_popover == ColorPopover::Fill {
                                     ColorPopover::None
                                 } else {
-                                    ColorPopover::FillFull
+                                    ColorPopover::Fill
                                 };
+                            ui_state.color_picker_rect = None;
                         }
                     });
                 });
@@ -2194,25 +2250,16 @@ fn render_properties_panel(ctx: &Context, ui_state: &mut UiState) -> Option<UiAc
         });
     });
     remember_panel(ui_state, "properties", &output.response);
-    let (color, rect, title) = match ui_state.color_popover {
-        ColorPopover::StrokeFull => (ui_state.stroke_color, stroke_rect, "Stroke Color"),
-        ColorPopover::FillFull => (
-            ui_state.fill_color.unwrap_or(Color32::TRANSPARENT),
-            fill_rect,
-            "Fill Color",
-        ),
-        _ => return action,
-    };
-
-    if let Some(color) = ColorGrid::new(color, title).below().show(ctx, rect) {
-        if ui_state.color_popover == ColorPopover::StrokeFull {
+    if ui_state.color_popover == ColorPopover::Stroke {
+        if let Some(color) = show_color_picker_popover(ctx, ui_state, ColorPopover::Stroke, stroke_rect, "Stroke", ui_state.stroke_color) {
             ui_state.last_picked_stroke = Some(color);
             action = Some(UiAction::SetStrokeColor(color));
-        } else {
+        }
+    } else if ui_state.color_popover == ColorPopover::Fill {
+        if let Some(color) = show_color_picker_popover(ctx, ui_state, ColorPopover::Fill, fill_rect, "Fill", ui_state.fill_color.unwrap_or(Color32::WHITE)) {
             ui_state.last_picked_fill = Some(color);
             action = Some(UiAction::SetFillColor(Some(color)));
         }
-        ui_state.color_popover = ColorPopover::None;
     }
     action
 }
@@ -2228,6 +2275,177 @@ fn color_swatch_selectable(ui: &mut egui::Ui, color: Color32, name: &str, select
 /// Current color swatch with hue wheel background (color picker button) - uses drafftink_widgets.
 fn color_swatch_current(ui: &mut egui::Ui, color: Color32, tooltip: &str) -> (bool, Rect) {
     ColorSwatchWithWheel::new(color, tooltip).show(ui)
+}
+
+/// A shared, self-contained color picker used by every color popover. Keeping
+/// the interactive rectangle on the owning egui Area means drags across the
+/// saturation square, hue bar, and numeric fields are treated as one surface.
+fn show_color_picker_popover(
+    ctx: &Context,
+    state: &mut UiState,
+    owner: ColorPopover,
+    anchor: Rect,
+    title: &str,
+    current: Color32,
+) -> Option<Color32> {
+    if state.color_popover != owner {
+        return None;
+    }
+
+    if ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+        state.color_popover = ColorPopover::None;
+        state.color_picker_rect = None;
+        return None;
+    }
+
+    let previous_picker_rect = state.color_picker_rect;
+    let pointer_down = ctx.input(|input| input.pointer.primary_pressed());
+    let pointer = ctx.input(|input| input.pointer.interact_pos());
+    if pointer_down
+        && pointer.is_some_and(|pos| {
+            !anchor.contains(pos) && !previous_picker_rect.is_some_and(|rect| rect.contains(pos))
+        })
+    {
+        state.color_popover = ColorPopover::None;
+        state.color_picker_rect = None;
+        return None;
+    }
+
+    let screen = ctx.input(|input| input.content_rect());
+    let width = 258.0;
+    let height = 300.0;
+    let right = anchor.right() + 8.0;
+    let left = anchor.left() - width - 8.0;
+    let x = if right + width <= screen.right() - 4.0 { right } else { left };
+    let below = anchor.bottom() + height + 8.0 <= screen.bottom() - 4.0;
+    let y = if below { anchor.bottom() + 8.0 } else { anchor.top() - height - 8.0 };
+    let pos = Pos2::new(
+        x.clamp(screen.left() + 4.0, (screen.right() - width - 4.0).max(screen.left() + 4.0)),
+        y.clamp(screen.top() + 4.0, (screen.bottom() - height - 4.0).max(screen.top() + 4.0)),
+    );
+    let mut color = current;
+    let mut close = false;
+    let mut changed = false;
+    let output = egui::Area::new(egui::Id::new(("custom_color_picker", title)))
+        .fixed_pos(pos)
+        .order(egui::Order::Foreground)
+        .interactable(true)
+        .show(ctx, |ui| {
+            Frame::new()
+                .fill(Color32::WHITE)
+                .stroke(Stroke::new(1.0, Color32::from_gray(205)))
+                .corner_radius(CornerRadius::same(8))
+                .inner_margin(Margin::same(10))
+                .show(ui, |ui| {
+                    ui.set_width(width - 20.0);
+                    ui.visuals_mut().override_text_color = Some(Color32::from_gray(45));
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(title).strong());
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            close = ui.small_button("×").clicked();
+                        });
+                    });
+                    ui.separator();
+                    changed = egui::color_picker::color_picker_color32(
+                        ui,
+                        &mut color,
+                        egui::color_picker::Alpha::Opaque,
+                    );
+                });
+        });
+    state.color_picker_rect = Some(output.response.rect.expand(4.0));
+    state.test_controls.insert(
+        format!("Color picker {title}"),
+        [
+            output.response.rect.min.x,
+            output.response.rect.min.y,
+            output.response.rect.max.x,
+            output.response.rect.max.y,
+        ],
+    );
+    if close {
+        state.color_popover = ColorPopover::None;
+        state.color_picker_rect = None;
+    }
+    changed.then_some(color)
+}
+
+fn show_pinned_color_picker(ctx: &Context, state: &mut UiState, anchor: Rect) -> Option<Color32> {
+    if state.color_popover != ColorPopover::Pinned { return None; }
+    if ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+        state.color_popover = ColorPopover::None;
+        state.color_picker_rect = None;
+        return None;
+    }
+    let previous = state.color_picker_rect;
+    if ctx.input(|input| input.pointer.primary_pressed()) {
+        if let Some(pos) = ctx.input(|input| input.pointer.interact_pos()) {
+            if !anchor.contains(pos) && !previous.is_some_and(|rect| rect.contains(pos)) {
+                state.color_popover = ColorPopover::None;
+                state.color_picker_rect = None;
+                state.pinned_picker_custom_open = false;
+                return None;
+            }
+        }
+    }
+    let screen = ctx.input(|input| input.content_rect());
+    let width = 220.0;
+    let expanded = state.pinned_picker_custom_open;
+    let height = if expanded { 330.0 } else { 92.0 };
+    let pos = Pos2::new(
+        (anchor.left() - width - 8.0).clamp(screen.left() + 4.0, (screen.right() - width - 4.0).max(screen.left() + 4.0)),
+        (anchor.bottom() + 8.0).clamp(screen.top() + 4.0, (screen.bottom() - height - 4.0).max(screen.top() + 4.0)),
+    );
+    let preset_colors = [
+        Color32::WHITE,
+        TAILWIND_COLORS[10].shades[1],
+        TAILWIND_COLORS[0].shades[1],
+        TAILWIND_COLORS[6].shades[1],
+        TAILWIND_COLORS[2].shades[1],
+        TAILWIND_COLORS[13].shades[1],
+    ];
+    let mut selected = None;
+    let mut close = false;
+    let mut custom = state.pin_background;
+    let output = egui::Area::new(egui::Id::new("pinned_background_picker"))
+        .fixed_pos(pos)
+        .order(egui::Order::Foreground)
+        .interactable(true)
+        .show(ctx, |ui| {
+            Frame::new().fill(Color32::WHITE).stroke(Stroke::new(1.0, Color32::from_gray(205)))
+                .corner_radius(CornerRadius::same(8)).inner_margin(Margin::same(9)).show(ui, |ui| {
+                    ui.set_width(width - 18.0);
+                    ui.visuals_mut().override_text_color = Some(Color32::from_gray(45));
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Fond épinglé").strong());
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| close = ui.small_button("×").clicked());
+                    });
+                    ui.horizontal(|ui| {
+                        for color in preset_colors {
+                            let (clicked, _) = ColorSwatch::new(color, "Couleur de fond").selected(state.pin_background == color).show(ui);
+                            if clicked { selected = Some(color); }
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        if NoColorSwatch::new("Transparent").selected(state.pin_background == Color32::TRANSPARENT).show(ui) {
+                            selected = Some(Color32::TRANSPARENT);
+                        }
+                        let (clicked, _) = color_swatch_current(ui, state.pin_background, "Couleur personnalisée");
+                        if clicked { state.pinned_picker_custom_open = !state.pinned_picker_custom_open; }
+                        if state.pinned_picker_custom_open {
+                            let _ = egui::color_picker::color_picker_color32(ui, &mut custom, egui::color_picker::Alpha::Opaque);
+                            if custom != state.pin_background { selected = Some(custom); }
+                        }
+                    });
+                });
+        });
+    state.color_picker_rect = Some(output.response.rect.expand(4.0));
+    if close {
+        state.color_popover = ColorPopover::None;
+        state.color_picker_rect = None;
+        state.pinned_picker_custom_open = false;
+    }
+    selected
 }
 
 // hue_to_rgb is now imported from drafftink_widgets
@@ -2351,7 +2569,7 @@ fn render_right_panel(
     ui_state: &mut UiState,
     props: &SelectedShapeProps,
 ) -> Option<UiAction> {
-    if !ui_state.selection_pinned && ui_state.color_popover == ColorPopover::PinnedFull {
+    if !ui_state.selection_pinned && ui_state.color_popover == ColorPopover::Pinned {
         ui_state.color_popover = ColorPopover::None;
     }
     if ui_state.properties_hotkey_hidden {
@@ -2433,7 +2651,9 @@ fn render_right_panel(
                                 let (clicked, rect) = color_swatch_current(ui, ui_state.pin_background, "Couleur de fond épinglé");
                                 pin_background_rect = rect;
                                 if clicked {
-                                    ui_state.color_popover = if ui_state.color_popover == ColorPopover::PinnedFull { ColorPopover::None } else { ColorPopover::PinnedFull };
+                                    ui_state.color_popover = if ui_state.color_popover == ColorPopover::Pinned { ColorPopover::None } else { ColorPopover::Pinned };
+                                    ui_state.color_picker_rect = None;
+                                    ui_state.pinned_picker_custom_open = false;
                                 }
                             }
                         });
@@ -3034,25 +3254,9 @@ fn render_right_panel(
 
     ui_state.context_rects.push(output.response.rect);
     remember_panel(ui_state, "right_panel", &output.response);
-    if ui_state.color_popover == ColorPopover::PinnedFull {
-        let palette_pos = Pos2::new(
-            (pin_background_rect.left() - 100.0).clamp(4.0, (ctx.screen_rect().right() - 520.0).max(4.0)),
-            (pin_background_rect.bottom() + 8.0).clamp(4.0, (ctx.screen_rect().bottom() - 270.0).max(4.0)),
-        );
-        if ctx.input(|input| input.pointer.any_click()) {
-            if let Some(pointer) = ctx.input(|input| input.pointer.interact_pos()) {
-                let palette_rect = Rect::from_min_size(palette_pos, Vec2::new(520.0, 270.0));
-                if !palette_rect.contains(pointer) && !pin_background_rect.contains(pointer) {
-                    ui_state.color_popover = ColorPopover::None;
-                }
-            }
-        }
-        if let Some(color) = ColorGrid::new(ui_state.pin_background, "Pinned Object Background")
-            .below()
-            .show(ctx, pin_background_rect)
-        {
+    if ui_state.color_popover == ColorPopover::Pinned {
+        if let Some(color) = show_pinned_color_picker(ctx, ui_state, pin_background_rect) {
             action = Some(UiAction::SetPinnedBackground(color));
-            ui_state.color_popover = ColorPopover::None;
         }
     }
     action
@@ -3204,7 +3408,9 @@ fn render_file_menu(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                             action = Some(UiAction::ShowShortcuts);
                             ui_state.menu_open = false;
                         }
-                        if menu_item(ui, "Settings", "") {
+                        let settings_item = ui.button("Settings");
+                        ui_state.test_controls.insert("Menu Settings".into(), [settings_item.rect.min.x, settings_item.rect.min.y, settings_item.rect.max.x, settings_item.rect.max.y]);
+                        if settings_item.clicked() {
                             ui_state.settings_open = true;
                             ui_state.menu_open = false;
                         }
@@ -4154,6 +4360,7 @@ fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAct
     let save_key = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
     let mut action = None;
     let mut close = false;
+    let mut settings_color_anchors = [Rect::NOTHING; 8];
 
     egui::Area::new(egui::Id::new("settings_backdrop"))
         .fixed_pos(Pos2::ZERO)
@@ -4205,7 +4412,39 @@ fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAct
                     });
                     ui.add_space(10.0);
 
+                    ui.horizontal(|ui| {
+                        for (label, tab) in [("Apparence", SettingsTab::Appearance), ("Data", SettingsTab::Data)] {
+                            let response = ui.add(egui::Button::new(
+                                egui::RichText::new(label).color(Color32::from_gray(75)),
+                            ).fill(Color32::WHITE).stroke(Stroke::new(
+                                if ui_state.settings_tab == tab { 1.5 } else { 1.0 },
+                                if ui_state.settings_tab == tab { ui.visuals().selection.bg_fill } else { Color32::from_gray(220) },
+                            )));
+                            ui_state.test_controls.insert(format!("Settings tab {label}"), [response.rect.min.x, response.rect.min.y, response.rect.max.x, response.rect.max.y]);
+                            if response.clicked() { ui_state.settings_tab = tab; }
+                        }
+                    });
+                    ui.add_space(8.0);
+
                     egui::ScrollArea::vertical().max_height(560.0).show(ui, |ui| {
+                        if ui_state.settings_tab == SettingsTab::Appearance {
+                        ui.label(egui::RichText::new(format!("Qurso {}", include_str!("../../../VERSION_LOCAL.txt").trim()))
+                            .size(11.0).color(Color32::from_gray(125)));
+                        ui.add_space(8.0);
+                        widgets_section_label(ui, "Couleurs rapides du trait");
+                        ui.horizontal_wrapped(|ui| {
+                            for index in 0..6 {
+                                let rgb = ui_state.settings.stroke_colors[index];
+                                let color = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+                                let (clicked, rect) = ColorSwatch::new(color, "Modifier cette couleur").show(ui);
+                                settings_color_anchors[index] = rect;
+                                ui_state.test_controls.insert(format!("Settings stroke color {index}"), [rect.min.x, rect.min.y, rect.max.x, rect.max.y]);
+                                if clicked {
+                                    ui_state.color_popover = ColorPopover::SettingsStroke(index);
+                                    ui_state.color_picker_rect = None;
+                                }
+                            }
+                        });
                         widgets_section_label(ui, "Police Math par défaut");
                         if let Some(font)=math_font_picker(ui,"default_math_font",&ui_state.settings.default_math_font,&ui_state.local_fonts,&mut ui_state.test_controls) { action=Some(UiAction::SetDefaultMathFont(font)); }
                         ui.add_space(12.0);
@@ -4245,12 +4484,18 @@ fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAct
                         ui.add_space(12.0);
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new("Couleur des boutons et sélections").color(Color32::BLACK));
-                            let response = ui.color_edit_button_srgb(&mut ui_state.settings.accent_color);
-                            ui_state.test_controls.insert("accent_color".into(), [response.rect.min.x, response.rect.min.y, response.rect.max.x, response.rect.max.y]);
+                            let rgb = ui_state.settings.accent_color;
+                            let (clicked, rect) = color_swatch_current(ui, Color32::from_rgb(rgb[0], rgb[1], rgb[2]), "Choisir la couleur d'accentuation");
+                            settings_color_anchors[6] = rect;
+                            ui_state.test_controls.insert("accent_color".into(), [rect.min.x, rect.min.y, rect.max.x, rect.max.y]);
+                            if clicked { ui_state.color_popover = ColorPopover::SettingsAccent; ui_state.color_picker_rect = None; }
                         });
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new("Contour du curseur souris").color(Color32::BLACK));
-                            ui.color_edit_button_srgb(&mut ui_state.settings.cursor_outline);
+                            let rgb = ui_state.settings.cursor_outline;
+                            let (clicked, rect) = color_swatch_current(ui, Color32::from_rgb(rgb[0], rgb[1], rgb[2]), "Choisir le contour du curseur");
+                            settings_color_anchors[7] = rect;
+                            if clicked { ui_state.color_popover = ColorPopover::SettingsCursor; ui_state.color_picker_rect = None; }
                         });
                         if default_btn(ui, "Réinitialiser la disposition des panneaux") {
                             action = Some(UiAction::ResetFloatingPanels);
@@ -4318,6 +4563,10 @@ fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAct
                             &mut ui_state.settings.show_properties_for_tools,
                             "Afficher Properties pour les outils actifs",
                         );
+
+                        }
+
+                        if ui_state.settings_tab == SettingsTab::Data {
 
                         ui.add_space(16.0);
                         ui.separator();
@@ -4425,20 +4674,52 @@ fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAct
                             "Restaurer la dernière feuille au démarrage",
                         );
 
+                        }
+
                         ui.add_space(18.0);
                         ui.horizontal(|ui| {
-                            if primary_btn(ui, "Enregistrer") {
+                            let save = ui.button("Enregistrer");
+                            ui_state.test_controls.insert("Settings save".into(), [save.rect.min.x, save.rect.min.y, save.rect.max.x, save.rect.max.y]);
+                            if save.clicked() {
                                 ui_state.settings.sanitize();
                                 action = Some(UiAction::SaveSettings);
                                 close = true;
                             }
-                            if default_btn(ui, "Fermer") {
+                            let cancel = ui.button("Fermer");
+                            ui_state.test_controls.insert("Settings close".into(), [cancel.rect.min.x, cancel.rect.min.y, cancel.rect.max.x, cancel.rect.max.y]);
+                            if cancel.clicked() {
                                 close = true;
                             }
                         });
                     });
                 });
         });
+
+    let settings_color_target = ui_state.color_popover;
+    let (settings_color_index, settings_anchor, settings_title, settings_current) = match settings_color_target {
+        ColorPopover::SettingsStroke(index) if index < 6 => (
+            Some(index), settings_color_anchors[index], "Couleur rapide du trait",
+            { let rgb = ui_state.settings.stroke_colors[index]; Color32::from_rgb(rgb[0], rgb[1], rgb[2]) },
+        ),
+        ColorPopover::SettingsAccent => (None, settings_color_anchors[6], "Couleur des boutons", {
+            let rgb = ui_state.settings.accent_color; Color32::from_rgb(rgb[0], rgb[1], rgb[2])
+        }),
+        ColorPopover::SettingsCursor => (None, settings_color_anchors[7], "Contour du curseur", {
+            let rgb = ui_state.settings.cursor_outline; Color32::from_rgb(rgb[0], rgb[1], rgb[2])
+        }),
+        _ => (None, Rect::NOTHING, "", Color32::WHITE),
+    };
+    if settings_color_target != ColorPopover::None && settings_color_target != ColorPopover::Stroke
+        && settings_color_target != ColorPopover::Fill && settings_color_target != ColorPopover::Background
+        && settings_color_target != ColorPopover::Pinned && !close
+    {
+        if let Some(color) = show_color_picker_popover(ctx, ui_state, settings_color_target, settings_anchor, settings_title, settings_current) {
+            let rgb = [color.r(), color.g(), color.b()];
+            if let Some(index) = settings_color_index { ui_state.settings.stroke_colors[index] = rgb; }
+            else if settings_color_target == ColorPopover::SettingsAccent { ui_state.settings.accent_color = rgb; }
+            else if settings_color_target == ColorPopover::SettingsCursor { ui_state.settings.cursor_outline = rgb; }
+        }
+    }
 
     if save_key && !cancel_key {
         ui_state.settings.sanitize();
@@ -4454,6 +4735,10 @@ fn render_settings_dialog(ctx: &Context, ui_state: &mut UiState) -> Option<UiAct
         }
         ui_state.settings_before_edit = None;
         ui_state.settings_open = false;
+        if matches!(ui_state.color_popover, ColorPopover::SettingsStroke(_) | ColorPopover::SettingsAccent | ColorPopover::SettingsCursor) {
+            ui_state.color_popover = ColorPopover::None;
+            ui_state.color_picker_rect = None;
+        }
     }
 
     action
