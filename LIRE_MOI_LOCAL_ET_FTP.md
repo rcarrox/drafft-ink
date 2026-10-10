@@ -1,4 +1,4 @@
-# Qurso🌿 0.27.0 — un ZIP pour Windows et votre FTP
+# Qurso🌿 0.28.0 — un ZIP pour Windows et votre FTP
 
 ## En local sur Windows
 

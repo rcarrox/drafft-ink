@@ -58,7 +58,7 @@ impl Arrow {
             start,
             end,
             intermediate_points: Vec::new(),
-            path_style: PathStyle::Direct,
+            path_style: PathStyle::Flowing,
             stroke_style: StrokeStyle::default(),
             head_size: 15.0,
             start_head: ArrowHeadStyle::None,
@@ -369,6 +369,7 @@ mod tests {
     #[test]
     fn test_arrow_creation() {
         let arrow = Arrow::new(Point::new(0.0, 0.0), Point::new(100.0, 0.0));
+        assert_eq!(arrow.path_style, PathStyle::Flowing);
         assert!((arrow.length() - 100.0).abs() < f64::EPSILON);
     }
 

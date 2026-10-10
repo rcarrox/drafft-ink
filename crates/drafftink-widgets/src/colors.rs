@@ -759,6 +759,7 @@ impl<'a> NoColorSwatch<'a> {
 pub struct ColorGrid<'a> {
     current_color: Color32,
     title: &'a str,
+    id: egui::Id,
     /// Which shades to show (indices into SHADE_LABELS)
     shade_indices: &'a [usize],
     position: ColorGridPosition,
@@ -780,6 +781,7 @@ impl<'a> ColorGrid<'a> {
         Self {
             current_color,
             title,
+            id: egui::Id::new(("color_grid", title)),
             shade_indices: &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], // 50-950
             position: ColorGridPosition::Below,
         }
@@ -820,12 +822,17 @@ impl<'a> ColorGrid<'a> {
             ),
         };
 
-        egui::Area::new(egui::Id::new("color_grid"))
-            .default_pos(pos)
-            .default_size(vec2(400.0, 250.0))
-            .movable(true)
+        let screen = ctx.screen_rect();
+        let pos = Pos2::new(
+            pos.x.clamp(screen.left() + 4.0, (screen.right() - 520.0).max(screen.left() + 4.0)),
+            pos.y.clamp(screen.top() + 4.0, (screen.bottom() - 270.0).max(screen.top() + 4.0)),
+        );
+        egui::Area::new(self.id)
+            .fixed_pos(pos)
+            .default_size(vec2(520.0, 270.0))
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
+                ui.set_min_width(520.0);
                 crate::menu::panel_frame().show(ui, |ui| {
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing = vec2(0.0, 4.0);

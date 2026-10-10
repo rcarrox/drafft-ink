@@ -280,6 +280,46 @@ pub struct MathEditorState {
     pub is_new: bool,
 }
 
+/// One viewport-fixed Qurso Time widget, with its own clock and settings.
+pub struct TimeWidgetState {
+    pub id: u64,
+    pub open: bool,
+    pub position: Pos2,
+    pub size: Vec2,
+    pub mode: u8,
+    pub stopwatch_running: bool,
+    pub stopwatch_elapsed: f64,
+    pub stopwatch_started_at: Option<StatusInstant>,
+    pub countdown_seconds: u32,
+    pub countdown_remaining: f64,
+    pub countdown_started_at: Option<StatusInstant>,
+    pub alarm_enabled: bool,
+    pub alarm_hour: u8,
+    pub alarm_minute: u8,
+    pub alarm_last_fired: String,
+    pub options_open: bool,
+    pub stopwatch_centiseconds: bool,
+    pub clock_seconds: bool,
+    pub timezone: String,
+    pub text_color: Color32,
+    pub background_color: Color32,
+    pub text_size: u8,
+}
+
+impl TimeWidgetState {
+    pub fn new(id: u64, position: Pos2) -> Self {
+        Self {
+            id, open: true, position, size: Vec2::new(260.0, 112.0), mode: 0,
+            stopwatch_running: false, stopwatch_elapsed: 0.0, stopwatch_started_at: None,
+            countdown_seconds: 300, countdown_remaining: 300.0, countdown_started_at: None,
+            alarm_enabled: false, alarm_hour: 8, alarm_minute: 0, alarm_last_fired: String::new(),
+            options_open: false, stopwatch_centiseconds: true, clock_seconds: false,
+            timezone: "Local".into(), text_color: Color32::WHITE,
+            background_color: Color32::from_rgb(42, 42, 42), text_size: 2,
+        }
+    }
+}
+
 /// UI state and actions.
 pub struct UiState {
     pub presentation_mode: bool,
@@ -293,6 +333,8 @@ pub struct UiState {
     pub save_status_since: Option<StatusInstant>,
     /// Visibility and monotonic stopwatch state; independent from canvas camera.
     pub stopwatch_open: bool,
+    pub time_widgets: Vec<TimeWidgetState>,
+    pub next_time_widget_id: u64,
     pub stopwatch_running: bool,
     pub stopwatch_elapsed: f64,
     pub stopwatch_started_at: Option<StatusInstant>,
@@ -310,6 +352,7 @@ pub struct UiState {
     pub preset_manager_open: bool,
     pub presets: Vec<PresetInfo>,
     pub toolbar_rect: Option<Rect>,
+    pub insert_button_rect: Option<Rect>,
     pub insert_panel_rect: Option<Rect>,
     pub inline_formula_error: String,
     /// Currently selected tool (mirrored from canvas).
@@ -459,6 +502,8 @@ impl Default for UiState {
             save_status_seen: String::new(),
             save_status_since: None,
             stopwatch_open: false,
+            time_widgets: Vec::new(),
+            next_time_widget_id: 1,
             stopwatch_running: false,
             stopwatch_elapsed: 0.0,
             stopwatch_started_at: None,
@@ -476,6 +521,7 @@ impl Default for UiState {
             preset_manager_open: false,
             presets: Vec::new(),
             toolbar_rect: None,
+            insert_button_rect: None,
             insert_panel_rect: None,
             inline_formula_error: String::new(),
             eraser_mode: EraserMode::Classic,
@@ -497,7 +543,7 @@ impl Default for UiState {
             sloppiness: drafftink_core::shapes::Sloppiness::Architect,
             fill_pattern: FillPattern::Solid,
             corner_radius: 0.0, // Sharp corners by default
-            path_style: 0,      // Direct by default
+            path_style: 1,      // Flowing by default
             arrow_start_head: 0,
             arrow_end_head: 1,
             // Collaboration defaults
@@ -944,13 +990,15 @@ pub fn render_ui(
 fn render_insert_panel(ctx: &Context, state: &mut UiState) -> Option<UiAction> {
     let mut action = None;
     if state.insert_menu_open {
-        let pos = state.toolbar_rect.map_or(Pos2::new(64.0, 250.0), |r| Pos2::new(r.right() + 6.0, r.center().y - 70.0));
+        let pos = state.insert_button_rect.map_or(Pos2::new(64.0, 250.0), |r| Pos2::new(r.right() + 6.0, r.top()));
         let panel = egui::Area::new(egui::Id::new("insert_menu"))
             .fixed_pos(pos).order(egui::Order::Foreground).show(ctx, |ui| {
                 panel_frame().show(ui, |ui| {
                     ui.set_min_width(170.0);
+                    ui.visuals_mut().override_text_color = Some(Color32::BLACK);
+                    ui.visuals_mut().widgets.inactive.fg_stroke.color = Color32::BLACK;
                     if ui.button("Image / PDF").clicked() { action = Some(UiAction::ImportMedia); state.insert_menu_open = false; }
-                    if ui.button(if state.stopwatch_open { "Time · Masquer" } else { "Time" }).clicked() { action = Some(UiAction::ToggleStopwatch); state.insert_menu_open = false; }
+                    if ui.button("Time").clicked() { action = Some(UiAction::ToggleStopwatch); state.insert_menu_open = false; }
                     let label = if state.preset_menu_open { "Preset  ‹" } else { "Preset  ›" };
                     if ui.button(label).clicked() {
                         state.preset_menu_open = !state.preset_menu_open;
@@ -977,9 +1025,12 @@ fn render_insert_panel(ctx: &Context, state: &mut UiState) -> Option<UiAction> {
         }
     }
     if state.preset_manager_open {
-        egui::Window::new("Preset").id(egui::Id::new("preset_manager"))
+        egui::Window::new("PNG Preset").id(egui::Id::new("preset_manager"))
             .open(&mut state.preset_manager_open).collapsible(false).resizable(false)
+            .frame(Frame::window(&ctx.style()).fill(Color32::WHITE).stroke(Stroke::new(1.0, Color32::from_gray(220))).shadow(egui::epaint::Shadow::NONE))
             .default_pos(Pos2::new(80.0, 160.0)).show(ctx, |ui| {
+                ui.visuals_mut().override_text_color = Some(Color32::from_gray(35));
+                ui.visuals_mut().widgets.inactive.fg_stroke.color = Color32::from_gray(35);
                 ui.label("Images PNG enregistrées dans ce navigateur.");
                 if ui.button("＋ Ajouter un PNG…").clicked() { action = Some(UiAction::AddPreset); }
                 ui.separator();
@@ -1000,101 +1051,145 @@ fn render_insert_panel(ctx: &Context, state: &mut UiState) -> Option<UiAction> {
 }
 
 fn render_stopwatch(ctx: &Context, state: &mut UiState) {
-    if !state.stopwatch_open { return; }
-    if state.stopwatch_running || state.countdown_started_at.is_some() || state.time_mode == 2 || state.alarm_enabled { ctx.request_repaint_after(std::time::Duration::from_millis(250)); }
-    let elapsed = state.stopwatch_elapsed + state.stopwatch_started_at.map_or(0.0, |at| at.elapsed().as_secs_f64());
-    let remaining = (state.countdown_remaining - state.countdown_started_at.map_or(0.0, |at| at.elapsed().as_secs_f64())).max(0.0);
-    if state.countdown_started_at.is_some() && remaining <= 0.0 {
-        state.countdown_remaining = 0.0;
-        state.countdown_started_at = None;
-        play_time_alarm();
-    }
-    let shown = if state.time_mode == 1 { remaining } else { elapsed };
-    let total = shown.max(0.0) as u64;
-    let hours = total / 3600;
-    let minutes = (total / 60) % 60;
-    let seconds = total % 60;
-    let centiseconds = ((shown.fract() * 100.0) as u64).min(99);
-    #[cfg(target_arch = "wasm32")]
-    let (clock_hour, clock_minute, clock_second) = { let date = js_sys::Date::new_0(); (date.get_hours() as u8, date.get_minutes() as u8, date.get_seconds() as u8) };
-    #[cfg(not(target_arch = "wasm32"))]
-    let (clock_hour, clock_minute, clock_second) = { let seconds = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() % 86400; ((seconds / 3600) as u8, ((seconds / 60) % 60) as u8, (seconds % 60) as u8) };
-    #[cfg(target_arch = "wasm32")]
-    let alarm_key = { let date = js_sys::Date::new_0(); format!("{}-{}-{} {:02}:{:02}", date.get_full_year(), date.get_month() + 1, date.get_date(), clock_hour, clock_minute) };
-    #[cfg(not(target_arch = "wasm32"))]
-    let alarm_key = format!("{} {:02}:{:02}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() / 86400, clock_hour, clock_minute);
-    if state.alarm_enabled && clock_hour == state.alarm_hour && clock_minute == state.alarm_minute && state.alarm_last_fired != alarm_key {
-        state.alarm_last_fired = alarm_key;
-        play_time_alarm();
-    }
-    let mut open = state.stopwatch_open;
-    egui::Window::new("Time")
-        .id(egui::Id::new("qurso_time_widget"))
-        .open(&mut open)
-        .collapsible(false)
-        .resizable(true)
-        .default_size(Vec2::new(340.0, 170.0))
-        .default_pos(Pos2::new(110.0, 100.0))
-        .show(ctx, |ui| {
-            ui.vertical_centered(|ui| {
-                ui.horizontal(|ui| {
-                    let title = ui.label(egui::RichText::new("Qurso Time").strong());
-                    title.context_menu(|ui| { if ui.button("Options…").clicked() { state.time_options_open = true; ui.close(); } });
-                    if ui.small_button("⚙").on_hover_text("Options (clic droit)").clicked() { state.time_options_open = true; }
-                });
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut state.time_mode, 0, "Chronomètre");
-                    ui.selectable_value(&mut state.time_mode, 1, "Compte à rebours");
-                    ui.selectable_value(&mut state.time_mode, 2, "Heure / alarme");
-                });
-                let display = match state.time_mode {
-                    2 => format!("{clock_hour:02}:{clock_minute:02}:{clock_second:02}"),
-                    _ if hours > 0 => format!("{hours:02}:{minutes:02}:{seconds:02}"),
-                    _ => format!("{minutes:02}:{seconds:02}.{centiseconds:02}"),
-                };
-                let face = ui.label(egui::RichText::new(display).size(32.0).monospace());
-                face.context_menu(|ui| { if ui.button("Options…").clicked() { state.time_options_open = true; ui.close(); } });
-                if state.time_mode == 2 {
-                    ui.label(if state.alarm_enabled { format!("Alarme réglée à {:02}:{:02}", state.alarm_hour, state.alarm_minute) } else { "Alarme désactivée · réglages par clic droit".into() });
-                }
-                ui.horizontal(|ui| {
-                    let running = if state.time_mode == 1 { state.countdown_started_at.is_some() } else { state.stopwatch_running };
-                    if state.time_mode != 2 && ui.button(if running { "Pause" } else { "▶ Démarrer" }).clicked() {
-                        if state.time_mode == 1 {
-                            if running { state.countdown_remaining = remaining; state.countdown_started_at = None; }
-                            else { if state.countdown_remaining <= 0.0 { state.countdown_remaining = state.countdown_seconds as f64; } state.countdown_started_at = Some(StatusInstant::now()); }
-                        } else if running { state.stopwatch_elapsed = elapsed; state.stopwatch_started_at = None; state.stopwatch_running = false; }
-                        else { state.stopwatch_started_at = Some(StatusInstant::now()); state.stopwatch_running = true; }
-                    }
-                    if state.time_mode != 2 && ui.button("Stop").clicked() {
-                        if state.time_mode == 1 { state.countdown_remaining = remaining; state.countdown_started_at = None; }
-                        else { state.stopwatch_elapsed = elapsed; state.stopwatch_running = false; state.stopwatch_started_at = None; }
-                    }
-                    if state.time_mode == 0 && ui.button("Reset").clicked() {
-                        state.stopwatch_running = false;
-                        state.stopwatch_elapsed = 0.0;
-                        state.stopwatch_started_at = None;
-                    }
-                    if state.time_mode == 1 && ui.button("Réinitialiser").clicked() { state.countdown_started_at = None; state.countdown_remaining = state.countdown_seconds as f64; }
-                });
+    if state.time_widgets.is_empty() { return; }
+    let text_sizes = [16.0, 21.0, 27.0, 34.0];
+    let mut remove = Vec::new();
+    for widget in &mut state.time_widgets {
+        if !widget.open { remove.push(widget.id); continue; }
+        let now = StatusInstant::now();
+        let elapsed = widget.stopwatch_elapsed + widget.stopwatch_started_at.map_or(0.0, |at| at.elapsed().as_secs_f64());
+        let remaining = (widget.countdown_remaining - widget.countdown_started_at.map_or(0.0, |at| at.elapsed().as_secs_f64())).max(0.0);
+        if widget.countdown_started_at.is_some() && remaining <= 0.0 {
+            widget.countdown_remaining = 0.0;
+            widget.countdown_started_at = None;
+            play_time_alarm();
+        }
+        if widget.stopwatch_running || widget.countdown_started_at.is_some() || widget.mode == 2 || widget.alarm_enabled {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+        let (clock_date, clock) = qurso_clock_now(&widget.timezone);
+        let mut segments = clock.split(':');
+        let clock_hour = segments.next().and_then(|s| s.parse::<u8>().ok()).unwrap_or(0);
+        let clock_minute = segments.next().and_then(|s| s.parse::<u8>().ok()).unwrap_or(0);
+        let clock_second = segments.next().and_then(|s| s.parse::<u8>().ok()).unwrap_or(0);
+        let alarm_key = format!("{clock_date} {clock_hour:02}:{clock_minute:02}");
+        if widget.alarm_enabled && clock_hour == widget.alarm_hour && clock_minute == widget.alarm_minute && widget.alarm_last_fired != alarm_key {
+            widget.alarm_last_fired = alarm_key;
+            play_time_alarm();
+        }
+        let shown = if widget.mode == 1 { remaining } else { elapsed };
+        let total = shown.max(0.0) as u64;
+        let hours = total / 3600;
+        let minutes = (total / 60) % 60;
+        let seconds = total % 60;
+        let centiseconds = ((shown.fract() * 100.0) as u64).min(99);
+        let display = if widget.mode == 2 {
+            if widget.clock_seconds { format!("{clock_hour:02}:{clock_minute:02}:{clock_second:02}") } else { format!("{clock_hour:02}:{clock_minute:02}") }
+        } else if hours > 0 {
+            if widget.stopwatch_centiseconds { format!("{hours:02}:{minutes:02}:{seconds:02}:{centiseconds:02}") } else { format!("{hours:02}:{minutes:02}:{seconds:02}") }
+        } else if widget.stopwatch_centiseconds { format!("{minutes:02}:{seconds:02}:{centiseconds:02}") } else { format!("{minutes:02}:{seconds:02}") };
+        let area = egui::Area::new(egui::Id::new(("qurso_time_widget", widget.id)))
+            .current_pos(widget.position).movable(true).order(egui::Order::Foreground).show(ctx, |ui| {
+                egui::Frame::new().fill(widget.background_color).stroke(Stroke::new(2.0, Color32::from_rgba_unmultiplied(255,255,255,28)))
+                    .corner_radius(CornerRadius::same(12)).inner_margin(Margin::same(12)).show(ui, |ui| {
+                        ui.set_min_size(widget.size);
+                        ui.vertical_centered(|ui| {
+                            ui.label(egui::RichText::new(display).size(text_sizes[widget.text_size.min(3) as usize]).monospace().color(widget.text_color));
+                            ui.add_space(5.0);
+                            if widget.mode != 2 {
+                                ui.horizontal(|ui| {
+                                    let running = if widget.mode == 1 { widget.countdown_started_at.is_some() } else { widget.stopwatch_running };
+                                    let icon = if running { include_image!("../assets/time-pause.svg") } else { include_image!("../assets/time-play.svg") };
+                                    let response = ui.add(egui::Image::new(icon).fit_to_exact_size(Vec2::splat(25.0)).sense(egui::Sense::click()));
+                                    if response.clicked() {
+                                        if widget.mode == 1 {
+                                            if running { widget.countdown_remaining = remaining; widget.countdown_started_at = None; }
+                                            else { if widget.countdown_remaining <= 0.0 { widget.countdown_remaining = widget.countdown_seconds as f64; } widget.countdown_started_at = Some(now); }
+                                        } else if running { widget.stopwatch_elapsed = elapsed; widget.stopwatch_started_at = None; widget.stopwatch_running = false; }
+                                        else { widget.stopwatch_started_at = Some(now); widget.stopwatch_running = true; }
+                                    }
+                                });
+                            }
+                            let resize = ui.allocate_response(Vec2::splat(12.0), egui::Sense::drag());
+                            ui.painter().line_segment([resize.rect.left_bottom(), resize.rect.right_top()], Stroke::new(1.0, Color32::GRAY));
+                            if resize.dragged() { widget.size = (widget.size + resize.drag_delta()).max(Vec2::new(180.0, 75.0)); }
+                        });
+                    });
             });
+        widget.position = area.response.rect.min;
+        area.response.context_menu(|ui| {
+            if ui.button("Options…").clicked() { widget.options_open = true; ui.close(); }
+            if ui.button("Fermer").clicked() { widget.open = false; ui.close(); }
         });
-    state.stopwatch_open = open;
-    if state.time_options_open {
-        egui::Window::new("Options Time").id(egui::Id::new("qurso_time_options"))
-            .open(&mut state.time_options_open).collapsible(false).resizable(false)
-            .default_pos(Pos2::new(470.0, 120.0)).show(ctx, |ui| {
-                ui.horizontal(|ui| { ui.label("Durée du compte à rebours"); ui.add(egui::DragValue::new(&mut state.countdown_seconds).range(1..=86400).suffix(" s")); });
-                if state.countdown_started_at.is_none() { state.countdown_remaining = state.countdown_seconds as f64; }
-                ui.separator();
-                ui.checkbox(&mut state.alarm_enabled, "Activer l’alarme");
-                ui.horizontal(|ui| {
-                    ui.label("Heure"); ui.add(egui::DragValue::new(&mut state.alarm_hour).range(0..=23).speed(0.1));
-                    ui.label(":"); ui.add(egui::DragValue::new(&mut state.alarm_minute).range(0..=59).speed(0.1));
+        if widget.options_open {
+            egui::Window::new("").id(egui::Id::new(("qurso_time_options", widget.id)))
+                .open(&mut widget.options_open).collapsible(false).resizable(false).title_bar(false)
+                .frame(Frame::window(&ctx.style()).fill(Color32::from_gray(228)).stroke(Stroke::new(2.0, Color32::from_rgba_unmultiplied(255, 255, 255, 24))).shadow(egui::epaint::Shadow::NONE))
+                .default_pos(widget.position + Vec2::new(widget.size.x + 8.0, 0.0)).show(ctx, |ui| {
+                    {
+                        let visuals = ui.visuals_mut();
+                        visuals.override_text_color = Some(Color32::from_gray(30));
+                        visuals.widgets.inactive.bg_fill = Color32::from_rgb(14, 14, 14);
+                        visuals.widgets.inactive.fg_stroke.color = Color32::WHITE;
+                        visuals.widgets.hovered.bg_fill = Color32::from_gray(35);
+                        visuals.widgets.hovered.fg_stroke.color = Color32::WHITE;
+                        visuals.widgets.active.bg_fill = Color32::from_gray(45);
+                        visuals.widgets.active.fg_stroke.color = Color32::WHITE;
+                    }
+                    ui.label("Mode");
+                    egui::ComboBox::from_id_salt(("qurso_time_mode", widget.id)).selected_text(["Chronomètre", "Compte à rebours", "Heure / alarme"][widget.mode.min(2) as usize]).show_ui(ui, |ui| {
+                        ui.selectable_value(&mut widget.mode, 0, "Chronomètre");
+                        ui.selectable_value(&mut widget.mode, 1, "Compte à rebours");
+                        ui.selectable_value(&mut widget.mode, 2, "Heure / alarme");
+                    });
+                    if widget.mode == 1 {
+                        ui.horizontal(|ui| { ui.label("Durée"); ui.add(egui::DragValue::new(&mut widget.countdown_seconds).range(1..=86400).suffix(" s")); });
+                        ui.checkbox(&mut widget.stopwatch_centiseconds, "Afficher les centièmes");
+                        if widget.countdown_started_at.is_none() { widget.countdown_remaining = widget.countdown_seconds as f64; }
+                        if ui.button("Réinitialiser").clicked() {
+                            widget.countdown_started_at = None;
+                            widget.countdown_remaining = widget.countdown_seconds as f64;
+                        }
+                    } else if widget.mode == 0 {
+                        ui.checkbox(&mut widget.stopwatch_centiseconds, "Afficher les centièmes");
+                        if ui.button("Réinitialiser").clicked() { widget.stopwatch_running = false; widget.stopwatch_started_at = None; widget.stopwatch_elapsed = 0.0; }
+                    }
+                    if widget.mode == 2 {
+                        ui.checkbox(&mut widget.clock_seconds, "Afficher les secondes");
+                        ui.checkbox(&mut widget.alarm_enabled, "Alarme");
+                        ui.horizontal(|ui| { ui.label("Heure"); ui.add(egui::DragValue::new(&mut widget.alarm_hour).range(0..=23)); ui.label(":"); ui.add(egui::DragValue::new(&mut widget.alarm_minute).range(0..=59)); });
+                        egui::ComboBox::from_id_salt(("qurso_timezone", widget.id)).selected_text(&widget.timezone).show_ui(ui, |ui| {
+                            for zone in ["Local", "UTC", "Europe/Paris", "Europe/London", "America/New_York", "Asia/Tokyo"] { ui.selectable_value(&mut widget.timezone, zone.to_string(), zone); }
+                        });
+                        if ui.button("Tester l’alarme").clicked() { play_time_alarm(); }
+                    }
+                    ui.separator();
+                    ui.horizontal(|ui| { ui.label("Taille"); egui::ComboBox::from_id_salt(("qurso_time_size", widget.id)).selected_text(["S", "M", "L", "XL"][widget.text_size.min(3) as usize]).show_ui(ui, |ui| { for (index, size) in ["S", "M", "L", "XL"].iter().enumerate() { ui.selectable_value(&mut widget.text_size, index as u8, *size); } }); });
+                    ui.horizontal(|ui| { ui.label("Texte"); ui.color_edit_button_srgba(&mut widget.text_color); ui.label("Fond"); ui.color_edit_button_srgba(&mut widget.background_color); });
                 });
-                if ui.button("Tester l’alarme").clicked() { play_time_alarm(); }
-            });
+        }
     }
+    state.time_widgets.retain(|widget| !remove.contains(&widget.id) && widget.open);
+    state.stopwatch_open = !state.time_widgets.is_empty();
+}
+
+#[cfg(target_arch = "wasm32")]
+fn qurso_clock_now(timezone: &str) -> (String, String) {
+    use wasm_bindgen::JsCast;
+    let Some(window) = web_sys::window() else { return (String::new(), "00:00:00".into()); };
+    let Ok(function) = js_sys::Reflect::get(window.as_ref(), &wasm_bindgen::JsValue::from_str("qursoClockNow")).and_then(|value| value.dyn_into::<js_sys::Function>().map_err(|_| wasm_bindgen::JsValue::NULL)) else { return (String::new(), "00:00:00".into()); };
+    let Ok(value) = function.call1(window.as_ref(), &wasm_bindgen::JsValue::from_str(timezone)) else { return (String::new(), "00:00:00".into()); };
+    let value = value.as_string().unwrap_or_default();
+    let (date, time) = value.split_once('|').unwrap_or(("", "00:00:00"));
+    (date.to_string(), time.to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn qurso_clock_now(_timezone: &str) -> (String, String) {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let days = now.as_secs() / 86_400;
+    let seconds = now.as_secs() % 86_400;
+    (format!("day-{days}"), format!("{:02}:{:02}:{:02}", seconds / 3600, seconds / 60 % 60, seconds % 60))
 }
 
 fn play_time_alarm() {
@@ -1464,8 +1559,10 @@ fn render_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                     }
                 }
                 ui.separator();
-                if IconButton::new(include_image!("../assets/add.svg"), "Insérer")
-                    .style(IconButtonStyle::tool()).show(ui) {
+                let insert_response = IconButton::new(include_image!("../assets/add.svg"), "Insérer")
+                    .style(IconButtonStyle::tool()).show_response(ui);
+                ui_state.insert_button_rect = Some(insert_response.rect);
+                if insert_response.clicked() {
                     ui_state.insert_menu_open = !ui_state.insert_menu_open;
                 }
             });
@@ -2120,6 +2217,9 @@ fn render_right_panel(
     ui_state: &mut UiState,
     props: &SelectedShapeProps,
 ) -> Option<UiAction> {
+    if !ui_state.selection_pinned && ui_state.color_popover == ColorPopover::PinnedFull {
+        ui_state.color_popover = ColorPopover::None;
+    }
     if ui_state.properties_hotkey_hidden {
         return None;
     }
@@ -2195,6 +2295,7 @@ fn render_right_panel(
                             }
                             if ui_state.selection_pinned {
                                 ui.label("Fond épinglé");
+                                ui.add_space(5.0);
                                 let (clicked, rect) = color_swatch_current(ui, ui_state.pin_background, "Couleur de fond épinglé");
                                 pin_background_rect = rect;
                                 if clicked {
@@ -2800,6 +2901,18 @@ fn render_right_panel(
     ui_state.context_rects.push(output.response.rect);
     remember_panel(ui_state, "right_panel", &output.response);
     if ui_state.color_popover == ColorPopover::PinnedFull {
+        let palette_pos = Pos2::new(
+            (pin_background_rect.left() - 100.0).clamp(4.0, (ctx.screen_rect().right() - 520.0).max(4.0)),
+            (pin_background_rect.bottom() + 8.0).clamp(4.0, (ctx.screen_rect().bottom() - 270.0).max(4.0)),
+        );
+        if ctx.input(|input| input.pointer.any_click()) {
+            if let Some(pointer) = ctx.input(|input| input.pointer.interact_pos()) {
+                let palette_rect = Rect::from_min_size(palette_pos, Vec2::new(520.0, 270.0));
+                if !palette_rect.contains(pointer) && !pin_background_rect.contains(pointer) {
+                    ui_state.color_popover = ColorPopover::None;
+                }
+            }
+        }
         if let Some(color) = ColorGrid::new(ui_state.pin_background, "Pinned Object Background")
             .below()
             .show(ctx, pin_background_rect)
@@ -2878,7 +2991,7 @@ fn render_file_menu(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                         // Download/Upload for file export/import (WASM shows both, native just uses Save/Open)
                         #[cfg(target_arch = "wasm32")]
                         {
-                            if menu_item(ui, "Download JSON", "") {
+                            if menu_item(ui, "Export JSON", "") {
                                 action = Some(UiAction::DownloadDocument);
                                 ui_state.menu_open = false;
                             }
@@ -2894,7 +3007,7 @@ fn render_file_menu(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                             ui_state.menu_open = false;
                         }
 
-                        if menu_item(ui, "Preset…", "") {
+                        if menu_item(ui, "PNG Preset…", "") {
                             action = Some(UiAction::ListPresets);
                             ui_state.preset_manager_open = true;
                             ui_state.menu_open = false;

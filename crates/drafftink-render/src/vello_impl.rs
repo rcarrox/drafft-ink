@@ -1161,7 +1161,9 @@ impl VelloRenderer {
                 let x0 = run.offset() as f64;
                 let x1 = (run.offset() + width) as f64;
                 let y = run.baseline() + text_script_offset(text, range.start) - crate::text_editor::inline_baseline_shift(&line, font_size);
-                let top = (y - run.run().font_size() * 0.9) as f64;
+                // Keep the overbar above accents, with a small gap below the
+                // preceding line even when text wraps.
+                let top = (y - run.run().font_size() * 1.06) as f64;
                 let thickness = (run.run().font_size() / 18.0).max(1.0) as f64;
                 if styles.iter().all(|style| style.overline) {
                     self.scene.fill(Fill::NonZero, transform, &brush, None, &Rect::new(x0, top, x1, top + thickness));
@@ -1169,7 +1171,8 @@ impl VelloRenderer {
                 if styles.iter().all(|style| style.vector_arrow) {
                     let mut path = BezPath::new();
                     path.move_to((x0, top)); path.line_to((x1, top));
-                    path.move_to((x1 - 4.0, top - 3.0)); path.line_to((x1, top)); path.line_to((x1 - 4.0, top + 3.0));
+                    let head = (run.run().font_size() as f64 * 0.2).max(3.0);
+                    path.move_to((x1 - head, top - head * 0.7)); path.line_to((x1, top)); path.line_to((x1 - head, top + head * 0.7));
                     self.scene.stroke(&Stroke::new(thickness), transform, &brush, None, &path);
                 }
             }
@@ -1507,6 +1510,9 @@ impl VelloRenderer {
                         parley::StyleProperty::FontStyle(parley::FontStyle::Italic),
                         range.clone(),
                     );
+                }
+                if style.script == 0 && (style.overline || style.vector_arrow) {
+                    builder.push(parley::StyleProperty::FontSize(text.font_size as f32), range.clone());
                 }
                 if style.underline {
                     builder.push(parley::StyleProperty::Underline(true), range);
@@ -2046,6 +2052,9 @@ impl VelloRenderer {
                         parley::StyleProperty::FontStyle(parley::FontStyle::Italic),
                         range.clone(),
                     );
+                }
+                if style.script == 0 && (style.overline || style.vector_arrow) {
+                    builder.push(parley::StyleProperty::FontSize(text.font_size as f32), range.clone());
                 }
                 if style.underline {
                     builder.push(parley::StyleProperty::Underline(true), range);

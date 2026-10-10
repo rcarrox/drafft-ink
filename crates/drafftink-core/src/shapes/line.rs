@@ -49,7 +49,7 @@ impl Line {
             start,
             end,
             intermediate_points: Vec::new(),
-            path_style: PathStyle::Direct,
+            path_style: PathStyle::Flowing,
             stroke_style: StrokeStyle::default(),
             closed: false,
             style: ShapeStyle::default(),
@@ -245,6 +245,7 @@ mod tests {
     fn test_line_creation() {
         let line = Line::new(Point::new(0.0, 0.0), Point::new(100.0, 0.0));
         assert!((line.length() - 100.0).abs() < f64::EPSILON);
+        assert_eq!(line.path_style, PathStyle::Flowing);
     }
 
     #[test]

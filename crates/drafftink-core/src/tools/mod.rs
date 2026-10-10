@@ -126,7 +126,7 @@ impl Default for ToolManager {
             current_style: ShapeStyle::default(),
             corner_radius: 0.0,
             geometry: Default::default(),
-            path_style: crate::shapes::PathStyle::Direct,
+            path_style: crate::shapes::PathStyle::Flowing,
             stroke_style: crate::shapes::StrokeStyle::default(),
             arrow_start_head: crate::shapes::ArrowHeadStyle::None,
             arrow_end_head: crate::shapes::ArrowHeadStyle::Open,
