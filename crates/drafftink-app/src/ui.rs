@@ -290,6 +290,7 @@ pub struct TimeWidgetState {
     pub resize_origin_size: Option<Vec2>,
     pub resize_origin_position: Option<Pos2>,
     pub resize_origin_pointer: Option<Pos2>,
+    pub active_resize_index: Option<usize>,
     pub move_origin_position: Option<Pos2>,
     pub move_origin_pointer: Option<Pos2>,
     pub mode: u8,
@@ -316,7 +317,7 @@ impl TimeWidgetState {
     pub fn new(id: u64, position: Pos2) -> Self {
         Self {
             id, open: true, selected: false, position, size: Vec2::new(260.0, 112.0),
-            resize_origin_size: None, resize_origin_position: None, resize_origin_pointer: None,
+            resize_origin_size: None, resize_origin_position: None, resize_origin_pointer: None, active_resize_index: None,
             move_origin_position: None, move_origin_pointer: None, mode: 0,
             stopwatch_running: false, stopwatch_elapsed: 0.0, stopwatch_started_at: None,
             countdown_seconds: 300, countdown_remaining: 300.0, countdown_started_at: None,
@@ -1111,40 +1112,67 @@ fn render_stopwatch(ctx: &Context, state: &mut UiState) {
             if widget.stopwatch_centiseconds { format!("{hours:02}:{minutes:02}:{seconds:02}:{centiseconds:02}") } else { format!("{hours:02}:{minutes:02}:{seconds:02}") }
         } else if widget.stopwatch_centiseconds { format!("{minutes:02}:{seconds:02}:{centiseconds:02}") } else { format!("{minutes:02}:{seconds:02}") };
         let pointer_pressed = ctx.input(|input| input.pointer.primary_pressed());
+        let pointer_down = ctx.input(|input| input.pointer.button_down(egui::PointerButton::Primary));
+        let pointer_released = ctx.input(|input| input.pointer.primary_released());
         if pointer_pressed {
             if let Some(pointer) = ctx.input(|input| input.pointer.interact_pos()) {
-                let previous = Rect::from_min_size(widget.position, widget.size + Vec2::splat(32.0));
-                widget.selected = previous.contains(pointer);
+                let widget_rect = Rect::from_min_size(widget.position, widget.size);
+                let was_selected = widget.selected;
+                widget.selected = widget_rect.contains(pointer);
+                if widget.selected && was_selected {
+                    let corners = [widget_rect.left_top(), widget_rect.right_top(), widget_rect.left_bottom(), widget_rect.right_bottom()];
+                    if let Some(index) = corners.iter().position(|point| point.distance(pointer) <= 14.0) {
+                        widget.active_resize_index = Some(index);
+                        widget.resize_origin_size = Some(widget.size);
+                        widget.resize_origin_position = Some(widget.position);
+                        widget.resize_origin_pointer = Some(pointer);
+                        widget.move_origin_position = None;
+                        widget.move_origin_pointer = None;
+                    } else {
+                        widget.move_origin_position = Some(widget.position);
+                        widget.move_origin_pointer = Some(pointer);
+                        widget.active_resize_index = None;
+                    }
+                } else {
+                    widget.active_resize_index = None;
+                    widget.move_origin_position = None;
+                    widget.move_origin_pointer = None;
+                }
             }
         }
-        let mut resize_position_delta = Vec2::ZERO;
+        if pointer_down {
+            if let Some(pointer) = ctx.input(|input| input.pointer.interact_pos()) {
+                if let (Some(index), Some(origin_size), Some(origin_position), Some(pointer_origin)) = (
+                    widget.active_resize_index, widget.resize_origin_size, widget.resize_origin_position, widget.resize_origin_pointer,
+                ) {
+                    let delta = pointer - pointer_origin;
+                    let mut size = origin_size;
+                    let mut position_delta = Vec2::ZERO;
+                    if index % 2 == 0 { size.x -= delta.x; position_delta.x = delta.x; } else { size.x += delta.x; }
+                    if index < 2 { size.y -= delta.y; position_delta.y = delta.y; } else { size.y += delta.y; }
+                    let clamped = size.max(Vec2::new(180.0, 75.0));
+                    if index % 2 == 0 { position_delta.x = origin_size.x - clamped.x; }
+                    if index < 2 { position_delta.y = origin_size.y - clamped.y; }
+                    widget.size = clamped;
+                    widget.position = origin_position + position_delta;
+                } else if let (Some(origin), Some(pointer_origin)) = (widget.move_origin_position, widget.move_origin_pointer) {
+                    widget.position = origin + (pointer - pointer_origin);
+                }
+            }
+        }
+        if pointer_released {
+            widget.active_resize_index = None;
+            widget.resize_origin_size = None;
+            widget.resize_origin_position = None;
+            widget.resize_origin_pointer = None;
+            widget.move_origin_position = None;
+            widget.move_origin_pointer = None;
+        }
         let mut settings_rect = None;
         let mut close_rect = None;
         let mut resize_rects = Vec::new();
         let area = egui::Area::new(egui::Id::new(("qurso_time_widget", widget.id)))
             .current_pos(widget.position).movable(false).order(egui::Order::Foreground).show(ctx, |ui| {
-                // Register a background drag target before the content and corner handles.
-                // Later child interactions take priority, so buttons and resize grips remain usable.
-                let move_rect = Rect::from_min_size(widget.position, widget.size + Vec2::splat(24.0));
-                let move_response = ui.interact(move_rect, egui::Id::new(("qurso_time_move", widget.id)), egui::Sense::drag());
-                if move_response.drag_started() {
-                    widget.move_origin_position = Some(widget.position);
-                    widget.move_origin_pointer = ctx.input(|input| input.pointer.interact_pos());
-                    widget.selected = true;
-                }
-                if move_response.dragged() {
-                    if let (Some(origin), Some(pointer_origin), Some(pointer)) = (
-                        widget.move_origin_position,
-                        widget.move_origin_pointer,
-                        ctx.input(|input| input.pointer.interact_pos()),
-                    ) {
-                        widget.position = origin + (pointer - pointer_origin);
-                    }
-                }
-                if move_response.drag_stopped() {
-                    widget.move_origin_position = None;
-                    widget.move_origin_pointer = None;
-                }
                 let frame = egui::Frame::new().fill(widget.background_color)
                     .stroke(Stroke::new(2.0, if widget.selected { Color32::from_rgb(80, 145, 255) } else { Color32::from_rgba_unmultiplied(255,255,255,28) }))
                     .corner_radius(CornerRadius::same(12)).inner_margin(Margin::same(12)).show(ui, |ui| {
@@ -1193,44 +1221,14 @@ fn render_stopwatch(ctx: &Context, state: &mut UiState) {
                     for (index, point) in [rect.left_top(), rect.right_top(), rect.left_bottom(), rect.right_bottom()].into_iter().enumerate() {
                         let handle_rect = Rect::from_center_size(point, Vec2::splat(14.0));
                         resize_rects.push(handle_rect);
-                        let response = ui.interact(handle_rect, egui::Id::new(("qurso_time_resize", widget.id, index)), egui::Sense::drag());
+                        ui.interact(handle_rect, egui::Id::new(("qurso_time_resize", widget.id, index)), egui::Sense::hover());
                         painter.circle_filled(point, radius, Color32::WHITE);
                         painter.circle_stroke(point, radius, Stroke::new(1.2, Color32::from_rgb(65, 135, 255)));
-                        if response.drag_started() {
-                            widget.resize_origin_size = Some(widget.size);
-                            widget.resize_origin_position = Some(widget.position);
-                            widget.resize_origin_pointer = ctx.input(|input| input.pointer.interact_pos());
-                            widget.selected = true;
-                        }
-                        if response.dragged() {
-                            let delta = match (widget.resize_origin_pointer, ctx.input(|input| input.pointer.interact_pos())) {
-                                (Some(origin), Some(pointer)) => pointer - origin,
-                                _ => response.drag_delta(),
-                            };
-                            let origin_size = widget.resize_origin_size.unwrap_or(widget.size);
-                            let origin_position = widget.resize_origin_position.unwrap_or(widget.position);
-                            let mut size = origin_size;
-                            let mut position_delta = Vec2::ZERO;
-                            if index % 2 == 0 { size.x -= delta.x; position_delta.x = delta.x; } else { size.x += delta.x; }
-                            if index < 2 { size.y -= delta.y; position_delta.y = delta.y; } else { size.y += delta.y; }
-                            let min_size = Vec2::new(180.0, 75.0);
-                            let clamped = size.max(min_size);
-                            widget.size = clamped;
-                            if index % 2 == 0 { position_delta.x = origin_size.x - clamped.x; }
-                            if index < 2 { position_delta.y = origin_size.y - clamped.y; }
-                            widget.position = origin_position + position_delta;
-                            resize_position_delta = position_delta;
-                        }
-                        if response.drag_stopped() {
-                            widget.resize_origin_size = None;
-                            widget.resize_origin_position = None;
-                            widget.resize_origin_pointer = None;
-                        }
                     }
                 }
             });
         widget.selected |= area.response.hovered() || area.response.dragged() || area.response.clicked();
-        widget.position = area.response.rect.min + resize_position_delta;
+        widget.position = area.response.rect.min;
         let rect_values = |rect: Rect| [rect.min.x, rect.min.y, rect.max.x, rect.max.y];
         state.test_controls.insert(format!("Time widget {}", widget.id), rect_values(area.response.rect));
         if let Some(rect) = settings_rect { state.test_controls.insert(format!("Time options {}", widget.id), rect_values(rect)); }
