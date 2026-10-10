@@ -239,6 +239,7 @@ function inspectCapture(file) {
     assert.notDeepEqual(savedPalette[0],originalStrokePreset,'custom Stroke presets must persist from Settings');
     assert.deepEqual((await state()).stroke_colors[0],savedPalette[0],'custom Stroke preset should remain in the Settings state after saving');
     await page.mouse.click((await state()).controls.tool_Rectangle[0]+20,(await state()).controls.tool_Rectangle[1]+20);await wait(s=>s.tool==='Rectangle');
+    await page.mouse.move(780,460);
     await page.mouse.down();await page.mouse.move(900,540,{steps:5});await page.mouse.up();await wait(s=>s.shapes.length===2&&s.selected_count===1);
     await page.keyboard.press('s');await wait(s=>s.tool==='Select');
     const firstBounds=(await state()).shapes[0].bounds;
