@@ -325,9 +325,17 @@ mod tests {
     #[test]
     fn custom_stroke_palette_survives_reload_and_old_settings_get_defaults() {
         let mut settings = UserSettings::default();
-        settings.stroke_colors[2] = [12, 34, 56];
+        settings.stroke_colors = [
+            [12, 34, 56],
+            [65, 43, 21],
+            [91, 82, 73],
+            [14, 25, 36],
+            [47, 58, 69],
+            [70, 81, 92],
+        ];
+        let expected = settings.stroke_colors;
         let restored: UserSettings = serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
-        assert_eq!(restored.stroke_colors[2], [12, 34, 56]);
+        assert_eq!(restored.stroke_colors, expected);
         let older: UserSettings = serde_json::from_str(r#"{"shortcut_pan":"h"}"#).unwrap();
         assert_eq!(older.stroke_colors, default_stroke_colors());
     }
