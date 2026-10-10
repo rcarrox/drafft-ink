@@ -2068,6 +2068,30 @@ mod pinned_pointer_tests {
     use drafftink_core::shapes::{Rectangle, SerializableColor};
 
     #[test]
+    fn ctrl_click_toggles_one_shape_at_its_resize_corner() {
+        let mut canvas = Canvas::new();
+        let first = Rectangle::new(Point::ZERO, 100.0, 80.0);
+        let first_id = first.id();
+        let second = Rectangle::new(Point::new(200.0, 0.0), 100.0, 80.0);
+        let second_id = second.id();
+        canvas.document.add_shape(Shape::Rectangle(first));
+        canvas.document.add_shape(Shape::Rectangle(second));
+        canvas.select(first_id);
+        canvas.add_to_selection(second_id);
+        let mut input = InputState::new();
+        input.process_window_event(&winit::event::WindowEvent::ModifiersChanged(
+            winit::event::Modifiers::from(winit::keyboard::ModifiersState::CONTROL),
+        ));
+        let mut handler = EventHandler::new();
+        handler.handle_press(&mut canvas, Point::new(1.0, 1.0), &input, false);
+        assert_eq!(canvas.selection, vec![second_id]);
+        assert!(!handler.is_manipulating());
+        handler.handle_press(&mut canvas, Point::new(1.0, 1.0), &input, false);
+        assert!(canvas.is_selected(first_id) && canvas.is_selected(second_id));
+        assert!(!handler.is_manipulating());
+    }
+
+    #[test]
     fn pinned_hit_testing_uses_screen_coordinates_after_camera_moves() {
         let mut canvas = Canvas::new();
         canvas.camera.zoom = 2.0;
