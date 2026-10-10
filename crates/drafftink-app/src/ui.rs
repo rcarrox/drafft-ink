@@ -1118,7 +1118,7 @@ fn render_stopwatch(ctx: &Context, state: &mut UiState) {
             if let Some(pointer) = ctx.input(|input| input.pointer.interact_pos()) {
                 let widget_rect = Rect::from_min_size(widget.position, widget.size);
                 let was_selected = widget.selected;
-                widget.selected = widget_rect.contains(pointer);
+                widget.selected = widget_rect.expand(14.0).contains(pointer);
                 if widget.selected && was_selected {
                     let corners = [widget_rect.left_top(), widget_rect.right_top(), widget_rect.left_bottom(), widget_rect.right_bottom()];
                     if let Some(index) = corners.iter().position(|point| point.distance(pointer) <= 14.0) {
