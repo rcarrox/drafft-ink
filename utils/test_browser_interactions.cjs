@@ -232,6 +232,7 @@ function inspectCapture(file) {
     const appearanceTab=settingsState.controls['Settings tab Apparence'];
     await page.mouse.click((appearanceTab[0]+appearanceTab[2])/2,(appearanceTab[1]+appearanceTab[3])/2);
     await wait(s=>!s.controls['Color picker Couleur rapide du trait']);
+    await page.mouse.click(780,460);
     await page.keyboard.press('Enter');
     await wait(s=>!s.controls['Settings stroke color 0']);
     const savedPalette=await page.evaluate(()=>JSON.parse(localStorage.getItem('drafftink.user_settings.v1')).stroke_colors);
