@@ -234,6 +234,8 @@ function inspectCapture(file) {
     assert.notDeepEqual(savedPalette[0],originalStrokePreset,'custom Stroke presets must persist from Settings');
     page.once('dialog',dialog=>dialog.accept());
     await page.reload();
+    const storedAfterReload=await page.evaluate(()=>JSON.parse(localStorage.getItem('drafftink.user_settings.v1')).stroke_colors);
+    console.log('Stroke preset persisted before/after reload:',JSON.stringify(savedPalette[0]),JSON.stringify(storedAfterReload[0]));
     await wait(s=>s.shapes.length===0&&s.stroke_colors);
     assert.deepEqual((await state()).stroke_colors[0],savedPalette[0],'custom Stroke presets must survive reload');
     await page.keyboard.press('s');await wait(s=>s.tool==='Select');
