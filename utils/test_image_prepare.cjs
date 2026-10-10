@@ -2,10 +2,10 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
 
-const source = fs.readFileSync('web/offline.js', 'utf8');
+const source = fs.readFileSync('web/browser-tools.js', 'utf8');
 const start = source.indexOf('// User presets live in IndexedDB');
 const end = source.indexOf('window.qursoPlayAlarm', start);
-assert(start >= 0 && end > start, 'offline image/preset helpers exist');
+assert(start >= 0 && end > start, 'online image/preset helpers exist');
 let bitmapClosed = false, drawArgs, blobArgs, canvasSize;
 const sandbox = {
   window: {}, indexedDB: {}, crypto: {}, console,

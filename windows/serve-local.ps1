@@ -13,6 +13,10 @@ if (-not (Test-Path -LiteralPath $Root -PathType Container)) {
     throw "Web root not found: $Root"
 }
 
+# Refresh the PNG list before serving this installation.
+$presetScript = Join-Path $Root 'presets/actualiser.ps1'
+if (Test-Path -LiteralPath $presetScript) { & $presetScript }
+
 $pidFile = Join-Path (Split-Path -Parent $PSScriptRoot) '.drafftink-server.pid'
 [System.IO.File]::WriteAllText($pidFile, [string]$PID, [System.Text.Encoding]::ASCII)
 

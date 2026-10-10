@@ -8,3 +8,5 @@
 - Travail de version : branche dédiée, PR, tests pertinents, CI, corrections des erreurs. Fusion/livraison selon l'autorisation de la demande actuelle. Vérifier le ZIP, sa version, ses JS/WASM et ses curseurs avec `utils/verify_portable.py`.
 - Tests rapides : `node utils/test_browser_helpers.cjs`, `python3 utils/generate_cloud_fixtures.py --out work/fixtures`, vérification syntaxique des scripts. Rust/native/WASM via CI.
 - Mettre à jour l'état de reprise dans GitHub après tout travail important. L'état doit distinguer ce qui est testé, non testé, fusionné et livré.
+
+- À chaque mise à jour, dresser le résumé des grandes évolutions et améliorations ; compléter EVOLUTIONS.md et l’inclure dans les ZIP.

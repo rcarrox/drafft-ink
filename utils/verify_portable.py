@@ -4,7 +4,7 @@ from pathlib import Path
 
 def verify(path, version):
     required=['Lancer Qurso.cmd','LIRE_MOI_LOCAL_ET_FTP.md','README_WEB_FR.md','Lancer DrafftInk.cmd','Arreter DrafftInk.cmd','Ouvrir avec Edge.cmd','Ouvrir avec Chrome.cmd',
-              'windows/serve-local.ps1','VERSION_LOCAL.txt','README_LOCAL_FR.md','web/index.html',
+              'windows/serve-local.ps1','VERSION_LOCAL.txt','README_LOCAL_FR.md','web/index.html','web/browser-tools.js','web/presets/manifest.json','EVOLUTIONS.md',
               'web/pkg/drafftink_app.js','web/pkg/drafftink_app_bg.wasm','web/cursormouse.svg','web/cursortext.svg','web/cursormath.svg','web/cursordraw.svg','web/cursorcrosshair.svg','web/cursoreraser.svg','web/cursoreraserman.svg']
     with zipfile.ZipFile(path) as z:
         assert z.testzip() is None, 'ZIP CRC failure'
@@ -15,6 +15,7 @@ def verify(path, version):
         assert wasm[:8]==b'\x00asm\x01\x00\x00\x00', 'Invalid WASM header'
         assert len(wasm)>1_000_000 and b'drafftink_app_bg.wasm' in z.read(names['web/pkg/drafftink_app.js'])
         assert not any('googlesans' in name.lower() and name.lower().endswith(('.ttf','.otf','.ttc')) for name in names), 'Private font must not be packaged'
+        assert not any(name.startswith('web/pdfjs/') for name in names), 'PDF reader must not be packaged'
         assert 'web/offline.js' not in names and 'web/sw.js' not in names, 'Online-only packages must not include an offline cache'
         index=z.read(names['web/index.html']).decode('utf-8-sig')
         assert 'serviceWorker.register' not in index and 'offline.js' not in index, 'Package must not install an offline service worker'
