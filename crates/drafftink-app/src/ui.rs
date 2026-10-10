@@ -1004,10 +1004,16 @@ fn render_insert_panel(ctx: &Context, state: &mut UiState) -> Option<UiAction> {
                     ui.visuals_mut().widgets.inactive.bg_fill = Color32::TRANSPARENT;
                     ui.visuals_mut().widgets.hovered.bg_fill = Color32::from_gray(235);
                     ui.visuals_mut().widgets.active.bg_fill = Color32::from_gray(225);
-                    if ui.add(egui::Button::new("Image / PDF").fill(Color32::TRANSPARENT).stroke(Stroke::NONE)).clicked() { action = Some(UiAction::ImportMedia); state.insert_menu_open = false; }
-                    if ui.add(egui::Button::new("Time").fill(Color32::TRANSPARENT).stroke(Stroke::NONE)).clicked() { action = Some(UiAction::ToggleStopwatch); state.insert_menu_open = false; }
+                    let image_pdf = ui.add(egui::Button::new("Image / PDF").fill(Color32::TRANSPARENT).stroke(Stroke::NONE));
+                    state.test_controls.insert("Insert Image / PDF".into(), [image_pdf.rect.min.x, image_pdf.rect.min.y, image_pdf.rect.max.x, image_pdf.rect.max.y]);
+                    if image_pdf.clicked() { action = Some(UiAction::ImportMedia); state.insert_menu_open = false; }
+                    let time = ui.add(egui::Button::new("Time").fill(Color32::TRANSPARENT).stroke(Stroke::NONE));
+                    state.test_controls.insert("Insert Time".into(), [time.rect.min.x, time.rect.min.y, time.rect.max.x, time.rect.max.y]);
+                    if time.clicked() { action = Some(UiAction::ToggleStopwatch); state.insert_menu_open = false; }
                     let label = if state.preset_menu_open { "Preset  ‹" } else { "Preset  ›" };
-                    if ui.add(egui::Button::new(label).fill(Color32::TRANSPARENT).stroke(Stroke::NONE)).clicked() {
+                    let preset = ui.add(egui::Button::new(label).fill(Color32::TRANSPARENT).stroke(Stroke::NONE));
+                    state.test_controls.insert("Insert Preset".into(), [preset.rect.min.x, preset.rect.min.y, preset.rect.max.x, preset.rect.max.y]);
+                    if preset.clicked() {
                         state.preset_menu_open = !state.preset_menu_open;
                         if state.preset_menu_open { action = Some(UiAction::ListPresets); }
                     }

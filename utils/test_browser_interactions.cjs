@@ -480,7 +480,7 @@ function inspectCapture(file) {
     // Qurso Time can be selected, resized, moved from its body, configured,
     // and closed using visible controls rather than the context menu.
     await control('tool_Insert');
-    await page.getByRole('button',{name:'Time',exact:true}).click();
+    await control('Insert Time');
     let timeState=await wait(s=>s.controls['Time widget 0']);
     let timeRect=timeState.controls['Time widget 0'];
     await page.mouse.click((timeRect[0]+timeRect[2])/2,(timeRect[1]+timeRect[3])/2);
