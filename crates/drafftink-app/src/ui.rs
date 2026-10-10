@@ -1249,6 +1249,9 @@ fn render_stopwatch(ctx: &Context, state: &mut UiState) {
             if ui.button("Fermer").clicked() { widget.open = false; ui.close(); }
         });
         if widget.options_open {
+            state.test_controls.insert(format!("Time options open {}", widget.id), [0.0; 4]);
+        }
+        if widget.options_open {
             egui::Window::new("").id(egui::Id::new(("qurso_time_options", widget.id)))
                 .open(&mut widget.options_open).collapsible(false).resizable(false).title_bar(false)
                 .frame(Frame::window(&ctx.style()).fill(Color32::from_gray(228)).stroke(Stroke::new(2.0, Color32::from_rgba_unmultiplied(255, 255, 255, 24))).shadow(egui::epaint::Shadow::NONE))
