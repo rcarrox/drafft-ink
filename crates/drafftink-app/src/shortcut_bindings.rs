@@ -130,7 +130,7 @@ pub fn remap_event(event: &mut KeyEvent, input: &mut InputState, settings: &User
         event.physical_key=PhysicalKey::Code(physical_key(&original.key));
         event.text=None;
         Remap::Mapped
-    } else if definitions.iter().any(|def|def.active(context)&&Binding::parse(def.default).is_some_and(|binding|binding==actual)&&Binding::parse(def.binding(settings))!=Some(actual)) { Remap::Blocked }
+    } else if definitions.iter().any(|def|def.active(context)&&Binding::parse(def.default).is_some_and(|binding|binding==actual)&&Binding::parse(def.binding(settings)).as_ref()!=Some(&actual)) { Remap::Blocked }
     else { Remap::None }
 }
 fn logical_key(key: &str) -> Key {

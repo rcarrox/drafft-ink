@@ -5276,6 +5276,7 @@ fn render_text_command_editor(ctx: &Context, state: &mut UiState) -> Option<UiAc
                 .desired_width(340.0)
                 .show(ui);
             output.response.request_focus();
+            let mut caret = output.state.cursor.char_range().map(|range|range.primary.index).unwrap_or(editor.caret);
             let requested_focus = editor.request_focus;
             if editor.request_focus {
                 output
@@ -5284,6 +5285,7 @@ fn render_text_command_editor(ctx: &Context, state: &mut UiState) -> Option<UiAc
                     .set_char_range(Some(egui::text::CCursorRange::one(
                         egui::text::CCursor::new(editor.pending_caret.take().unwrap_or_else(||editor.source.chars().count()).min(editor.source.chars().count())),
                     )));
+                caret = output.state.cursor.char_range().map(|range|range.primary.index).unwrap_or(editor.caret);
                 output.state.store(ctx, id);
                 editor.request_focus = false;
             }
@@ -5299,7 +5301,6 @@ fn render_text_command_editor(ctx: &Context, state: &mut UiState) -> Option<UiAc
                         .color(Color32::from_gray(110)),
                 );
             }
-            let caret = output.state.cursor.char_range().map(|range| range.primary.index).unwrap_or(editor.caret);
             if output.response.changed() || finish || requested_focus || caret != editor.caret {
                 editor.caret = caret;
                 action = Some(UiAction::EditTextCommand(

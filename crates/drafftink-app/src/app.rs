@@ -5527,9 +5527,7 @@ impl ApplicationHandler for App {
                 state
                     .egui_state
                     .handle_platform_output(&state.window, egui_output.platform_output);
-                let egui_primitives = state
-                    .egui_ctx
-                    .tessellate(egui_output.shapes, egui_output.pixels_per_point);
+
 
                 // Handle tab operations, which need exclusive access to the
                 // whole AppState (unavailable inside the egui closure).
@@ -6065,6 +6063,10 @@ impl ApplicationHandler for App {
 
                     queue.submit(std::iter::once(blit_encoder.finish()));
                 }
+
+                let egui_primitives = state
+                    .egui_ctx
+                    .tessellate(egui_output.shapes, egui_output.pixels_per_point);
 
                 // Update egui textures
                 for (id, image_delta) in &egui_output.textures_delta.set {
