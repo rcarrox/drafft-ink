@@ -1396,7 +1396,7 @@ fn render_stopwatch(ctx: &Context, state: &mut UiState) {
                     ui.horizontal(|ui| {
                         ui.label("Police");
                         let choice = egui::ComboBox::from_id_salt(("qurso_time_font", widget.id)).selected_text(["Monospace", "Inter", "Noto Sans", "GelPen"][widget.font.min(3) as usize]).show_ui(ui, |ui| {
-                            for (index, name) in ["Monospace", "Inter", "Noto Sans", "GelPen"].into_iter().enumerate() { let response=ui.selectable_value(&mut widget.font,index as u8,name); state.test_controls.insert(format!("Time font {} {name}",widget.id),[response.rect.min.x,response.rect.min.y,response.rect.max.x,response.rect.max.y]); }
+                            for (index, name) in ["Monospace", "Inter", "Noto Sans", "GelPen"].into_iter().enumerate() { let response=ui.selectable_value(&mut widget.font,index as u8,name); state.test_controls.insert(format!("Time font {} {name}",widget.id),[response.rect.min.x,response.rect.min.y,response.rect.max.x,response.rect.max.y]); if response.clicked() { ui.close(); } }
                         });
                         state.test_controls.insert(format!("Time font {}",widget.id),[choice.response.rect.min.x,choice.response.rect.min.y,choice.response.rect.max.x,choice.response.rect.max.y]);
                     });

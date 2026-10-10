@@ -193,16 +193,21 @@
             if(!r.ok) throw new Error('Cursor unavailable'); return r.text();
         })));
         let cursorSVG=null, cursorCanvas=null, cursorObserver=null;
-        let cursorKind=0, forceUiCursor=false, cursorOutline='#000000', cursorValue='';
+        let cursorKind=0, forceUiCursor=false, forceResizeCursor='', cursorOutline='#000000', cursorValue='';
         function applyCursor() {
             if(!cursorSVG || !cursorCanvas) return;
+            if(forceResizeCursor) {
+                if(cursorCanvas.style.cursor!==forceResizeCursor) cursorCanvas.style.cursor=forceResizeCursor;
+                return;
+            }
             const native=cursorCanvas.style.cursor;
             if(!forceUiCursor && /resize|grab|move|pointer|none/.test(native) && !native.startsWith('url(')) return;
             if(cursorCanvas.style.cursor!==cursorValue) cursorCanvas.style.cursor=cursorValue;
         }
-        window.drafftinkSetCursor=function(kind,color,overUi=false) {
+        window.drafftinkSetCursor=function(kind,color,overUi=false,resizeCursor='') {
             kind=kind===true?1:Math.max(0,Math.min(6,Number(kind)||0));
             forceUiCursor=overUi;
+            forceResizeCursor=/^(nwse|nesw|ns|ew)-resize$/.test(resizeCursor)?resizeCursor:'';
             const canvas=document.querySelector('canvas');
             if(canvas!==cursorCanvas) {
                 cursorObserver?.disconnect(); cursorCanvas=canvas;

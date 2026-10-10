@@ -2094,12 +2094,17 @@ fn apply_browser_cursor(state: &AppState) {
             let (kind, over_ui) = browser_cursor_kind(state);
             let c = state.ui_state.settings.cursor_outline;
             let color = format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2]);
-            let _ = function.call3(
-                browser.as_ref(),
-                &JsValue::from_f64(kind as f64),
-                &JsValue::from_str(&color),
-                &JsValue::from_bool(over_ui),
-            );
+            let resize = match state.ui_state.time_resize_cursor {
+                Some(egui::CursorIcon::ResizeNwSe) => "nwse-resize",
+                Some(egui::CursorIcon::ResizeNeSw) => "nesw-resize",
+                _ => "",
+            };
+            let arguments = js_sys::Array::new();
+            arguments.push(&JsValue::from_f64(kind as f64));
+            arguments.push(&JsValue::from_str(&color));
+            arguments.push(&JsValue::from_bool(over_ui));
+            arguments.push(&JsValue::from_str(resize));
+            let _ = function.apply(browser.as_ref(), &arguments);
         }
     }
 }

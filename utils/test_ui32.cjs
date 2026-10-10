@@ -83,7 +83,7 @@ const evidence=path.resolve('work/e2e/evidence');fs.mkdirSync(evidence,{recursiv
   const widget=()=>state().then(s=>s.controls[`Time widget ${id}`]);
   let rect=await widget();await page.mouse.move((rect[0]+rect[2])/2,(rect[1]+rect[3])/2);await page.waitForTimeout(150);await page.mouse.click((rect[0]+rect[2])/2,(rect[1]+rect[3])/2,{delay:70});
   await click(`Time options ${id}`);await click(`Time font ${id}`);await click(`Time font ${id} Inter`);await wait(s=>s.time_widgets[0].font===1);
-  await click(`Time options close ${id}`);await key('d');
+  await click(`Time options close ${id}`);await wait(s=>!s.controls[`Time options open ${id}`]);await key('d');
   rect=await widget();await page.mouse.move((rect[0]+rect[2])/2,(rect[1]+rect[3])/2);await page.waitForTimeout(150);
   const corner=(await state()).controls[`Time resize ${id} 3`];
   await page.mouse.move(corner[2]-2,(corner[1]+corner[3])/2);await page.waitForTimeout(250);
