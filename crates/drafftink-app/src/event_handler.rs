@@ -1914,7 +1914,7 @@ mod contour_eraser_regressions {
             .get_cursor_for_position(&canvas, Point::new(100.0, 80.0))
             .is_some_and(|cursor| cursor.is_some()), "a fresh object's resize handle should expose its resize cursor");
         assert_eq!(
-            handler.get_cursor_for_position(&canvas, Point::new(50.0, 0.0)),
+            handler.get_cursor_for_position(&canvas, Point::new(30.0, 0.0)),
             Some(None),
             "a fresh object's edge should expose its move cursor"
         );
