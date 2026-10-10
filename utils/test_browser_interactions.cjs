@@ -41,7 +41,10 @@ function inspectCapture(file) {
 (async () => {
   const browser = await chromium.launch({ channel: 'chromium', headless: true, args: ['--enable-unsafe-webgpu', '--use-angle=swiftshader'] });
   const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, permissions: ['clipboard-read','clipboard-write'] });
-  await context.addInitScript(() => localStorage.setItem('drafftink.user_settings.v1', JSON.stringify({ restore_last_document: false, intro_json: '', autosave_enabled: false, hide_properties: false, default_font: 'Noto Sans', default_font_postscript: '' })));
+  await context.addInitScript(() => {
+    const key='drafftink.user_settings.v1';
+    if(!localStorage.getItem(key)) localStorage.setItem(key, JSON.stringify({ restore_last_document: false, intro_json: '', autosave_enabled: false, hide_properties: false, default_font: 'Noto Sans', default_font_postscript: '' }));
+  });
   let page = await context.newPage();
   const logs = [];
   page.on('console', message => logs.push(message.type() + ': ' + message.text()));
@@ -204,9 +207,27 @@ function inspectCapture(file) {
     const originalPalette=openedPalette.controls.laser_palette;
     const laserButton=openedPalette.controls.tool_LaserPointer;
     assert(Math.abs(originalPalette[0]-laserButton[2]-12)<3,'Laser palette should stay attached to the toolbar beside its laser button');
+    const customColorButton=openedPalette.controls.laser_custom_button;
+    await page.mouse.click((customColorButton[0]+customColorButton[2])/2,(customColorButton[1]+customColorButton[3])/2);
+    const expandedLaser=await wait(s=>s.laser_palette_open&&!!s.controls.laser_custom_picker);
+    const picker=expandedLaser.controls.laser_custom_picker;
+    const shapesBeforePicker=expandedLaser.shapes.length;
+    await page.mouse.move(picker[0]+35,picker[1]+35);await page.mouse.down();
+    await page.mouse.move(picker[0]+110,picker[1]+105,{steps:8});await page.mouse.up();
+    await wait(s=>s.laser_palette_open&&s.shapes.length===shapesBeforePicker);
     await page.mouse.click(1120,650);await wait(s=>!s.laser_palette_open);
-    await page.keyboard.press('s');await wait(s=>s.tool==='Select');
-    await page.mouse.move(780,460);await page.keyboard.press('r');await wait(s=>s.tool==='Rectangle');
+    await page.mouse.click(28,28);
+    await wait(s=>!!s.controls['Menu Settings']);
+    await control('Menu Settings');
+    let settingsState=await wait(s=>!!s.controls['Settings stroke color 0']);
+    await control('Settings tab Data');
+    await wait(s=>!s.controls['Settings stroke color 0']);
+    await control('Settings tab Apparence');
+    settingsState=await wait(s=>!!s.controls['Settings stroke color 0']);
+    await page.keyboard.press('Escape');
+    await wait(s=>!s.controls['Settings stroke color 0']);
+    await page.keyboard.press('r');await wait(s=>s.tool==='Rectangle');
+    await page.mouse.move(780,460);
     await page.mouse.down();await page.mouse.move(900,540,{steps:5});await page.mouse.up();await wait(s=>s.shapes.length===2&&s.selected_count===1);
     await page.keyboard.press('s');await wait(s=>s.tool==='Select');
     const firstBounds=(await state()).shapes[0].bounds;
@@ -532,6 +553,8 @@ function inspectCapture(file) {
     assert(wasmMemory.wasm_bytes>0);
     let item=(await imageState()).shapes.find(s=>s.shape.Image);
     await imagePage.mouse.click((item.bounds[0]+item.bounds[2])/2,(item.bounds[1]+item.bounds[3])/2);
+    await imagePage.waitForFunction(() => JSON.parse(window.__drafftinkTestState).selected_count===1);
+    item=(await imageState()).shapes.find(s=>s.shape.Image);
     const handle=item.handles.find(h=>h.kind==='Corner(BottomRight)');
     const fixed=item.handles.find(h=>h.kind==='Corner(TopLeft)');
     await imagePage.mouse.move(handle.x,handle.y);await imagePage.mouse.down();await imagePage.mouse.move(fixed.x-100,fixed.y-80,{steps:20});await imagePage.mouse.up();

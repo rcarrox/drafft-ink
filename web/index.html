@@ -5,7 +5,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Qurso🌿</title>
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
-    <script src="offline.js" defer></script>
+    <script>
+        // Online-only release: remove Qurso's former offline worker/cache while
+        // leaving IndexedDB (canvas recovery) and localStorage untouched.
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.getRegistrations().then(registrations => {
+                for (const registration of registrations) {
+                    if (registration.scope.startsWith(location.origin + location.pathname.replace(/[^/]*$/, ''))) {
+                        registration.unregister();
+                    }
+                }
+            }).catch(() => {});
+        }
+        window.addEventListener('beforeunload', event => {
+            event.preventDefault();
+            event.returnValue = '';
+        });
+    </script>
     <style>
         * {
             margin: 0;
@@ -48,7 +64,7 @@
     <div id="app">
         <div id="loading">
             <div id="loading-mark" aria-hidden="true">🌿</div>
-            <div id="loading-text">Loading ...</div>
+            <div id="loading-text">Loading Qurso</div>
             <div id="loading-progress" style="font-size: 14px; color: #888; margin-top: 8px;"></div>
         </div>
     </div>
@@ -358,7 +374,7 @@
                 // Stream directly into WebAssembly instead of holding chunks plus a second copy.
                 const response = await fetch('./pkg/drafftink_app_bg.wasm');
                 if (!response.ok) throw new Error(`Chargement impossible (${response.status})`);
-                loadingText.textContent = 'Loading ...';
+                loadingText.textContent = 'Loading Qurso';
                 loadingProgress.textContent = '';
                 const wasm = await init({ module_or_path: response });
                 window.drafftinkMemoryUsage = () => ({
