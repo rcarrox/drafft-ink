@@ -76,7 +76,13 @@ pub struct VelloRenderer {
     /// caused repeated full decodes while the user zoomed in and out.
     image_cache: std::collections::HashMap<(u64, u32), CachedImage>,
     image_cache_clock: u64,
+    image_decode_count: u64,
     full_resolution_images: bool,
+    inline_caret_active: bool,
+    last_edit_transform: Affine,
+    last_inline_caret: Option<Rect>,
+    last_inline_caret_points: Option<[Point;4]>,
+    inline_caret_cache: std::collections::HashMap<drafftink_core::shapes::ShapeId, CachedInlineCaret>,
     /// Shape path cache for hand-drawn effects.
     /// Key: (shape_id, seed, stroke_index, roughness_bits, zoom_bucket, path_hash)
     shape_cache: std::collections::HashMap<(String, u32, u32, u64, i32, u64), CachedPath>,
@@ -185,6 +191,13 @@ fn decode_image_preview(
         format: peniko::ImageFormat::Rgba8,
         alpha_type: peniko::ImageAlphaType::Alpha,
     })
+}
+
+struct CachedInlineCaret {
+    source: String,
+    font_size: u64,
+    primary_font_id: usize,
+    positions: std::collections::HashMap<usize,Rect>,
 }
 
 struct CachedMath {
@@ -483,7 +496,13 @@ impl VelloRenderer {
             zoom: 1.0,
             image_cache: std::collections::HashMap::new(),
             image_cache_clock: 0,
+            image_decode_count: 0,
             full_resolution_images: false,
+            inline_caret_active: false,
+            last_edit_transform: Affine::IDENTITY,
+            last_inline_caret: None,
+            last_inline_caret_points: None,
+            inline_caret_cache: Default::default(),
             shape_cache: std::collections::HashMap::new(),
             text_cache: std::collections::HashMap::new(),
             cache_scope_prepared: false,
@@ -536,6 +555,7 @@ impl VelloRenderer {
         self.image_cache
             .retain(|(source_key, _), _| live_images.contains(source_key));
         self.math_cache.retain(|id, _| live_ids.contains(id));
+        self.inline_caret_cache.retain(|id,_|live_ids.contains(id));
         self.text_cache.retain(|(id, _), _| live_ids.contains(id));
         self.shape_cache.retain(|key, _| {
             key.0
@@ -546,6 +566,7 @@ impl VelloRenderer {
         self.cache_scope_prepared = true;
     }
 
+    pub fn image_decode_count(&self) -> u64 { self.image_decode_count }
     pub fn image_cache_bytes(&self) -> usize {
         self.image_cache.values().map(CachedImage::bytes).sum()
     }
@@ -1275,6 +1296,93 @@ impl VelloRenderer {
         })
     }
 
+    pub fn set_inline_caret_active(&mut self, active: bool) { self.inline_caret_active=active; self.last_inline_caret=None; self.last_inline_caret_points=None; }
+    pub fn inline_caret_screen(&self) -> Option<Rect> { self.last_inline_caret }
+    pub fn editing_caret_points(&self, edit: &TextEditState, formula: bool) -> Option<[Point;4]> {
+        if formula { return self.last_inline_caret_points; }
+        let scale=self.last_edit_transform.as_coeffs()[0].hypot(self.last_edit_transform.as_coeffs()[1]).max(0.001);
+        let rect=edit.cursor_geometry((1.5/scale) as f32).map(|b|Rect::new(b.x0,b.y0,b.x1,b.y1)).unwrap_or_else(||Rect::new(0.0,0.0,1.5/scale,24.0));
+        Some([rect.origin(),Point::new(rect.x1,rect.y0),Point::new(rect.x1,rect.y1),Point::new(rect.x0,rect.y1)].map(|point|self.last_edit_transform*point))
+    }
+    pub fn editing_point_from_screen(&self, point: Point) -> Point { self.last_edit_transform.inverse()*point }
+
+    pub fn measure_inline_source_caret(&mut self, text: &drafftink_core::shapes::Text, edit: &TextEditState, formula_id: drafftink_core::shapes::ShapeId, source: &str, character: usize, probe: &str) -> Option<Rect> {
+        use rex::font::backend::ttf_parser::TtfMathFont;
+        use rex::layout::engine::LayoutBuilder;
+        use rex::render::Renderer as RexRenderer;
+        let formula = text.formulas.iter().find(|f|f.math.id()==formula_id)?;
+        let byte = text.content.char_indices().nth(formula.at)?.0;
+        let bounds = edit.formula_bounds(byte).or_else(||self.text_formula_geometry(text,byte))?;
+        let local = text
+            .custom_font_postscript
+            .as_ref()
+            .and_then(|key| self.registered_font_data.get(key))
+            .or_else(|| {
+                text.custom_font
+                    .as_ref()
+                    .and_then(|key| self.registered_font_data.get(key))
+            })
+            .cloned();
+        use drafftink_core::shapes::{FontFamily, FontWeight};
+        let embedded: &[u8] = match (text.font_family, text.font_weight) {
+            (FontFamily::NotoSans, FontWeight::Heavy) => NOTO_SANS_BOLD,
+            (FontFamily::NotoSans, FontWeight::Light) => NOTO_SANS_ITALIC,
+            (FontFamily::GelPen, FontWeight::Light) => GELPEN_LIGHT,
+            (FontFamily::GelPen, FontWeight::Heavy) => GELPEN_HEAVY,
+            (FontFamily::GelPen, _) => GELPEN_REGULAR,
+            (FontFamily::GelPenSerif, FontWeight::Light) => GELPEN_SERIF_LIGHT,
+            (FontFamily::GelPenSerif, FontWeight::Heavy) => GELPEN_SERIF_HEAVY,
+            (FontFamily::GelPenSerif, _) => GELPEN_SERIF_MEDIUM,
+            (FontFamily::VanillaExtract, _) => VANILLA_EXTRACT,
+            (FontFamily::XitsMath, _) => XITS_MATH,
+            _ => NOTO_SANS,
+        };
+        let primary = local.as_deref().map(|v| v.as_slice()).unwrap_or(embedded);
+
+        let primary_font_id = primary.as_ptr() as usize;
+        let font_size = text.font_size.to_bits();
+        let cached = self.inline_caret_cache.get(&formula_id).filter(|c|c.source==source&&c.font_size==font_size&&c.primary_font_id==primary_font_id).and_then(|c|c.positions.get(&character)).copied();
+        let caret = if let Some(rect)=cached { rect } else {
+            let math_font = TtfMathFont::new(ttf_parser::Face::parse(XITS_MATH,0).ok()?).ok()?;
+            let font = crate::rex_backend::MixedMathFont::new(math_font,ttf_parser::Face::parse(primary,0).ok());
+            let nodes = rex::parser::parse(probe).ok()?;
+            let engine=LayoutBuilder::new(&font).font_size(text.font_size).build();
+            let layout=engine.layout(&nodes).ok()?;
+            let mut scene = Scene::new();
+            let mut backend = crate::rex_backend::VelloBackend::caret_collector(&mut scene,&font.math,font.primary.as_ref());
+            RexRenderer::new().render(&layout,&mut backend);
+            let rect = backend.caret_geometry()?;
+            let cache = self.inline_caret_cache.entry(formula_id).or_insert_with(||CachedInlineCaret{source:source.into(),font_size,primary_font_id,positions:Default::default()});
+            if cache.source!=source || cache.font_size!=font_size || cache.primary_font_id!=primary_font_id { cache.source=source.into();cache.font_size=font_size;cache.primary_font_id=primary_font_id;cache.positions.clear(); }
+            cache.positions.insert(character,rect);
+            rect
+        };
+        let axis = crate::text_editor::math_layout_axis(XITS_MATH,0,text.font_size as f32) as f64;
+        let offset = Affine::translate((bounds.x0+2.0,bounds.y0+bounds.height()*0.5+axis));
+        Some((self.last_edit_transform*offset).transform_rect_bbox(caret))
+    }
+
+    pub fn draw_inline_source_caret(&mut self, text: &drafftink_core::shapes::Text, edit: &TextEditState, formula_id: drafftink_core::shapes::ShapeId, source: &str, character: usize, probe: &str) {
+        self.last_inline_caret=self.measure_inline_source_caret(text,edit,formula_id,source,character,probe);
+        if let Some(formula)=text.formulas.iter().find(|f|f.math.id()==formula_id) {
+            if let Some(byte)=text.content.char_indices().nth(formula.at).map(|(b,_)|b) {
+                if let (Some(bounds),Some(caret))=(edit.formula_bounds(byte),self.inline_caret_cache.get(&formula_id).and_then(|c|c.positions.get(&character)).copied()) {
+                    let axis=crate::text_editor::math_layout_axis(XITS_MATH,0,text.font_size as f32) as f64;
+                    let transform=self.last_edit_transform*Affine::translate((bounds.x0+2.0,bounds.y0+bounds.height()*0.5+axis));
+                    let scale=transform.as_coeffs()[0].hypot(transform.as_coeffs()[1]).max(0.001);
+                    let rect=Rect::new(caret.x0,caret.y0,caret.x0+1.5/scale,caret.y1);
+                    self.last_inline_caret_points=Some([rect.origin(),Point::new(rect.x1,rect.y0),Point::new(rect.x1,rect.y1),Point::new(rect.x0,rect.y1)].map(|point|transform*point));
+                }
+            }
+        }
+    }
+
+    pub fn draw_inline_active_block(&mut self, start: Rect, end: Rect) {
+        let rect=Rect::new(start.x0.min(end.x0),start.y0.min(end.y0),start.x1.max(end.x1),start.y1.max(end.y1)).inflate(2.0,2.0);
+        self.scene.fill(Fill::NonZero,Affine::IDENTITY,self.selection_color.with_alpha(0.08),None,&rect);
+        self.scene.stroke(&Stroke::new(0.6),Affine::IDENTITY,self.selection_color.with_alpha(0.45),None,&rect);
+    }
+
     fn prepare_inline_formulas(
         &mut self,
         text: &drafftink_core::shapes::Text,
@@ -1700,17 +1808,25 @@ impl VelloRenderer {
     fn render_image(&mut self, image: &drafftink_core::shapes::Image, transform: Affine) {
         let source_key = image.data_base64.key();
         self.image_cache_clock = self.image_cache_clock.wrapping_add(1);
-        let needed = ((image.width * self.zoom / image.crop.width().max(0.001))
-            .max(image.height * self.zoom / image.crop.height().max(0.001)))
-        .ceil();
-        let bucket = (needed.clamp(1.0, MAX_PREVIEW_SIDE as f64) as u32).next_power_of_two();
+        // Camera zoom must not increase previews of viewport-pinned images.
+        let coefficients = transform.as_coeffs();
+        let scale_x = coefficients[0].hypot(coefficients[1]);
+        let scale_y = coefficients[2].hypot(coefficients[3]);
+        let needed = (image.width * scale_x / image.crop.width().max(0.001))
+            .max(image.height * scale_y / image.crop.height().max(0.001)).ceil();
+        let source_side = image.source_width.max(image.source_height);
+        let source_side = if source_side==0 {MAX_PREVIEW_SIDE} else {source_side};
+        let bucket = (needed.min(source_side as f64).clamp(1.0, MAX_PREVIEW_SIDE as f64) as u32).next_power_of_two();
+        let reusable = self.image_cache.keys().filter(|(key, side)| *key==source_key && *side>=bucket && *side<=bucket.saturating_mul(2)).min_by_key(|(_,side)| *side).copied();
         let image_data = if self.full_resolution_images {
             // Full-quality exports don't replace or retain the display preview.
+            self.image_decode_count += 1;
             decode_image_preview(image, 0)
-        } else if let Some(cached) = self.image_cache.get_mut(&(source_key, bucket)) {
+        } else if let Some(cached) = reusable.and_then(|key|self.image_cache.get_mut(&key)) {
             cached.last_used = self.image_cache_clock;
             Some(cached.image.clone())
         } else {
+            self.image_decode_count += 1;
             let decoded = decode_image_preview(image, bucket);
             if let Some(data) = &decoded {
                 self.image_cache.insert(
@@ -2168,6 +2284,7 @@ impl VelloRenderer {
         let text_transform = text_transform
             * Affine::scale_non_uniform(text.display_scale[0], text.display_scale[1]);
 
+        self.last_edit_transform = text_transform;
         self.append_inline_formulas(text, &styled_layout, text_transform);
         self.draw_underlines(text, &styled_layout, text_transform, text.font_size as f32);
         self.draw_overlines_and_vectors(text, &styled_layout, text_transform, text.font_size as f32);
@@ -2250,7 +2367,7 @@ impl VelloRenderer {
         });
 
         // Draw cursor if visible (now layout is computed)
-        if edit_state.is_cursor_visible() {
+        if edit_state.is_cursor_visible() && !self.inline_caret_active {
             if let Some(cursor) = edit_state.cursor_geometry(1.5) {
                 // Cursor color (contrasting with text)
                 let cursor_color = Color::from_rgba8(0, 0, 0, 255);
@@ -3814,7 +3931,7 @@ mod memory_budget_tests {
         assert!(source.shares_storage(&image.data_base64));
         // A zoom increase refreshes the preview without changing source/crop/geometry.
         renderer.zoom = 10.0;
-        renderer.render_image(&image, Affine::IDENTITY);
+        renderer.render_image(&image, Affine::scale(10.0));
         assert!(renderer.image_cache_bytes() > 156672);
         assert!(renderer.image_cache_bytes() <= IMAGE_CACHE_BUDGET);
         assert!(renderer.image_cache.contains_key(&(image.data_base64.key(), 256)));
@@ -3823,6 +3940,25 @@ mod memory_budget_tests {
         renderer.render_image(&image, Affine::IDENTITY);
         assert_eq!(renderer.image_cache_bytes(), cached_before, "returning to a nearby zoom should reuse its decoded preview");
         assert_eq!(source, image.data_base64);
+    }
+
+    #[test]
+    fn pinned_preview_ignores_camera_zoom_and_never_upscales_past_source() {
+        let image=fixture_image().with_size(1200.0,2000.0);
+        let mut renderer=VelloRenderer::new();
+        renderer.zoom=0.5;
+        renderer.render_image(&image,Affine::IDENTITY);
+        let bytes=renderer.image_cache_bytes();
+        let decodes=renderer.image_decode_count();
+        for zoom in [1.0,2.0,8.0,0.25] {
+            renderer.zoom=zoom;
+            renderer.render_image(&image,Affine::IDENTITY);
+            assert_eq!(renderer.image_decode_count(),decodes);
+            assert_eq!(renderer.image_cache_bytes(),bytes);
+        }
+        renderer.render_image(&image,Affine::scale(8.0));
+        assert_eq!(renderer.image_decode_count(),decodes,"full native preview is reused at high zoom");
+        assert_eq!(renderer.image_cache.len(),1);
     }
     #[test]
     fn lru_budget_evicts_oldest_and_switching_canvas_releases_decoded_images() {
@@ -4020,5 +4156,31 @@ mod raw_latex_tests {
         ] {
             assert!(renderer.formula_is_valid(text), "{text}");
         }
+    }
+}
+
+#[cfg(test)]
+mod inline_source_caret_tests {
+    use super::*;
+    use drafftink_core::shapes::{Text,Math,InlineFormula,FontFamily};
+    #[test]
+    fn source_caret_is_inside_the_denominator_and_follows_nested_layout() {
+        let mut text=Text::new(Point::ZERO,"\u{fffc}".into());
+        text.font_family=FontFamily::NotoSans;
+        let math=Math::new(Point::ZERO,r"\frac{123}{7895}".into());
+        let id=math.id();
+        text.formulas.push(InlineFormula{at:0,math,kind:"Code".into(),parts:Default::default()});
+        let mut edit=TextEditState::new(&text.content,text.font_size as f32);
+        let mut renderer=VelloRenderer::new();
+        renderer.render_text_editing(&text,&mut edit,Affine::IDENTITY,None);
+        let source="frac(123,7895)";
+        let middle=renderer.measure_inline_source_caret(&text,&edit,id,source,12,r"\frac{123}{789\color{red}{\rule{0em}{0.0001em}}5}").unwrap();
+        let numerator=renderer.measure_inline_source_caret(&text,&edit,id,source,7,r"\frac{12\color{red}{\rule{0em}{0.0001em}}3}{7895}").unwrap();
+        let end=renderer.measure_inline_source_caret(&text,&edit,id,source,14,r"\frac{123}{7895}\color{red}{\rule{0em}{0.0001em}}").unwrap();
+        assert!(middle.center().y>numerator.center().y+5.0);
+        assert!(middle.x0<end.x0-2.0,"caret between 9 and 5 must not be after the fraction");
+        assert_eq!(text.formulas[0].math.latex,r"\frac{123}{7895}");
+        let nested=renderer.measure_inline_source_caret(&text,&edit,id,"nested",0,r"\frac{1}{\frac{9\color{red}{\rule{0em}{0.0001em}}5}{2}}").unwrap();
+        assert!(nested.height()<end.height(),"nested scripts adapt caret size");
     }
 }

@@ -179,15 +179,15 @@ fn convert_atom_text(input: &str) -> String {
     }
 
     out = out
-        .replace('π', r"\pi")
-        .replace('θ', r"\theta")
-        .replace('∞', r"\infty")
-        .replace('≤', r"\le")
-        .replace('≥', r"\ge")
-        .replace('≠', r"\ne")
-        .replace('→', r"\to")
-        .replace('×', r"\times")
-        .replace('·', r"\cdot");
+        .replace('π', r"\pi ")
+        .replace('θ', r"\theta ")
+        .replace('∞', r"\infty ")
+        .replace('≤', r"\le ")
+        .replace('≥', r"\ge ")
+        .replace('≠', r"\ne ")
+        .replace('→', r"\to ")
+        .replace('×', r"\times ")
+        .replace('·', r"\cdot ");
 
     out
 }
@@ -589,6 +589,8 @@ pub fn live_command_latex(source: &str) -> Option<String> {
     for argument in &mut args {
         if argument.trim().is_empty() {
             *argument = r"\cdot".into();
+        } else if argument.trim() == "\u{e000}" {
+            *argument = "\u{e000}\\cdot".into();
         } else if let Some(nested) = live_command_latex(argument) {
             *argument = nested;
         }
@@ -682,6 +684,82 @@ pub fn command_example(source: &str) -> Option<&'static str> {
         "lim" => Some("lim(x,x,5)"),
         "bin" => Some("bin(n,k)"),
         _ => None,
+    }
+}
+
+/// A zero-width layout probe, never stored in the document or exported.
+pub fn live_command_caret_latex(source: &str, character: usize) -> Option<String> {
+    const MARKER: &str = r"\color{red}{\rule{0em}{0.0001em}}";
+    let length = source.chars().count();
+    if character >= length && source.trim_end().ends_with(')') {
+        return Some(format!("{}{}", live_command_latex(source)?, MARKER));
+    }
+    let mut character = character.min(length);
+    let chars: Vec<char> = source.chars().collect();
+    let mut start = 0;
+    while start < chars.len() {
+        if chars[start].is_ascii_alphabetic() {
+            let mut end = start + 1;
+            while end < chars.len() && chars[end].is_ascii_alphabetic() { end += 1; }
+            if chars.get(end) == Some(&'(') && character >= start && character <= end {
+                character = end + 1;
+            }
+            start = end;
+        } else { start += 1; }
+    }
+    let byte = source.char_indices().nth(character).map(|(byte,_)|byte).unwrap_or(source.len());
+    let mut marked = source.to_string();
+    marked.insert(byte, '\u{e000}');
+    let latex = live_command_latex(&marked)?;
+    Some(latex.replace('\u{e000}', MARKER))
+}
+
+pub fn command_caret_candidates(source: &str) -> Vec<usize> {
+    let chars: Vec<char> = source.chars().collect();
+    let mut hidden = std::collections::HashSet::new();
+    let mut start = 0;
+    while start < chars.len() {
+        if chars[start].is_ascii_alphabetic() {
+            let mut end = start + 1;
+            while end < chars.len() && chars[end].is_ascii_alphabetic() { end += 1; }
+            if chars.get(end) == Some(&'(') { hidden.extend(start..=end); }
+            start = end;
+        } else { start += 1; }
+    }
+    (0..=chars.len()).filter(|i| !hidden.contains(i)).collect()
+}
+
+/// Innermost argument containing the source caret, including unfinished commands.
+pub fn command_active_range(source: &str, caret: usize) -> Option<std::ops::Range<usize>> {
+    let mut stack = Vec::new();
+    let mut candidates = Vec::new();
+    let length = source.chars().count();
+    for (index, c) in source.chars().enumerate() {
+        match c {
+            '(' => stack.push(index + 1),
+            ',' => if let Some(start) = stack.last_mut() { candidates.push(*start..index); *start = index + 1; },
+            ')' => if let Some(start) = stack.pop() { candidates.push(start..index); },
+            _ => {},
+        }
+    }
+    candidates.extend(stack.into_iter().map(|start|start..length));
+    candidates.into_iter().filter(|range|caret>=range.start&&caret<=range.end).min_by_key(|range|range.len())
+}
+
+#[cfg(test)]
+mod live_caret_tests {
+    use super::*;
+    #[test]
+    fn probe_follows_the_source_without_altering_it() {
+        let source = "frac(123,7895)";
+        let caret = source.find('5').unwrap();
+        let probe = live_command_caret_latex(source,caret).unwrap();
+        assert!(probe.contains(r"789\color{red}{\rule{0em}{0.0001em}}5"));
+        let nested = live_command_caret_latex("frac(1,frac(π,95))",14).unwrap();
+        assert!(nested.contains("red"));
+        assert_eq!(source,"frac(123,7895)");
+        assert!(!command_caret_candidates(source).contains(&2));
+        assert!(command_caret_candidates(source).contains(&caret));
     }
 }
 

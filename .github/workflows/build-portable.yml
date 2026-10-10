@@ -94,7 +94,7 @@ jobs:
           cp README_WEB_FR.md dist/windows-portable/
           rm -rf dist/windows-portable/web/pdfjs
           rm -f dist/windows-portable/web/sw.template.js dist/windows-portable/web/offline.js dist/windows-portable/web/sw.js
-          (cd dist/windows-portable && zip -qr ../Qurso_Windows_Portable_0.31.0.zip .)
+          (cd dist/windows-portable && zip -qr ../Qurso_Windows_Portable_0.32.0.zip .)
 
       - name: Assemble web package
         shell: bash
@@ -105,31 +105,31 @@ jobs:
           cp README_WEB_FR.md EVOLUTIONS.md dist/web/
           rm -rf dist/web/pdfjs
           rm -f dist/web/sw.template.js dist/web/offline.js dist/web/sw.js
-          (cd dist/web && zip -qr ../Qurso_Web_0.31.0.zip .)
+          (cd dist/web && zip -qr ../Qurso_Web_0.32.0.zip .)
 
       - name: Verify portable ZIP
-        run: python3 utils/verify_portable.py dist/Qurso_Windows_Portable_0.31.0.zip --version 0.31.0
+        run: python3 utils/verify_portable.py dist/Qurso_Windows_Portable_0.32.0.zip --version 0.32.0
 
       - name: Upload Windows portable ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: Qurso-Windows-Portable-0.31.0
-          path: dist/Qurso_Windows_Portable_0.31.0.zip
+          name: Qurso-Windows-Portable-0.32.0
+          path: dist/Qurso_Windows_Portable_0.32.0.zip
           if-no-files-found: error
           retention-days: 30
 
       - name: Upload web ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: Qurso-Web-0.31.0
-          path: dist/Qurso_Web_0.31.0.zip
+          name: Qurso-Web-0.32.0
+          path: dist/Qurso_Web_0.32.0.zip
           if-no-files-found: error
           retention-days: 30
 
       - name: Upload combined Local and FTP ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: Qurso-Local-et-FTP-0.31.0
-          path: dist/Qurso_Windows_Portable_0.31.0.zip
+          name: Qurso-Local-et-FTP-0.32.0
+          path: dist/Qurso_Windows_Portable_0.32.0.zip
           if-no-files-found: error
           retention-days: 30

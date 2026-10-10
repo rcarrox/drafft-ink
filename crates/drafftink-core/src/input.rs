@@ -44,6 +44,7 @@ pub struct InputState {
     pinch_center: Option<Point>,
     /// Modifier state from the platform event stream. Keeping it explicitly
     /// avoids losing modified arrows when an egui panel retains keyboard focus.
+    shortcut_modifiers: Option<[bool; 3]>,
     ctrl_down: bool,
     shift_down: bool,
     alt_down: bool,
@@ -67,6 +68,7 @@ impl InputState {
             touches: [None, None],
             pinch_distance: None,
             pinch_center: None,
+            shortcut_modifiers: None,
             ctrl_down: false,
             shift_down: false,
             alt_down: false,
@@ -188,16 +190,20 @@ impl InputState {
 
     // --- Modifiers ---
 
+    pub fn override_shortcut_modifiers(&mut self, ctrl: bool, shift: bool, alt: bool) { self.shortcut_modifiers=Some([ctrl,shift,alt]); }
+    pub fn clear_shortcut_modifiers(&mut self) { self.shortcut_modifiers=None; }
+    pub fn shortcut_modifiers(&self) -> Option<[bool;3]> { self.shortcut_modifiers }
+
     pub fn shift(&self) -> bool {
-        self.shift_down || self.helper.held_shift()
+        self.shortcut_modifiers.map_or_else(|| self.shift_down || self.helper.held_shift(), |m|m[1])
     }
 
     pub fn ctrl(&self) -> bool {
-        self.ctrl_down || self.helper.held_control()
+        self.shortcut_modifiers.map_or_else(|| self.ctrl_down || self.helper.held_control(), |m|m[0])
     }
 
     pub fn alt(&self) -> bool {
-        self.alt_down || self.helper.held_alt()
+        self.shortcut_modifiers.map_or_else(|| self.alt_down || self.helper.held_alt(), |m|m[2])
     }
 
     // --- Custom logic ---

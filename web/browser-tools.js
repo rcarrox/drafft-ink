@@ -1,8 +1,20 @@
+const qursoClockFormatters = new Map();
 window.qursoClockNow = timeZone => {
-    const options = {year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'};
-    if (timeZone && timeZone !== 'Local') options.timeZone = timeZone;
-    const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', options).formatToParts(new Date()).map(({type, value}) => [type, value]));
-    return `${parts.year}-${parts.month}-${parts.day}|${parts.hour}:${parts.minute}:${parts.second}`;
+    const zone=timeZone||'Local';
+    let entry=qursoClockFormatters.get(zone);
+    if (!entry) {
+        const options={year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'};
+        if(zone!=='Local')options.timeZone=zone;
+        entry={formatter:new Intl.DateTimeFormat('en-CA',options)};
+        qursoClockFormatters.set(zone,entry);
+    }
+    const now=Date.now(),second=Math.floor(now/1000);
+    if(entry.second!==second) {
+        const parts=Object.fromEntries(entry.formatter.formatToParts(new Date(now)).map(({type,value})=>[type,value]));
+        entry.value=parts.year+'-'+parts.month+'-'+parts.day+'|'+parts.hour+':'+parts.minute+':'+parts.second;
+        entry.second=second;
+    }
+    return entry.value;
 };
 // User presets live in IndexedDB so sizable transparent PNG diagrams do not
 // consume localStorage quota. Their display names are independent of filenames.
@@ -110,3 +122,22 @@ window.qursoPickSettings = () => new Promise(resolve => {
     input.oncancel = () => { input.remove(); resolve(null); }; input.click();
 });
 window.qursoOpenNumworks = () => window.open(new URL('numworks/', document.baseURI).href, '_blank', 'noopener,noreferrer');
+
+// Configurable application bindings; no browser reload/address-bar action leaks through.
+window.qursoBindingString = (key, ctrl=false, shift=false, alt=false) => {
+    key = ({'+':'Plus','Esc':'Escape','Del':'Delete','up':'ArrowUp','down':'ArrowDown','left':'ArrowLeft','right':'ArrowRight'})[key] || key;
+    if (key.length===1) key=key.toUpperCase();
+    if (['Plus','?','!','@','#','$','%','&','*','(',')','_',':','"','<','>','{','}'].includes(key)) shift=false;
+    return [ctrl?'Ctrl':null,shift?'Shift':null,alt?'Alt':null,key].filter(Boolean).join('+').toUpperCase();
+};
+window.qursoShortcutMatches = (id, fallback, event) => {
+    let settings={}; try { settings=JSON.parse(localStorage.getItem('drafftink.user_settings.v1')||'{}'); } catch {}
+    const value=settings.shortcut_overrides?.[id] ?? fallback;
+    const normalize=value=>value.replace(/\s+/g,'').toUpperCase();
+    return normalize(value)===qursoBindingString(event.key,event.ctrlKey||event.metaKey,event.shiftKey,event.altKey);
+};
+window.qursoCustomShortcutMatches = event => {
+    let settings={}; try { settings=JSON.parse(localStorage.getItem('drafftink.user_settings.v1')||'{}'); } catch {}
+    const actual=qursoBindingString(event.key,event.ctrlKey||event.metaKey,event.shiftKey,event.altKey);
+    return Object.values(settings.shortcut_overrides||{}).concat(Object.keys(settings).filter(k=>k.startsWith('shortcut_')&&k!=='shortcut_overrides').map(k=>settings[k])).some(value=>typeof value==='string'&&value.replace(/\s+/g,'').toUpperCase()===actual);
+};
