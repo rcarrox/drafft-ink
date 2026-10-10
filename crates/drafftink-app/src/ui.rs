@@ -287,6 +287,7 @@ pub struct TimeWidgetState {
     pub selected: bool,
     pub position: Pos2,
     pub size: Vec2,
+    pub rendered_rect: Option<Rect>,
     pub resize_origin_size: Option<Vec2>,
     pub resize_origin_position: Option<Pos2>,
     pub resize_origin_pointer: Option<Pos2>,
@@ -317,7 +318,7 @@ impl TimeWidgetState {
     pub fn new(id: u64, position: Pos2) -> Self {
         Self {
             id, open: true, selected: false, position, size: Vec2::new(260.0, 112.0),
-            resize_origin_size: None, resize_origin_position: None, resize_origin_pointer: None, active_resize_index: None,
+            rendered_rect: None, resize_origin_size: None, resize_origin_position: None, resize_origin_pointer: None, active_resize_index: None,
             move_origin_position: None, move_origin_pointer: None, mode: 0,
             stopwatch_running: false, stopwatch_elapsed: 0.0, stopwatch_started_at: None,
             countdown_seconds: 300, countdown_remaining: 300.0, countdown_started_at: None,
@@ -1116,7 +1117,7 @@ fn render_stopwatch(ctx: &Context, state: &mut UiState) {
         let pointer_released = ctx.input(|input| input.pointer.primary_released());
         if pointer_pressed {
             if let Some(pointer) = ctx.input(|input| input.pointer.interact_pos()) {
-                let widget_rect = Rect::from_min_size(widget.position, widget.size);
+                let widget_rect = widget.rendered_rect.unwrap_or_else(|| Rect::from_min_size(widget.position, widget.size));
                 let was_selected = widget.selected;
                 widget.selected = widget_rect.expand(14.0).contains(pointer);
                 if widget.selected && was_selected {
@@ -1177,6 +1178,7 @@ fn render_stopwatch(ctx: &Context, state: &mut UiState) {
                     .stroke(Stroke::new(2.0, if widget.selected { Color32::from_rgb(80, 145, 255) } else { Color32::from_rgba_unmultiplied(255,255,255,28) }))
                     .corner_radius(CornerRadius::same(12)).inner_margin(Margin::same(12)).show(ui, |ui| {
                         ui.set_min_size(widget.size);
+                        ui.set_max_size(widget.size);
                         if widget.selected {
                             ui.horizontal(|ui| {
                                 ui.add_space((widget.size.x - 48.0).max(0.0));
@@ -1216,6 +1218,7 @@ fn render_stopwatch(ctx: &Context, state: &mut UiState) {
                     });
                 if widget.selected {
                     let rect = frame.response.rect;
+                    widget.rendered_rect = Some(rect);
                     let painter = ui.painter();
                     let radius = 4.0;
                     for (index, point) in [rect.left_top(), rect.right_top(), rect.left_bottom(), rect.right_bottom()].into_iter().enumerate() {
@@ -1225,6 +1228,8 @@ fn render_stopwatch(ctx: &Context, state: &mut UiState) {
                         painter.circle_filled(point, radius, Color32::WHITE);
                         painter.circle_stroke(point, radius, Stroke::new(1.2, Color32::from_rgb(65, 135, 255)));
                     }
+                } else {
+                    widget.rendered_rect = Some(frame.response.rect);
                 }
             });
         widget.selected |= area.response.hovered() || area.response.dragged() || area.response.clicked();
