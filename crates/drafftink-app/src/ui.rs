@@ -321,6 +321,7 @@ pub struct TimeWidgetState {
     pub alarm_minute: u8,
     pub alarm_last_fired: String,
     pub options_open: bool,
+    pub options_close_rect: Option<Rect>,
     pub stopwatch_centiseconds: bool,
     pub clock_seconds: bool,
     pub timezone: String,
@@ -340,7 +341,7 @@ impl TimeWidgetState {
             stopwatch_running: false, stopwatch_elapsed: 0.0, stopwatch_started_at: None,
             countdown_seconds: 300, countdown_remaining: 300.0, countdown_started_at: None,
             alarm_enabled: false, alarm_hour: 8, alarm_minute: 0, alarm_last_fired: String::new(),
-            options_open: false, stopwatch_centiseconds: true, clock_seconds: false,
+            options_open: false, options_close_rect: None, stopwatch_centiseconds: true, clock_seconds: false,
             timezone: "Local".into(), text_color: Color32::WHITE,
             background_color: Color32::from_rgb(42, 42, 42), text_size: 2, font: 0, displayed: String::new(),
         }
@@ -1152,6 +1153,15 @@ fn render_stopwatch(ctx: &Context, state: &mut UiState) {
     let mut remove = Vec::new();
     for widget in &mut state.time_widgets {
         if !widget.open { remove.push(widget.id); continue; }
+        // Own the close gesture at press time, including after a nested popup.
+        if widget.options_open && time_pointer_enabled
+            && ctx.input(|input| input.pointer.primary_pressed()
+                && input.pointer.interact_pos().is_some_and(|p| widget.options_close_rect.is_some_and(|rect| rect.contains(p))))
+        {
+            widget.options_open = false;
+            ctx.request_repaint();
+        }
+        if !widget.options_open { widget.options_close_rect = None; }
         let now = StatusInstant::now();
         let elapsed = widget.stopwatch_elapsed + widget.stopwatch_started_at.map_or(0.0, |at| at.elapsed().as_secs_f64());
         let remaining = (widget.countdown_remaining - widget.countdown_started_at.map_or(0.0, |at| at.elapsed().as_secs_f64())).max(0.0);
@@ -1360,6 +1370,7 @@ fn render_stopwatch(ctx: &Context, state: &mut UiState) {
                         ui.label(egui::RichText::new("Options").strong());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let close = ui.small_button("×");
+                            widget.options_close_rect = Some(close.rect);
                             state.test_controls.insert(format!("Time options close {}",widget.id),[close.rect.min.x,close.rect.min.y,close.rect.max.x,close.rect.max.y]);
                             if close.clicked() { close_options_requested = true; }
                         });
