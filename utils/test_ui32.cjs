@@ -11,7 +11,7 @@ const evidence=path.resolve('work/e2e/evidence');fs.mkdirSync(evidence,{recursiv
  const page=await context.newPage();
  const state=()=>page.evaluate(()=>JSON.parse(window.__drafftinkTestState));
  const wait=async predicate=>{for(let i=0;i<160;i++){const s=await state().catch(()=>null);if(s&&predicate(s))return s;await page.waitForTimeout(100);}throw Error('UI32 timeout: '+JSON.stringify(await state()));};
- const click=async name=>{const s=await wait(s=>s.controls[name]);const r=s.controls[name];await page.mouse.move((r[0]+r[2])/2,(r[1]+r[3])/2);await page.waitForTimeout(120);await page.mouse.click((r[0]+r[2])/2,(r[1]+r[3])/2,{delay:70});await page.waitForTimeout(120);};
+ const click=async name=>{let s=await wait(s=>s.controls[name]),r=s.controls[name];await page.mouse.move((r[0]+r[2])/2,(r[1]+r[3])/2);await page.waitForTimeout(160);s=await state();r=s.controls[name];await page.mouse.move((r[0]+r[2])/2,(r[1]+r[3])/2);await page.waitForTimeout(120);await page.mouse.click((r[0]+r[2])/2,(r[1]+r[3])/2,{delay:80});await page.waitForTimeout(140);};
  const menu=async()=>{await page.mouse.move(28,28);await page.waitForTimeout(120);await page.mouse.click(28,28,{delay:70});await wait(s=>s.controls['Menu Settings']);};
  const key=async value=>{await page.keyboard.press(value);await page.waitForTimeout(130);};
  try {
@@ -37,7 +37,11 @@ const evidence=path.resolve('work/e2e/evidence');fs.mkdirSync(evidence,{recursiv
   assert((await state()).controls['Shortcut reset_panels'],'Panel reset shortcut must be documented');
   let pinRect=(await state()).controls['Shortcut pin'];
   while(pinRect[1]>580||pinRect[1]<95){await page.mouse.move(600,350);await page.mouse.wheel(0,pinRect[1]>580?280:-280);await page.waitForTimeout(200);pinRect=(await state()).controls['Shortcut pin'];}
-  await click('Shortcut pin');await key('Control+a');await page.keyboard.type('Alt+L');
+  await click('Shortcut pin');
+  const shortcutPanelBefore=(await state()).controls['Shortcuts panel'];
+  await key('Control+a');await page.keyboard.type('Ctrl+S');await wait(s=>s.shortcut_errors?.length>0);
+  assert.deepEqual((await state()).controls['Shortcuts panel'],shortcutPanelBefore,'Validation feedback must not move the shortcut modal');
+  await key('Control+a');await page.keyboard.type('Alt+L');await wait(s=>s.shortcut_pin==='Alt+L'&&s.shortcut_errors.length===0);
   await click('Shortcuts save');await wait(s=>!s.controls['Shortcuts panel']);
   const stored=await page.evaluate(()=>JSON.parse(localStorage.getItem('drafftink.user_settings.v1')));
   assert.equal(stored.shortcut_overrides.pin,'Alt+L');

@@ -4092,7 +4092,14 @@ fn render_shortcuts_modal(ctx: &Context, state: &mut UiState) -> Option<UiAction
                 ui.label("Dans les champs de formulaire : Échap ferme, Entrée valide, copier/coller suit le comportement de l’éditeur.");
             });
             let errors = crate::shortcut_bindings::conflicts(&state.settings);
-            if let Some(error) = errors.first() { ui.label(egui::RichText::new(error).color(Color32::from_rgb(185,40,40))); }
+            // Reserve feedback space so typing temporary invalid bindings does not
+            // move the modal or its Save button beneath the pointer.
+            ui.allocate_ui(Vec2::new(ui.available_width(),24.0),|ui| {
+                ui.set_min_height(24.0);
+                if let Some(error) = errors.first() {
+                    ui.add(egui::Label::new(egui::RichText::new(error).color(Color32::from_rgb(185,40,40))).truncate()).on_hover_text(error);
+                }
+            });
             ui.horizontal(|ui| {
                 let response=ui.add_enabled(errors.is_empty(),egui::Button::new("Enregistrer"));
                 state.test_controls.insert("Shortcuts save".into(), [response.rect.min.x,response.rect.min.y,response.rect.max.x,response.rect.max.y]);

@@ -5861,6 +5861,10 @@ impl ApplicationHandler for App {
                             status["time_widgets"] = state.ui_state.time_widgets.iter().map(|w|serde_json::json!({"id":w.id,"font":w.font,"display":w.displayed,"running":w.stopwatch_running})).collect::<Vec<_>>().into();
                             status["command_caret"] = state.ui_state.text_command_editor.as_ref().map(|e|e.caret).into();
                             status["formula_caret"] = serde_json::json!(state.shape_renderer.inline_caret_screen().map(|r|[r.x0,r.y0,r.x1,r.y1]));
+                            if state.ui_state.shortcuts_modal_open {
+                                status["shortcut_pin"] = state.ui_state.settings.shortcut_overrides.get("pin").map(String::as_str).unwrap_or("Ctrl+L").into();
+                                status["shortcut_errors"] = serde_json::json!(crate::shortcut_bindings::conflicts(&state.ui_state.settings));
+                            }
                             status["canvas_render_count"] = state.canvas_render_count.into();
                             status["image_decode_count"] = state.shape_renderer.image_decode_count().into();
                             status["stroke_colors"] = serde_json::to_value(state.ui_state.settings.stroke_colors).unwrap_or_default();
