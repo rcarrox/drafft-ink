@@ -284,8 +284,16 @@ pub struct MathEditorState {
 pub struct TimeWidgetState {
     pub id: u64,
     pub open: bool,
+    pub selected: bool,
     pub position: Pos2,
     pub size: Vec2,
+    pub rendered_rect: Option<Rect>,
+    pub resize_origin_size: Option<Vec2>,
+    pub resize_origin_position: Option<Pos2>,
+    pub resize_origin_pointer: Option<Pos2>,
+    pub active_resize_index: Option<usize>,
+    pub move_origin_position: Option<Pos2>,
+    pub move_origin_pointer: Option<Pos2>,
     pub mode: u8,
     pub stopwatch_running: bool,
     pub stopwatch_elapsed: f64,
@@ -309,7 +317,9 @@ pub struct TimeWidgetState {
 impl TimeWidgetState {
     pub fn new(id: u64, position: Pos2) -> Self {
         Self {
-            id, open: true, position, size: Vec2::new(260.0, 112.0), mode: 0,
+            id, open: true, selected: false, position, size: Vec2::new(260.0, 112.0),
+            rendered_rect: None, resize_origin_size: None, resize_origin_position: None, resize_origin_pointer: None, active_resize_index: None,
+            move_origin_position: None, move_origin_pointer: None, mode: 0,
             stopwatch_running: false, stopwatch_elapsed: 0.0, stopwatch_started_at: None,
             countdown_seconds: 300, countdown_remaining: 300.0, countdown_started_at: None,
             alarm_enabled: false, alarm_hour: 8, alarm_minute: 0, alarm_last_fired: String::new(),
@@ -997,10 +1007,19 @@ fn render_insert_panel(ctx: &Context, state: &mut UiState) -> Option<UiAction> {
                     ui.set_min_width(170.0);
                     ui.visuals_mut().override_text_color = Some(Color32::BLACK);
                     ui.visuals_mut().widgets.inactive.fg_stroke.color = Color32::BLACK;
-                    if ui.button("Image / PDF").clicked() { action = Some(UiAction::ImportMedia); state.insert_menu_open = false; }
-                    if ui.button("Time").clicked() { action = Some(UiAction::ToggleStopwatch); state.insert_menu_open = false; }
+                    ui.visuals_mut().widgets.inactive.bg_fill = Color32::TRANSPARENT;
+                    ui.visuals_mut().widgets.hovered.bg_fill = Color32::from_gray(235);
+                    ui.visuals_mut().widgets.active.bg_fill = Color32::from_gray(225);
+                    let image_pdf = ui.add(egui::Button::new("Image / PDF").fill(Color32::TRANSPARENT).stroke(Stroke::NONE));
+                    state.test_controls.insert("Insert Image / PDF".into(), [image_pdf.rect.min.x, image_pdf.rect.min.y, image_pdf.rect.max.x, image_pdf.rect.max.y]);
+                    if image_pdf.clicked() { action = Some(UiAction::ImportMedia); state.insert_menu_open = false; }
+                    let time = ui.add(egui::Button::new("Time").fill(Color32::TRANSPARENT).stroke(Stroke::NONE));
+                    state.test_controls.insert("Insert Time".into(), [time.rect.min.x, time.rect.min.y, time.rect.max.x, time.rect.max.y]);
+                    if time.clicked() { action = Some(UiAction::ToggleStopwatch); state.insert_menu_open = false; }
                     let label = if state.preset_menu_open { "Preset  ‹" } else { "Preset  ›" };
-                    if ui.button(label).clicked() {
+                    let preset = ui.add(egui::Button::new(label).fill(Color32::TRANSPARENT).stroke(Stroke::NONE));
+                    state.test_controls.insert("Insert Preset".into(), [preset.rect.min.x, preset.rect.min.y, preset.rect.max.x, preset.rect.max.y]);
+                    if preset.clicked() {
                         state.preset_menu_open = !state.preset_menu_open;
                         if state.preset_menu_open { action = Some(UiAction::ListPresets); }
                     }
@@ -1029,8 +1048,13 @@ fn render_insert_panel(ctx: &Context, state: &mut UiState) -> Option<UiAction> {
             .open(&mut state.preset_manager_open).collapsible(false).resizable(false)
             .frame(Frame::window(&ctx.style()).fill(Color32::WHITE).stroke(Stroke::new(1.0, Color32::from_gray(220))).shadow(egui::epaint::Shadow::NONE))
             .default_pos(Pos2::new(80.0, 160.0)).show(ctx, |ui| {
-                ui.visuals_mut().override_text_color = Some(Color32::from_gray(35));
-                ui.visuals_mut().widgets.inactive.fg_stroke.color = Color32::from_gray(35);
+                ui.visuals_mut().override_text_color = Some(Color32::WHITE);
+                ui.visuals_mut().widgets.inactive.bg_fill = Color32::from_gray(38);
+                ui.visuals_mut().widgets.inactive.fg_stroke.color = Color32::WHITE;
+                ui.visuals_mut().widgets.hovered.bg_fill = Color32::from_gray(65);
+                ui.visuals_mut().widgets.hovered.fg_stroke.color = Color32::WHITE;
+                ui.visuals_mut().widgets.active.bg_fill = Color32::from_gray(85);
+                ui.visuals_mut().widgets.active.fg_stroke.color = Color32::WHITE;
                 ui.label("Images PNG enregistrées dans ce navigateur.");
                 if ui.button("＋ Ajouter un PNG…").clicked() { action = Some(UiAction::AddPreset); }
                 ui.separator();
@@ -1088,39 +1112,145 @@ fn render_stopwatch(ctx: &Context, state: &mut UiState) {
         } else if hours > 0 {
             if widget.stopwatch_centiseconds { format!("{hours:02}:{minutes:02}:{seconds:02}:{centiseconds:02}") } else { format!("{hours:02}:{minutes:02}:{seconds:02}") }
         } else if widget.stopwatch_centiseconds { format!("{minutes:02}:{seconds:02}:{centiseconds:02}") } else { format!("{minutes:02}:{seconds:02}") };
+        let pointer_pressed = ctx.input(|input| input.pointer.primary_pressed());
+        let pointer_down = ctx.input(|input| input.pointer.button_down(egui::PointerButton::Primary));
+        let pointer_released = ctx.input(|input| input.pointer.primary_released());
+        if pointer_pressed {
+            if let Some(pointer) = ctx.input(|input| input.pointer.interact_pos()) {
+                let widget_rect = widget.rendered_rect.unwrap_or_else(|| Rect::from_min_size(widget.position, widget.size));
+                let was_selected = widget.selected;
+                widget.selected = widget_rect.expand(14.0).contains(pointer);
+                if widget.selected && was_selected {
+                    let corners = [widget_rect.left_top(), widget_rect.right_top(), widget_rect.left_bottom(), widget_rect.right_bottom()];
+                    if let Some(index) = corners.iter().position(|point| point.distance(pointer) <= 14.0) {
+                        widget.active_resize_index = Some(index);
+                        widget.resize_origin_size = Some(widget.size);
+                        widget.resize_origin_position = Some(widget.position);
+                        widget.resize_origin_pointer = Some(pointer);
+                        widget.move_origin_position = None;
+                        widget.move_origin_pointer = None;
+                    } else {
+                        widget.move_origin_position = Some(widget.position);
+                        widget.move_origin_pointer = Some(pointer);
+                        widget.active_resize_index = None;
+                    }
+                } else {
+                    widget.active_resize_index = None;
+                    widget.move_origin_position = None;
+                    widget.move_origin_pointer = None;
+                }
+            }
+        }
+        if pointer_down {
+            if let Some(pointer) = ctx.input(|input| input.pointer.interact_pos()) {
+                if let (Some(index), Some(origin_size), Some(origin_position), Some(pointer_origin)) = (
+                    widget.active_resize_index, widget.resize_origin_size, widget.resize_origin_position, widget.resize_origin_pointer,
+                ) {
+                    let delta = pointer - pointer_origin;
+                    let mut size = origin_size;
+                    let mut position_delta = Vec2::ZERO;
+                    if index % 2 == 0 { size.x -= delta.x; position_delta.x = delta.x; } else { size.x += delta.x; }
+                    if index < 2 { size.y -= delta.y; position_delta.y = delta.y; } else { size.y += delta.y; }
+                    let clamped = size.max(Vec2::new(180.0, 75.0));
+                    if index % 2 == 0 { position_delta.x = origin_size.x - clamped.x; }
+                    if index < 2 { position_delta.y = origin_size.y - clamped.y; }
+                    widget.size = clamped;
+                    widget.position = origin_position + position_delta;
+                } else if let (Some(origin), Some(pointer_origin)) = (widget.move_origin_position, widget.move_origin_pointer) {
+                    widget.position = origin + (pointer - pointer_origin);
+                }
+            }
+        }
+        if pointer_released {
+            widget.active_resize_index = None;
+            widget.resize_origin_size = None;
+            widget.resize_origin_position = None;
+            widget.resize_origin_pointer = None;
+            widget.move_origin_position = None;
+            widget.move_origin_pointer = None;
+        }
+        let mut settings_rect = None;
+        let mut close_rect = None;
+        let mut resize_rects = Vec::new();
         let area = egui::Area::new(egui::Id::new(("qurso_time_widget", widget.id)))
-            .current_pos(widget.position).movable(true).order(egui::Order::Foreground).show(ctx, |ui| {
-                egui::Frame::new().fill(widget.background_color).stroke(Stroke::new(2.0, Color32::from_rgba_unmultiplied(255,255,255,28)))
+            .current_pos(widget.position).movable(false).order(egui::Order::Foreground).show(ctx, |ui| {
+                let frame = egui::Frame::new().fill(widget.background_color)
+                    .stroke(Stroke::new(2.0, if widget.selected { Color32::from_rgb(80, 145, 255) } else { Color32::from_rgba_unmultiplied(255,255,255,28) }))
                     .corner_radius(CornerRadius::same(12)).inner_margin(Margin::same(12)).show(ui, |ui| {
                         ui.set_min_size(widget.size);
-                        ui.vertical_centered(|ui| {
-                            ui.label(egui::RichText::new(display).size(text_sizes[widget.text_size.min(3) as usize]).monospace().color(widget.text_color));
-                            ui.add_space(5.0);
+                        ui.set_max_size(widget.size);
+                        if widget.selected {
+                            ui.horizontal(|ui| {
+                                ui.add_space((widget.size.x - 48.0).max(0.0));
+                                let settings = ui.small_button("⚙").on_hover_text("Options du chronomètre");
+                                settings_rect = Some(settings.rect);
+                                if settings.clicked() { widget.options_open = true; }
+                                let close = ui.small_button("×").on_hover_text("Supprimer le widget");
+                                close_rect = Some(close.rect);
+                                if close.clicked() { widget.open = false; }
+                            });
+                        } else {
+                            ui.add_space(18.0);
+                        }
+                        let display_height = (widget.size.y - 48.0).max(24.0);
+                        ui.allocate_ui(Vec2::new(widget.size.x, display_height), |ui| {
+                            ui.centered_and_justified(|ui| {
+                                ui.label(egui::RichText::new(display).size(text_sizes[widget.text_size.min(3) as usize]).monospace().color(widget.text_color));
+                            });
+                        });
+                        ui.horizontal(|ui| {
                             if widget.mode != 2 {
-                                ui.horizontal(|ui| {
-                                    let running = if widget.mode == 1 { widget.countdown_started_at.is_some() } else { widget.stopwatch_running };
-                                    let icon = if running { include_image!("../assets/time-pause.svg") } else { include_image!("../assets/time-play.svg") };
-                                    let response = ui.add(egui::Image::new(icon).fit_to_exact_size(Vec2::splat(25.0)).sense(egui::Sense::click()));
-                                    if response.clicked() {
-                                        if widget.mode == 1 {
-                                            if running { widget.countdown_remaining = remaining; widget.countdown_started_at = None; }
-                                            else { if widget.countdown_remaining <= 0.0 { widget.countdown_remaining = widget.countdown_seconds as f64; } widget.countdown_started_at = Some(now); }
-                                        } else if running { widget.stopwatch_elapsed = elapsed; widget.stopwatch_started_at = None; widget.stopwatch_running = false; }
-                                        else { widget.stopwatch_started_at = Some(now); widget.stopwatch_running = true; }
-                                    }
-                                });
+                                let running = if widget.mode == 1 { widget.countdown_started_at.is_some() } else { widget.stopwatch_running };
+                                let icon = if running { include_image!("../assets/time-pause.svg") } else { include_image!("../assets/time-play.svg") };
+                                let response = ui.add(egui::Image::new(icon).fit_to_exact_size(Vec2::splat(25.0)).sense(egui::Sense::click()));
+                                if response.clicked() {
+                                    if widget.mode == 1 {
+                                        if running { widget.countdown_remaining = remaining; widget.countdown_started_at = None; }
+                                        else { if widget.countdown_remaining <= 0.0 { widget.countdown_remaining = widget.countdown_seconds as f64; } widget.countdown_started_at = Some(now); }
+                                    } else if running { widget.stopwatch_elapsed = elapsed; widget.stopwatch_started_at = None; widget.stopwatch_running = false; }
+                                    else { widget.stopwatch_started_at = Some(now); widget.stopwatch_running = true; }
+                                }
                             }
-                            let resize = ui.allocate_response(Vec2::splat(12.0), egui::Sense::drag());
-                            ui.painter().line_segment([resize.rect.left_bottom(), resize.rect.right_top()], Stroke::new(1.0, Color32::GRAY));
-                            if resize.dragged() { widget.size = (widget.size + resize.drag_delta()).max(Vec2::new(180.0, 75.0)); }
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if widget.selected { ui.add_space(8.0); }
+                            });
                         });
                     });
+                if widget.selected {
+                    let rect = frame.response.rect;
+                    widget.rendered_rect = Some(rect);
+                    let painter = ui.painter();
+                    let radius = 4.0;
+                    for (index, point) in [rect.left_top(), rect.right_top(), rect.left_bottom(), rect.right_bottom()].into_iter().enumerate() {
+                        let handle_rect = Rect::from_center_size(point, Vec2::splat(14.0));
+                        resize_rects.push(handle_rect);
+                        ui.interact(handle_rect, egui::Id::new(("qurso_time_resize", widget.id, index)), egui::Sense::hover());
+                        painter.circle_filled(point, radius, Color32::WHITE);
+                        painter.circle_stroke(point, radius, Stroke::new(1.2, Color32::from_rgb(65, 135, 255)));
+                    }
+                } else {
+                    widget.rendered_rect = Some(frame.response.rect);
+                }
             });
+        widget.selected |= area.response.hovered() || area.response.dragged() || area.response.clicked();
         widget.position = area.response.rect.min;
+        let rect_values = |rect: Rect| [rect.min.x, rect.min.y, rect.max.x, rect.max.y];
+        state.test_controls.insert(format!("Time widget {}", widget.id), rect_values(area.response.rect));
+        state.test_controls.insert(format!("Time widget size {}", widget.id), [widget.position.x, widget.position.y, widget.position.x + widget.size.x, widget.position.y + widget.size.y]);
+        if let Some(rect) = settings_rect { state.test_controls.insert(format!("Time options {}", widget.id), rect_values(rect)); }
+        if let Some(rect) = close_rect { state.test_controls.insert(format!("Time close {}", widget.id), rect_values(rect)); }
+        if widget.selected {
+            for (index, rect) in resize_rects.into_iter().enumerate() {
+                state.test_controls.insert(format!("Time resize {} {index}", widget.id), rect_values(rect));
+            }
+        }
         area.response.context_menu(|ui| {
             if ui.button("Options…").clicked() { widget.options_open = true; ui.close(); }
             if ui.button("Fermer").clicked() { widget.open = false; ui.close(); }
         });
+        if widget.options_open {
+            state.test_controls.insert(format!("Time options open {}", widget.id), [0.0; 4]);
+        }
         if widget.options_open {
             egui::Window::new("").id(egui::Id::new(("qurso_time_options", widget.id)))
                 .open(&mut widget.options_open).collapsible(false).resizable(false).title_bar(false)
@@ -1562,6 +1692,10 @@ fn render_toolbar(ctx: &Context, ui_state: &mut UiState) -> Option<UiAction> {
                 let insert_response = IconButton::new(include_image!("../assets/add.svg"), "Insérer")
                     .style(IconButtonStyle::tool()).show_response(ui);
                 ui_state.insert_button_rect = Some(insert_response.rect);
+                ui_state.test_controls.insert(
+                    "tool_Insert".into(),
+                    [insert_response.rect.min.x, insert_response.rect.min.y, insert_response.rect.max.x, insert_response.rect.max.y],
+                );
                 if insert_response.clicked() {
                     ui_state.insert_menu_open = !ui_state.insert_menu_open;
                 }

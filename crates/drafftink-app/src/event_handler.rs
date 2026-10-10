@@ -610,6 +610,40 @@ impl EventHandler {
         let handle_tolerance = HANDLE_HIT_TOLERANCE / canvas.camera.zoom;
         let boundary_tolerance = 8.0 / canvas.camera.zoom;
 
+        // Newly created shapes remain selected while the drawing tool stays
+        // active. Give their handles/body the same resize/move cursor feedback
+        // as Select so the next gesture is discoverable without switching tools.
+        if matches!(
+            canvas.tool_manager.current_tool,
+            ToolKind::Freehand
+                | ToolKind::Highlighter
+                | ToolKind::Rectangle
+                | ToolKind::Ellipse
+                | ToolKind::Line
+                | ToolKind::Arrow
+        ) {
+            for &shape_id in &canvas.selection {
+                if let Some(shape) = canvas.document.get_shape(shape_id) {
+                    let point = shape_point(canvas, shape_id, world_point);
+                    let tolerance = if canvas.document.is_pinned(shape_id) {
+                        HANDLE_HIT_TOLERANCE
+                    } else {
+                        handle_tolerance
+                    };
+                    if let Some(handle) = hit_test_handles(shape, point, tolerance) {
+                        return Some(Some(handle));
+                    }
+                }
+            }
+            if canvas.selection.iter().any(|&shape_id| {
+                canvas.document.get_shape(shape_id).is_some_and(|shape| {
+                    shape.hit_test(shape_point(canvas, shape_id, world_point), 5.0 / canvas.camera.zoom)
+                })
+            }) {
+                return Some(None);
+            }
+        }
+
         match canvas.tool_manager.current_tool {
             ToolKind::Text => {
                 let hits = shapes_at_pointer(canvas, world_point, 5.0 / canvas.camera.zoom);
@@ -1876,6 +1910,14 @@ mod contour_eraser_regressions {
             false,
         );
         assert_eq!(canvas.selection.len(), 1);
+        assert!(handler
+            .get_cursor_for_position(&canvas, Point::new(100.0, 80.0))
+            .is_some_and(|cursor| cursor.is_some()), "a fresh object's resize handle should expose its resize cursor");
+        assert_eq!(
+            handler.get_cursor_for_position(&canvas, Point::new(30.0, 0.0)),
+            Some(None),
+            "a fresh object's edge should expose its move cursor"
+        );
         handler.handle_press(&mut canvas, Point::new(100.0, 80.0), &input, false);
         assert!(handler.manipulation.is_some());
         assert_eq!(canvas.tool_manager.current_tool, ToolKind::Rectangle);

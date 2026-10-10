@@ -477,6 +477,40 @@ function inspectCapture(file) {
     await page.keyboard.press('Control+s');await wait(s=>s.png_save_requests===saveCount+1);
     await page.keyboard.press('Escape');await wait(s=>s.editing_text===null);
 
+    // Qurso Time can be selected, resized, moved from its body, configured,
+    // and closed using visible controls rather than the context menu.
+    await control('tool_Insert');
+    await control('Insert Time');
+    let timeState=await wait(s=>Object.keys(s.controls).some(name=>name.startsWith('Time widget ')));
+    const timeWidgetKey=Object.keys(timeState.controls).find(name=>name.startsWith('Time widget '));
+    const timeWidgetId=timeWidgetKey.slice('Time widget '.length);
+    const timeOptionsKey=`Time options ${timeWidgetId}`;
+    const timeOptionsOpenKey=`Time options open ${timeWidgetId}`;
+    const timeCloseKey=`Time close ${timeWidgetId}`;
+    const timeResizeKey=`Time resize ${timeWidgetId} 3`;
+    const timeSizeKey=`Time widget size ${timeWidgetId}`;
+    let timeRect=timeState.controls[timeWidgetKey];
+    let timeSizeRect=timeState.controls[timeSizeKey];
+    await page.mouse.click((timeRect[0]+timeRect[2])/2,(timeRect[1]+timeRect[3])/2);
+    timeState=await wait(s=>s.controls[timeOptionsKey]&&s.controls[timeResizeKey]);
+    timeRect=timeState.controls[timeWidgetKey];
+    const resizeHandle=timeState.controls[timeResizeKey];
+    await page.mouse.move((resizeHandle[0]+resizeHandle[2])/2,(resizeHandle[1]+resizeHandle[3])/2);
+    await page.waitForTimeout(100);
+    await page.mouse.down();await page.waitForTimeout(100);await page.mouse.move(resizeHandle[2]+35,resizeHandle[3]+24,{steps:6});await page.mouse.up();
+    const resizedTime=await wait(s=>s.controls[timeSizeKey]&&s.controls[timeSizeKey][2]>timeSizeRect[2]+20);
+    timeRect=resizedTime.controls[timeWidgetKey];
+    timeSizeRect=resizedTime.controls[timeSizeKey];
+    await page.mouse.move((timeRect[0]+timeRect[2])/2,(timeRect[1]+timeRect[3])/2);
+    await page.mouse.down();await page.mouse.move((timeRect[0]+timeRect[2])/2+45,(timeRect[1]+timeRect[3])/2+18,{steps:6});await page.mouse.up();
+    timeState=await wait(s=>s.controls[timeWidgetKey]&&s.controls[timeWidgetKey][0]>timeRect[0]+20);
+    const optionsRect=timeState.controls[timeOptionsKey];
+    await page.mouse.click((optionsRect[0]+optionsRect[2])/2,(optionsRect[1]+optionsRect[3])/2);
+    await wait(s=>s.controls[timeOptionsOpenKey]);
+    const closeRect=(await state()).controls[timeCloseKey];
+    await page.mouse.click((closeRect[0]+closeRect[2])/2,(closeRect[1]+closeRect[3])/2);
+    await wait(s=>!s.controls[timeWidgetKey]);
+
     // Separate browser context with a public, deterministic 1200x2000 PNG fixture.
     const imageContext = await browser.newContext({viewport:{width:1280,height:720}});
     const imageId='00000000-0000-4000-8000-000000000001';

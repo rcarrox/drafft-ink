@@ -19,7 +19,21 @@ self.addEventListener('install', event => {
                     const response = await fetch(url, {cache: 'reload'});
                     if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`);
                     const bytes = await response.clone().arrayBuffer();
-                    const digest = await crypto.subtle.digest('SHA-256', bytes);
+                    // FTP ASCII transfer can rewrite only HTML line endings.
+                    // Hash canonical LF text while keeping the original response
+                    // in Cache Storage for the browser to display normally.
+                    let integrityBytes = bytes;
+                    if (asset.path.endsWith('.html')) {
+                        const raw = new Uint8Array(bytes);
+                        const normalized = new Uint8Array(raw.length);
+                        let output = 0;
+                        for (let input = 0; input < raw.length; input++) {
+                            if (raw[input] === 13 && raw[input + 1] === 10) continue;
+                            normalized[output++] = raw[input];
+                        }
+                        integrityBytes = normalized.subarray(0, output);
+                    }
+                    const digest = await crypto.subtle.digest('SHA-256', integrityBytes);
                     const actual = 'sha256-' + btoa(String.fromCharCode(...new Uint8Array(digest)));
                     if (actual !== asset.integrity) throw new Error('empreinte différente (fichier ancien, modifié ou réécrit par le serveur)');
                     let cached = response;
